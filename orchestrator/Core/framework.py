@@ -14,7 +14,7 @@ import logging
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 import threading
 import queue
@@ -30,8 +30,45 @@ from orchestrator.utils.helpers import ensure_directory, check_command_exists, s
 
 
 # ============================================================================
-# DATA MODELS
+# DATA MODELS (KORREKTUR: Hierher verschoben aus main.py)
 # ============================================================================
+
+@dataclass
+class TargetConfig:
+    """
+    Konfiguration für ein Hardware-Target (aus target.yml geladen).
+    Wird von TargetDiscovery erstellt und vom FrameworkManager verwendet.
+    """
+    id: str
+    name: str
+    description: str
+    architecture: str
+    docker_image: str
+    maintainer: str
+    version: str
+    status: str = "available"
+    supported_boards: List[str] = field(default_factory=list)
+    module_paths: Dict[str, str] = field(default_factory=dict)
+    dockerfile_path: str = ""
+
+@dataclass
+class BuildJob:
+    """
+    Build-Auftragskonfiguration und Status.
+    Wird von DockerManager und FrameworkManager verwendet.
+    """
+    id: str
+    model_name: str
+    target: str
+    quantization: str
+    status: str  # queued, running, completed, failed
+    config: Dict[str, Any] = field(default_factory=dict)
+    progress: int = 0
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    output_path: Optional[str] = None
+    logs: List[str] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
 
 @dataclass
 class FrameworkInfo:
@@ -45,7 +82,6 @@ class FrameworkInfo:
     targets_count: int = 0
     active_builds: int = 0
 
-
 @dataclass
 class SystemRequirements:
     """System requirements for framework operation"""
@@ -58,7 +94,6 @@ class SystemRequirements:
     def __post_init__(self):
         if self.required_commands is None:
             self.required_commands = ["docker", "docker-compose", "git"]
-
 
 @dataclass
 class FrameworkConfig:
@@ -130,7 +165,10 @@ class FrameworkManager:
         
         # Initialize configuration
         if isinstance(config, dict):
-            self.config = FrameworkConfig(**config)
+            # Filtere unbekannte Schlüssel heraus, bevor FrameworkConfig erstellt wird
+            known_keys = FrameworkConfig.__annotations__.keys()
+            filtered_config = {k: v for k, v in config.items() if k in known_keys}
+            self.config = FrameworkConfig(**filtered_config)
         elif isinstance(config, FrameworkConfig):
             self.config = config
         else:
@@ -149,7 +187,7 @@ class FrameworkManager:
         
         # State tracking
         self._build_counter = 0
-        self._active_builds: Dict[str, Dict[str, Any]] = {}
+        self._active_builds: Dict[str, BuildJob] = {}
         
         self.logger.info(f"Framework Manager initialized (version {self.info.version})")
     
@@ -183,8 +221,8 @@ class FrameworkManager:
                 # Step 4: Initialize Docker
                 self._initialize_docker()
                 
-                # Step 5: Register core components
-                self._register_core_components()
+                # Step 5: Register core components (Wird von außen aufgerufen)
+                # self._register_core_components()
                 
                 # Step 6: Validate framework installation
                 self._validate_installation()
@@ -223,7 +261,9 @@ class FrameworkManager:
         # Update dynamic info
         self.info.docker_available = self._check_docker_availability()
         self.info.targets_count = self._count_available_targets()
-        self.info.active_builds = len(self._active_builds)
+        self.info.active_builds = len([
+            j for j in self._active_builds.values() if j.status == "running"
+        ])
         
         return self.info
     
@@ -307,7 +347,14 @@ class FrameworkManager:
                 if not file_path.exists():
                     errors.append(f"Missing required file: {required_file}")
                 elif required_file.endswith('.sh') and not os.access(file_path, os.X_OK):
-                    errors.append(f"Script not executable: {required_file}")
+                    # Versuche, ausführbar zu machen (kann in Docker-Volumes fehlschlagen)
+                    try:
+                        file_path.chmod(file_path.stat().st_mode | 0o111)
+                        if not os.access(file_path, os.X_OK):
+                             errors.append(f"Script not executable: {required_file}")
+                    except Exception as e:
+                         errors.append(f"Script not executable: {required_file} (Fehler: {e})")
+
             
             # Validate target.yml
             target_yml = target_path / "target.yml"
@@ -332,11 +379,8 @@ class FrameworkManager:
                     with open(dockerfile, 'r') as f:
                         dockerfile_content = f.read()
                     
-                    # Basic Dockerfile validation
                     if not dockerfile_content.strip().startswith('FROM'):
                         errors.append("Dockerfile must start with FROM instruction")
-                    
-                    # Check for multi-stage build (our standard)
                     if ' AS ' not in dockerfile_content.upper():
                         errors.append("Dockerfile should use multi-stage build pattern")
                         
@@ -363,36 +407,40 @@ class FrameworkManager:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             return f"build_{timestamp}_{self._build_counter:04d}"
     
-    def register_build(self, build_id: str, build_config: Dict[str, Any]):
+    def register_build(self, build_id: str, build_job: BuildJob):
         """Register an active build"""
         with self._lock:
-            self._active_builds[build_id] = {
-                "id": build_id,
-                "config": build_config,
-                "status": "queued",
-                "start_time": datetime.now().isoformat(),
-                "progress": 0
-            }
+            self._active_builds[build_id] = build_job
             self.logger.info(f"Build registered: {build_id}")
     
     def update_build_status(self, build_id: str, status: str, progress: int = None):
         """Update build status"""
         with self._lock:
             if build_id in self._active_builds:
-                self._active_builds[build_id]["status"] = status
+                job = self._active_builds[build_id]
+                job.status = status
                 if progress is not None:
-                    self._active_builds[build_id]["progress"] = progress
+                    job.progress = progress
                 if status in ["completed", "failed"]:
-                    self._active_builds[build_id]["end_time"] = datetime.now().isoformat()
+                    job.end_time = datetime.now()
     
-    def get_build_status(self, build_id: str) -> Optional[Dict[str, Any]]:
+    def get_build_status(self, build_id: str) -> Optional[BuildJob]:
         """Get build status"""
         return self._active_builds.get(build_id)
+
+    def get_next_queued_build_status(self) -> Optional[Dict[str, Any]]:
+        """Finds the next build job marked as 'queued'."""
+        with self._lock:
+            for job in self._active_builds.values():
+                if job.status == "queued":
+                    # Konvertiere BuildJob (Datenklasse) in ein Dict für den Worker
+                    return asdict(job)
+        return None
     
     def list_builds(self) -> List[Dict[str, Any]]:
-        """List all builds"""
+        """List all builds (als Dictionaries)"""
         with self._lock:
-            return list(self._active_builds.values())
+            return [asdict(job) for job in self._active_builds.values()]
     
     # ========================================================================
     # PRIVATE METHODS
@@ -402,14 +450,12 @@ class FrameworkManager:
         """Validate system meets framework requirements"""
         requirements = SystemRequirements()
         
-        # Check Python version
         current_python = f"{sys.version_info.major}.{sys.version_info.minor}"
         if version.parse(current_python) < version.parse(requirements.min_python_version):
             raise FrameworkError(
                 f"Python {requirements.min_python_version}+ required, found {current_python}"
             )
         
-        # Check required commands
         missing_commands = []
         for cmd in requirements.required_commands:
             if not check_command_exists(cmd):
@@ -420,7 +466,6 @@ class FrameworkManager:
                 f"Required commands not found: {', '.join(missing_commands)}"
             )
         
-        # Check Docker version
         try:
             result = subprocess.run(
                 ["docker", "--version"], 
@@ -459,7 +504,6 @@ class FrameworkManager:
     
     def _load_extended_configuration(self):
         """Load extended configuration from files"""
-        # Try to load from various config file locations
         config_candidates = [
             Path(".env"),
             Path("config.yml"),
@@ -479,14 +523,13 @@ class FrameworkManager:
     
     def _load_config_file(self, config_path: Path):
         """Load configuration from a specific file"""
+        config_data = {}
         if config_path.suffix in ['.yml', '.yaml']:
-            with open(config_path, 'r') as f:
-                config_data = yaml.safe_load(f)
+            config_data = safe_yaml_load(config_path, {})
         elif config_path.suffix == '.json':
-            config_data = safe_json_load(config_path)
+            config_data = safe_json_load(config_path, {})
         elif config_path.name == '.env':
             # Simple .env parsing
-            config_data = {}
             with open(config_path, 'r') as f:
                 for line in f:
                     line = line.strip()
@@ -496,7 +539,6 @@ class FrameworkManager:
         else:
             raise ValueError(f"Unsupported config file format: {config_path}")
         
-        # Apply configuration updates
         if config_data:
             self.update_config(config_data)
     
@@ -511,22 +553,17 @@ class FrameworkManager:
         except Exception as e:
             self.logger.error(f"Docker initialization failed: {e}")
             self.info.docker_available = False
-            # Don't raise here - framework can work without Docker for some operations
     
     def _register_core_components(self):
-        """Register core framework components"""
-        # Components will be registered by their respective modules
-        # This method is a placeholder for future component registration
+        """Register core framework components (wird extern aufgerufen)"""
         pass
     
     def _validate_installation(self):
         """Validate framework installation completeness"""
-        # Check for required target templates
         template_path = Path(self.config.targets_dir) / "_template"
         if not template_path.exists():
             self.logger.warning("Template target not found - community contributions may be limited")
         
-        # Check for at least one working target
         targets_found = self._count_available_targets()
         if targets_found == 0:
             self.logger.warning("No valid targets found - framework functionality limited")
@@ -583,13 +620,9 @@ class FrameworkManager:
     
     def _cleanup_resources(self):
         """Cleanup framework resources"""
-        # Clear component registry
         self._components.clear()
-        
-        # Clear active builds
         self._active_builds.clear()
         
-        # Clear event queue
         while not self._event_queue.empty():
             try:
                 self._event_queue.get_nowait()
@@ -700,3 +733,5 @@ def validate_framework_installation(install_path: Optional[Path] = None) -> Dict
             result["target_count"] = target_count
     
     return result
+}
+}

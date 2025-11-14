@@ -33,7 +33,7 @@ Eliminiert die Komplexität der Cross-Kompilierung und Quantisierung von LLMs f�
 
 ```bash
 # 1. Repository klonen
-git clone https://github.com/your-org/llm-cross-compiler-framework.git
+git clone https://github.com/Smilez1985/llm_conversion_framework/tree/main
 cd llm-cross-compiler-framework
 
 # 2. Dependencies installieren
@@ -51,7 +51,7 @@ poetry run llm-builder
 1. **Hardware-Profil erstellen** auf Ihrem Zielsystem:
    ```bash
    # Auf Ihrem RK3566/Zielsystem ausführen
-   curl -O https://raw.githubusercontent.com/your-org/llm-cross-compiler-framework/main/scripts/hardware_probe.sh
+   curl -O https://github.com/Smilez1985/llm_conversion_framework/tree/main/scripts/hardware_probe.sh
    chmod +x hardware_probe.sh
    ./hardware_probe.sh
    # Erzeugt: target_hardware_config.txt
@@ -213,17 +213,17 @@ Die `community/` Directory enthält von der Community beigesteuerte Hardware-Tar
 
 ### Roadmap
 
-**v1.1.0** (Q1 2024)
+**v1.1.0** (Q1 2026)
 - 🎯 NVIDIA Jetson Support (CUDA/TensorRT)
 - 🎯 Raspberry Pi Support
 - 🎯 Performance Benchmarking
 
-**v1.2.0** (Q2 2024)
+**v1.2.0** (Q2 2026)
 - 🎯 Intel NPU Support (OpenVINO)
 - 🎯 Hailo NPU Support
 - 🎯 Auto-Optimization Engine
 
-**v2.0.0** (Q3 2024)
+**v2.0.0** (Q3 2026)
 - 🎯 Cloud Build Support
 - 🎯 Model Zoo Integration
 - 🎯 Advanced Profiling Tools

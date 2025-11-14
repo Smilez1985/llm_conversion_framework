@@ -1,0 +1,272 @@
+# Dockerfile für die Radxa Rockchip Familie (AArch64/NEON)
+# LLM Cross-Compiler Framework - Complete Container with 4 Modules
+# DIREKTIVE: Goldstandard, Multi-stage, Hadolint-konform
+
+# ============================================================================
+# STAGE 1: Build Environment Setup
+# ============================================================================
+FROM debian:bookworm-slim AS builder
+
+# Metadata
+LABEL maintainer="LLM Cross-Compiler Framework"
+LABEL description="Rockchip Family Cross-Compilation Container (RK3566, RK3588, RK3576)"
+LABEL version="1.0.0"
+
+# Build arguments
+ARG LLAMA_CPP_COMMIT=b3626
+ARG BUILD_JOBS=4
+ARG PYTHON_VERSION=3.11
+
+# Environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LLAMA_CPP_PATH=/usr/src/llama.cpp
+ENV BUILD_CACHE_DIR=/build-cache
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# ============================================================================
+# SYSTEM DEPENDENCIES & TOOLCHAIN
+# ============================================================================
+
+# Update package list and install build essentials
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        # Build essentials
+        build-essential \
+        cmake \
+        make \
+        git \
+        curl \
+        wget \
+        ca-certificates \
+        # Cross-compilation toolchain for AArch64
+        crossbuild-essential-arm64 \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+        # Python and development
+        python3=${PYTHON_VERSION}* \
+        python3-pip \
+        python3-dev \
+        python3-venv \
+        # Additional utilities
+        pkg-config \
+        libffi-dev \
+        libssl-dev \
+        libbz2-dev \
+        libreadline-dev \
+        libsqlite3-dev \
+        libncursesw5-dev \
+        xz-utils \
+        tk-dev \
+        libxml2-dev \
+        libxmlsec1-dev \
+        libffi-dev \
+        liblzma-dev \
+        # Tools for validation and testing
+        bc \
+        jq \
+        file \
+        time \
+        strace \
+        # Cleanup
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# ============================================================================
+# PYTHON ENVIRONMENT & DEPENDENCIES
+# ============================================================================
+
+# Upgrade pip and install Python dependencies for model conversion
+RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install PyTorch and ML dependencies (ARM-optimized)
+RUN python3 -m pip install --no-cache-dir \
+        # Core ML framework
+        torch==2.1.2 \
+        torchvision==0.16.2 \
+        torchaudio==2.1.2 \
+        --index-url https://download.pytorch.org/whl/cpu \
+    && python3 -m pip install --no-cache-dir \
+        # Model handling and conversion
+        transformers==4.36.2 \
+        tokenizers==0.15.0 \
+        safetensors==0.4.0 \
+        sentencepiece==0.1.99 \
+        protobuf==4.25.1 \
+        # Hugging Face ecosystem
+        huggingface-hub==0.19.4 \
+        datasets==2.14.7 \
+        # Numerical computing
+        numpy==1.24.4 \
+        scipy==1.11.4 \
+        # Optional format support
+        onnx==1.15.0 \
+        onnxruntime==1.16.3 \
+        # Utilities
+        tqdm==4.66.1 \
+        psutil==5.9.6 \
+        pyyaml==6.0.1 \
+        requests==2.31.0
+
+# ============================================================================
+# LLAMA.CPP SETUP & COMPILATION
+# ============================================================================
+
+# Clone llama.cpp with specific commit for reproducibility
+RUN git clone https://github.com/ggerganov/llama.cpp.git ${LLAMA_CPP_PATH} \
+    && cd ${LLAMA_CPP_PATH} \
+    && git checkout ${LLAMA_CPP_COMMIT} \
+    && git submodule update --init --recursive
+
+# Build host tools (conversion and quantization) - runs on x86 host
+WORKDIR ${LLAMA_CPP_PATH}
+RUN make clean \
+    && make -j${BUILD_JOBS} \
+        llama-quantize \
+        llama-cli \
+        llama-server \
+        VERBOSE=1
+
+# Verify tools are built correctly
+RUN ./llama-quantize --help > /dev/null \
+    && ./llama-cli --help > /dev/null \
+    && python3 convert_hf_to_gguf.py --help > /dev/null \
+    && echo "✅ llama.cpp tools verified"
+
+# ============================================================================
+# FRAMEWORK MODULES INTEGRATION
+# ============================================================================
+
+# Create application directory and copy framework modules
+WORKDIR /app
+COPY modules/ ./modules/
+COPY scripts/ ./scripts/
+
+# Make all modules executable
+RUN chmod +x modules/*.sh scripts/*.sh
+
+# Validate module structure
+RUN for module in source_module.sh config_module.sh convert_module.sh target_module.sh; do \
+        if [ ! -f "modules/$module" ]; then \
+            echo "❌ Missing required module: $module"; \
+            exit 1; \
+        fi; \
+    done \
+    && echo "✅ All 4 modules present"
+
+# ============================================================================
+# STAGE 2: Runtime Environment
+# ============================================================================
+FROM debian:bookworm-slim AS runtime
+
+# Runtime metadata
+LABEL stage="runtime"
+LABEL framework="llm-cross-compiler"
+LABEL target="rockchip"
+
+# Runtime environment
+ENV DEBIAN_FRONTEND=noninteractive
+ENV LLAMA_CPP_PATH=/usr/src/llama.cpp
+ENV BUILD_CACHE_DIR=/build-cache
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PATH="/app/modules:/app/scripts:${PATH}"
+
+# Install minimal runtime dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        # Cross-compilation runtime
+        crossbuild-essential-arm64 \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+        # Python runtime
+        python3 \
+        python3-pip \
+        # Build tools (needed for cross-compilation)
+        cmake \
+        make \
+        git \
+        # Utilities
+        bc \
+        jq \
+        file \
+        curl \
+        # Cleanup
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy Python environment from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+
+# Copy llama.cpp installation
+COPY --from=builder ${LLAMA_CPP_PATH} ${LLAMA_CPP_PATH}
+
+# Copy framework modules and scripts
+COPY --from=builder /app /app
+
+# ============================================================================
+# RUNTIME CONFIGURATION
+# ============================================================================
+
+# Create build cache directory with proper permissions
+RUN mkdir -p ${BUILD_CACHE_DIR} \
+    && mkdir -p ${BUILD_CACHE_DIR}/{models,temp,output,logs,toolchains} \
+    && chmod -R 755 ${BUILD_CACHE_DIR}
+
+# Create non-root user for security
+RUN groupadd -r llmbuilder && \
+    useradd -r -g llmbuilder -d /app -s /bin/bash llmbuilder \
+    && chown -R llmbuilder:llmbuilder /app ${BUILD_CACHE_DIR}
+
+# ============================================================================
+# CONTAINER ENTRYPOINT & HEALTH CHECK
+# ============================================================================
+
+# Copy entrypoint script
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python3 -c "import torch, transformers; print('OK')" || exit 1
+
+# Set working directory and user
+WORKDIR ${BUILD_CACHE_DIR}
+USER llmbuilder
+
+# Expose common ports (for llama-server if needed)
+EXPOSE 8080
+
+# Volume mounts (will be mounted by orchestrator)
+VOLUME ["${BUILD_CACHE_DIR}"]
+
+# Default entrypoint
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["bash"]
+
+# ============================================================================
+# BUILD INFORMATION
+# ============================================================================
+
+# Add build information
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
+LABEL org.opencontainers.image.created=${BUILD_DATE}
+LABEL org.opencontainers.image.version=${VERSION}
+LABEL org.opencontainers.image.revision=${VCS_REF}
+LABEL org.opencontainers.image.title="LLM Cross-Compiler Framework - Rockchip"
+LABEL org.opencontainers.image.description="Complete containerized environment for cross-compiling LLMs for Rockchip SoCs"
+LABEL org.opencontainers.image.vendor="LLM Cross-Compiler Framework"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.source="https://github.com/your-org/llm-cross-compiler-framework"
+
+# Framework-specific labels
+LABEL framework.modules="source,config,convert,target"
+LABEL framework.target.architecture="aarch64"
+LABEL framework.target.family="rockchip"
+LABEL framework.target.socs="RK3566,RK3568,RK3576,RK3588"
+LABEL framework.llama_cpp.commit=${LLAMA_CPP_COMMIT}
+LABEL framework.build.jobs=${BUILD_JOBS}

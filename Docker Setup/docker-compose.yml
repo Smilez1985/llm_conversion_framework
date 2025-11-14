@@ -1,0 +1,234 @@
+version: '3.8'
+
+# LLM Cross-Compiler Framework - Docker Compose Configuration
+# DIREKTIVE: Goldstandard, professionell, vollständige Container-Orchestrierung
+
+services:
+  # ============================================================================
+  # ROCKCHIP TARGET CONTAINER
+  # ============================================================================
+  rockchip-builder:
+    build:
+      context: .
+      dockerfile: targets/rockchip/Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-}
+        VCS_REF: ${VCS_REF:-}
+        VERSION: ${VERSION:-1.0.0}
+        LLAMA_CPP_COMMIT: ${LLAMA_CPP_COMMIT:-b3626}
+        BUILD_JOBS: ${BUILD_JOBS:-4}
+    image: llm-framework/rockchip:${VERSION:-latest}
+    container_name: llm-rockchip-builder
+    hostname: rockchip-builder
+    
+    # Environment configuration
+    environment:
+      - BUILD_CACHE_DIR=/build-cache
+      - LLAMA_CPP_PATH=/usr/src/llama.cpp
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DEBUG=${DEBUG:-0}
+      - BUILD_JOBS=${BUILD_JOBS:-4}
+      - TARGET_ARCH=aarch64
+      - TARGET_SOC_FAMILY=rockchip
+    
+    # Volume mounts
+    volumes:
+      # Persistent build cache
+      - build_cache:/build-cache
+      # Model input directory (bind mount)
+      - ${MODELS_DIR:-./models}:/build-cache/models:ro
+      # Output directory (bind mount)  
+      - ${OUTPUT_DIR:-./output}:/build-cache/output
+      # Hardware configurations
+      - ${CONFIG_DIR:-./configs}:/build-cache/configs:ro
+      # Development: Live module updates
+      - ./targets/rockchip/modules:/app/modules:ro
+      # Logs
+      - ./logs:/build-cache/logs
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '${CPU_LIMIT:-4.0}'
+          memory: ${MEMORY_LIMIT:-8G}
+        reservations:
+          cpus: '${CPU_RESERVATION:-2.0}'
+          memory: ${MEMORY_RESERVATION:-4G}
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import torch, transformers; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    
+    # Network configuration
+    networks:
+      - llm-framework
+    
+    # Restart policy
+    restart: unless-stopped
+    
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    tmpfs:
+      - /tmp:rw,size=2G,mode=1777
+    
+    # Default command (interactive mode)
+    command: ["interactive"]
+    
+    # Keep container running
+    tty: true
+    stdin_open: true
+
+  # ============================================================================
+  # ORCHESTRATOR SERVICE (GUI + API)
+  # ============================================================================
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-}
+        VERSION: ${VERSION:-1.0.0}
+    image: llm-framework/orchestrator:${VERSION:-latest}
+    container_name: llm-orchestrator
+    hostname: orchestrator
+    
+    environment:
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - FRAMEWORK_VERSION=${VERSION:-1.0.0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - GUI_ENABLED=${GUI_ENABLED:-true}
+      - API_ENABLED=${API_ENABLED:-true}
+      - API_PORT=8000
+      - WEB_PORT=3000
+    
+    volumes:
+      # Docker socket for container management
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Shared volumes with builders
+      - build_cache:/build-cache
+      - ${OUTPUT_DIR:-./output}:/output
+      - ${MODELS_DIR:-./models}:/models:ro
+      - ${CONFIG_DIR:-./configs}:/configs:ro
+      # Orchestrator configuration
+      - ./orchestrator/config:/app/config:ro
+      # GUI assets (development)
+      - ./orchestrator/gui:/app/gui:ro
+    
+    ports:
+      # API port
+      - "${API_PORT:-8000}:8000"
+      # Web GUI port  
+      - "${WEB_PORT:-3000}:3000"
+      # VNC for GUI (if headless)
+      - "${VNC_PORT:-5900}:5900"
+    
+    networks:
+      - llm-framework
+    
+    restart: unless-stopped
+    
+    depends_on:
+      - rockchip-builder
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================================
+  # ADDITIONAL TARGET CONTAINERS (Future expansion)
+  # ============================================================================
+  
+  # NVIDIA Jetson builder (commented out - implement later)
+  # nvidia-builder:
+  #   build:
+  #     context: .
+  #     dockerfile: targets/nvidia-jetson/Dockerfile
+  #   image: llm-framework/nvidia:${VERSION:-latest}
+  #   container_name: llm-nvidia-builder
+  #   environment:
+  #     - TARGET_ARCH=aarch64
+  #     - TARGET_SOC_FAMILY=nvidia_jetson
+  #     - CUDA_SUPPORT=true
+  #   volumes:
+  #     - build_cache:/build-cache
+  #     - ${MODELS_DIR:-./models}:/build-cache/models:ro
+  #     - ${OUTPUT_DIR:-./output}:/build-cache/output
+  #   networks:
+  #     - llm-framework
+  #   profiles:
+  #     - nvidia
+  
+  # Raspberry Pi builder (commented out - implement later)  
+  # raspberry-pi-builder:
+  #   build:
+  #     context: .
+  #     dockerfile: targets/raspberry-pi/Dockerfile
+  #   image: llm-framework/raspberry-pi:${VERSION:-latest}
+  #   container_name: llm-rpi-builder
+  #   environment:
+  #     - TARGET_ARCH=aarch64
+  #     - TARGET_SOC_FAMILY=broadcom
+  #   volumes:
+  #     - build_cache:/build-cache
+  #     - ${MODELS_DIR:-./models}:/build-cache/models:ro
+  #     - ${OUTPUT_DIR:-./output}:/build-cache/output
+  #   networks:
+  #     - llm-framework
+  #   profiles:
+  #     - raspberry-pi
+
+# ============================================================================
+# NETWORKS
+# ============================================================================
+networks:
+  llm-framework:
+    driver: bridge
+    name: llm-framework
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+
+# ============================================================================
+# VOLUMES
+# ============================================================================
+volumes:
+  # Persistent build cache (shared between containers)
+  build_cache:
+    driver: local
+    name: llm-framework-cache
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CACHE_DIR:-./cache}
+
+# ============================================================================
+# EXTENSION FIELDS (for reusability)
+# ============================================================================
+x-common-variables: &common-env
+  BUILD_CACHE_DIR: /build-cache
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  DEBUG: ${DEBUG:-0}
+  FRAMEWORK_VERSION: ${VERSION:-1.0.0}
+
+x-common-volumes: &common-volumes
+  - build_cache:/build-cache
+  - ${OUTPUT_DIR:-./output}:/build-cache/output
+  - ${MODELS_DIR:-./models}:/build-cache/models:ro
+  - ${CONFIG_DIR:-./configs}:/build-cache/configs:ro
+
+x-common-healthcheck: &common-healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 60s

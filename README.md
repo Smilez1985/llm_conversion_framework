@@ -1,4 +1,4 @@
-# llm_conversion_framework [WARNUNG, das komplette projekt wurde mit Hilfe von KI (Claude/Gemeni) erstellt und ist, stand 15.11.2025, noch ungetstet!]
+# llm_conversion_framework [WARNUNG, das komplette Projekt wurde mit Hilfe von KI (Claude/Gemeni) erstellt und ist, stand 15.11.2025, noch ungetestet!]
 Ein GUI-basiertes LLM Deployment Framework, das:  Beliebige LLMs automatisiert optimieren &amp; quantisieren kann Für jeden CPU, GPU oder NPU perfekt optimiert MVP: RK3566 Support
 # 🚀 LLM Cross-Compiler Framework
 

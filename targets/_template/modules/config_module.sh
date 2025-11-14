@@ -1,7 +1,8 @@
 #!/bin/bash
 # config_module.sh - Hardware Config & CMake Toolchain Generator
 # Part of LLM Cross-Compiler Framework
-# 
+#
+# DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 # ZWECK: Liest target_hardware_config.txt und generiert optimierte Build-Konfiguration
 #        für [Hardware-Familie]
 

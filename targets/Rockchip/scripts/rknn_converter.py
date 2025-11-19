@@ -32,13 +32,15 @@ def check_rknn_installation():
 def convert_to_rknn(onnx_path, output_path, target_platform, dtype='i8'):
     """Execute the full conversion pipeline"""
     RKNN = check_rknn_installation()
-    rknn = RKNN(verbose=False) # Set True for debug
+    rknn = RKNN(verbose=False) # Set True for more debug output
 
     # 1. Configuration
     logger.info(f"Configuring for target: {target_platform.upper()}")
     
     # Map 'i8' to toolkit specific strings
-    quantized_dtype = 'asymmetric_quantized-8' if dtype == 'i8' else 'dynamic_fixed_point-16'
+    # i8 = asymmetric_quantized-8 (Standard für NPU Effizienz)
+    # fp16 = floating-point 16 (Höhere Genauigkeit, weniger NPU-Speed-Up)
+    quantized_dtype = 'asymmetric_quantized-8' if dtype == 'i8' else 'fp16'
     
     try:
         rknn.config(
@@ -58,15 +60,19 @@ def convert_to_rknn(onnx_path, output_path, target_platform, dtype='i8'):
         sys.exit(3)
 
     # 3. Build (Quantization & Optimization)
-    logger.info(f"Building RKNN model (Quantization: {dtype})...")
-    logger.info("This can take several minutes for large models...")
+    logger.info(f"Building RKNN model (Type: {dtype})...")
+    logger.info("This can take several minutes...")
     
-    # Note: For production quality i8, we usually need a 'dataset' for calibration.
-    # For Piper-TTS/Voice models, standard weights often work without specific calibration datasets
-    # or use a simple generic one. For now, we build without dataset (weights only).
-    do_quant = (dtype == 'i8' or dtype == 'u8')
+    # Entscheidung: Quantisierung oder nicht?
+    # Für i8 brauchen wir normalerweise einen Kalibrierungsdatensatz.
+    # Wenn keiner da ist, macht das Toolkit oft einen Fallback oder Hybrid-Modus.
+    # Wir setzen do_quantization auf True nur für i8.
+    do_quant = (dtype == 'i8')
     
+    # dataset=None bedeutet: Nutze Standard-Parameter (kann bei komplexen Modellen Genauigkeit kosten,
+    # ist aber für den automatisierten Pipeline-Ansatz der erste Schritt).
     ret = rknn.build(do_quantization=do_quant, dataset=None)
+    
     if ret != 0:
         logger.error("Build RKNN failed during graph optimization/quantization.")
         sys.exit(4)
@@ -85,7 +91,7 @@ if __name__ == "__main__":
     parser.add_argument('--model', required=True, help='Path to input ONNX model')
     parser.add_argument('--output', required=True, help='Path to output RKNN file')
     parser.add_argument('--target', default='rk3566', help='Target NPU platform (rk3566, rk3588)')
-    parser.add_argument('--dtype', default='i8', choices=['i8', 'fp16'], help='Quantization type')
+    parser.add_argument('--dtype', default='i8', choices=['i8', 'fp16'], help='Quantization type (i8 or fp16)')
     
     args = parser.parse_args()
     

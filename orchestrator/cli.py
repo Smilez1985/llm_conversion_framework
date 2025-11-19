@@ -28,6 +28,7 @@ from rich import print as rprint
 from orchestrator.Core.framework import FrameworkManager, FrameworkConfig
 from orchestrator.Core.orchestrator import LLMOrchestrator, BuildRequest, WorkflowType, PriorityLevel
 from orchestrator.Core.builder import BuildEngine, TargetArch, ModelFormat, OptimizationLevel
+from orchestrator.Core.module_generator import ModuleGenerator
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError
 
@@ -261,6 +262,65 @@ def build_start(ctx: FrameworkContext, model: str, target: str, quantization: st
         loop.close()
     except Exception as e:
         console.print(f"[red]Build failed: {e}[/red]")
+
+@cli.group()
+def module():
+    """Manage hardware target modules"""
+    pass
+
+@module.command('create')
+@click.option('--name', prompt='Module Name', help='Name of the new target')
+@click.option('--arch', prompt='Architecture', type=click.Choice(['aarch64', 'x86_64', 'armv7l', 'riscv64']), help='CPU Architecture')
+@click.option('--sdk', prompt='SDK/Backend', default='None', help='Special SDK (e.g. CUDA, RKNN)')
+@pass_context
+def module_create(ctx: FrameworkContext, name: str, arch: str, sdk: str):
+    """Create a new hardware target module interactively"""
+    
+    console.print(f"\n[bold cyan]Creating new target module: {name}[/bold cyan]")
+    
+    # Interaktive Abfrage weiterer Details (CLI Wizard Style)
+    base_os = click.prompt("Base Docker Image", default="debian:bookworm-slim")
+    description = click.prompt("Description", default=f"Target for {name}")
+    
+    # Packages Liste
+    console.print("Enter required system packages (comma separated):")
+    packages_input = click.prompt("Packages", default="build-essential, cmake, git")
+    packages = [p.strip() for p in packages_input.split(',')]
+    
+    # Flags
+    cpu_flags = click.prompt("Default CPU Flags", default="")
+    
+    # Datenstruktur bauen (identisch zur GUI)
+    module_data = {
+        "module_name": name,
+        "architecture": arch,
+        "sdk": sdk,
+        "description": description,
+        "base_os": base_os,
+        "packages": packages,
+        "cpu_flags": cpu_flags,
+        "supported_boards": [], 
+        "setup_commands": "",
+        "cmake_flags": "",
+        "detection_commands": "lscpu"
+    }
+    
+    try:
+        # Core Generator nutzen
+        targets_dir = Path(ctx.config.get('targets_dir', 'targets'))
+        generator = ModuleGenerator(targets_dir)
+        
+        output_path = generator.generate_module(module_data)
+        
+        console.print(f"\n[bold green]✅ Module successfully created![/bold green]")
+        console.print(f"Location: {output_path}")
+        console.print("\nNext steps:")
+        console.print(f"1. Edit {output_path}/target.yml to add supported boards")
+        console.print(f"2. Customize {output_path}/modules/config_module.sh")
+        
+    except Exception as e:
+        console.print(f"[bold red]Error creating module: {e}[/bold red]")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

@@ -111,8 +111,9 @@ class FrameworkConfig:
     max_concurrent_builds: int = 2
     build_timeout: int = 3600
     auto_cleanup: bool = True
-    
+
     # Source Repositories (from project_sources.yml)
+    # Stores flattened keys: "core.llama_cpp" -> "https://..."
     source_repositories: Dict[str, str] = field(default_factory=dict)
     
     # Docker settings
@@ -218,7 +219,7 @@ class FrameworkManager:
                 # Step 2: Setup directories
                 self._setup_directories()
                 
-                # Step 3: Load configuration (Includes project_sources.yml)
+                # Step 3: Load configuration (inkl. project_sources.yml)
                 self._load_extended_configuration()
                 
                 # Step 4: Initialize Docker
@@ -338,11 +339,15 @@ class FrameworkManager:
                 file_path = target_path / required_file
                 if not file_path.exists():
                     errors.append(f"Missing required file: {required_file}")
-                elif required_file.endswith('.sh'):
+                elif required_file.endswith('.sh') and not os.access(file_path, os.X_OK):
+                    # Versuche, ausführbar zu machen (kann in Docker-Volumes fehlschlagen)
                     try:
                         file_path.chmod(file_path.stat().st_mode | 0o111)
-                    except:
-                        pass # Best effort
+                        if not os.access(file_path, os.X_OK):
+                             errors.append(f"Script not executable: {required_file}")
+                    except Exception as e:
+                         errors.append(f"Script not executable: {required_file} (Fehler: {e})")
+
             
             # Validate target.yml
             target_yml = target_path / "target.yml"
@@ -352,7 +357,7 @@ class FrameworkManager:
                         target_config = yaml.safe_load(f)
                     
                     # Check required sections
-                    required_sections = ["metadata", "docker", "modules"]
+                    required_sections = ["metadata", "supported_boards", "docker", "modules"]
                     for section in required_sections:
                         if section not in target_config:
                             errors.append(f"Missing required section in target.yml: {section}")
@@ -369,6 +374,8 @@ class FrameworkManager:
                     
                     if not dockerfile_content.strip().startswith('FROM'):
                         errors.append("Dockerfile must start with FROM instruction")
+                    if ' AS ' not in dockerfile_content.upper():
+                        errors.append("Dockerfile should use multi-stage build pattern")
                         
                 except Exception as e:
                     errors.append(f"Error reading Dockerfile: {e}")
@@ -468,6 +475,7 @@ class FrameworkManager:
             path = Path(directory)
             try:
                 ensure_directory(path)
+                self.logger.debug(f"Directory ensured: {path}")
             except Exception as e:
                 raise FrameworkError(f"Failed to create directory {path}: {e}")
     
@@ -493,13 +501,14 @@ class FrameworkManager:
                     self.logger.warning(f"Failed to load config from {config_file}: {e}")
                     
         # 2. Load Source Repositories (project_sources.yml)
+        # Dies ermöglicht die zentrale Verwaltung von Git-URLs
         sources_file = Path(self.config.configs_dir) / "project_sources.yml"
         if sources_file.exists():
             try:
                 with open(sources_file, 'r') as f:
                     sources_data = yaml.safe_load(f)
                     if sources_data:
-                        # Flatten the structure for easy access (e.g., core.llama_cpp)
+                        # Flatten the structure: core.llama_cpp
                         flat_sources = {}
                         for section, items in sources_data.items():
                             if isinstance(items, dict):
@@ -513,7 +522,7 @@ class FrameworkManager:
             except Exception as e:
                 self.logger.warning(f"Failed to load project_sources.yml: {e}")
         else:
-            self.logger.info("No project_sources.yml found, using internal defaults.")
+            self.logger.info("No project_sources.yml found - using internal defaults.")
     
     def _load_config_file(self, config_path: Path):
         """Load configuration from a specific file"""
@@ -616,10 +625,9 @@ class FrameworkManager:
         config_file = Path(self.config.configs_dir) / "framework.yml"
         try:
             ensure_directory(config_file.parent)
-            # Note: We do NOT save project_sources here, that is managed separately
-            # Only save main config
+            # Wichtig: source_repositories werden NICHT in framework.yml gespeichert, 
+            # da sie in project_sources.yml gehören.
             with open(config_file, 'w') as f:
-                # Exclude source_repositories from serialization to framework.yml
                 config_dict = asdict(self.config)
                 if 'source_repositories' in config_dict:
                     del config_dict['source_repositories']

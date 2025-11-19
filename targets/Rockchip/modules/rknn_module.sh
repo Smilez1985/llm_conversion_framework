@@ -1,5 +1,5 @@
 #!/bin/bash
-# rknn_module.sh - NPU Model Conversion Module
+# rknn_module.sh - ONNX to RKNN Conversion Module
 # Part of LLM Cross-Compiler Framework
 # 
 # DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
@@ -15,12 +15,14 @@ set -euo pipefail
 readonly SCRIPT_NAME="rknn_module.sh"
 readonly BUILD_CACHE_DIR="${BUILD_CACHE_DIR:-/build-cache}"
 readonly OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_CACHE_DIR}/output}"
-readonly SCRIPT_DIR="/app/scripts"  # Pfad im Docker-Container
+# Pfad zum Python-Script innerhalb des Containers
+readonly SCRIPT_DIR="/app/scripts"
 readonly LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
-# Default NPU Platform (wird ggf. überschrieben)
+# Default NPU Platform (wird per Argument überschrieben, default rk3566 für dein Board)
 TARGET_PLATFORM="rk3566"
-QUANT_TYPE="i8" # i8 (Int8) ist Standard für maximale NPU-Leistung
+# Quantization Type: i8 (int8) ist der Standard für NPU-Performance (1 TOPS)
+QUANT_TYPE="i8" 
 
 # ============================================================================
 # LOGGING
@@ -58,7 +60,11 @@ main() {
     # Validation
     if [[ -z "$input_onnx" ]]; then die "Input ONNX file required (--input)"; fi
     if [[ ! -f "$input_onnx" ]]; then die "ONNX file not found: $input_onnx"; fi
-    if [[ -z "$model_name" ]]; then model_name=$(basename "$input_onnx" .onnx); fi
+    
+    # Auto-generate model name if missing
+    if [[ -z "$model_name" ]]; then 
+        model_name=$(basename "$input_onnx" .onnx)
+    fi
     
     # Setup Output Paths
     mkdir -p "$OUTPUT_DIR/rknn"
@@ -76,7 +82,8 @@ main() {
     fi
     
     # Execute Python Conversion
-    # Wir nutzen 'python3' direkt, da die Umgebung im Dockerfile (rknn-toolkit2) bereits steht.
+    # Wir nutzen 'python3' direkt, da die Umgebung (rknn-toolkit2) im Dockerfile
+    # und source_module.sh global installiert wurde.
     
     local start_time=$SECONDS
     
@@ -94,16 +101,17 @@ main() {
              log_success "Konvertierung erfolgreich in ${duration}s!"
              log_success "RKNN Model: $output_rknn ($size_mb MB)"
              
-             # Create Metadata for Orchestrator
+             # Create Metadata for Orchestrator / Deployment
              echo "rknn_model_path=$output_rknn" > "$OUTPUT_DIR/rknn_build_info.txt"
              echo "target_platform=$TARGET_PLATFORM" >> "$OUTPUT_DIR/rknn_build_info.txt"
+             echo "quantization=$QUANT_TYPE" >> "$OUTPUT_DIR/rknn_build_info.txt"
         else
              die "Output file missing despite success message."
         fi
         
     else
         log_error "Python conversion script failed."
-        log_warn "Tipp: Prüfen Sie, ob das rknn-toolkit2 korrekt im Docker installiert ist."
+        log_warn "Tipp: Prüfen Sie die Logs oben auf ONNX-Fehler oder Versionskonflikte."
         exit 1
     fi
 }

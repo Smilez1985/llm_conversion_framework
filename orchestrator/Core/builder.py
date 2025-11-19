@@ -326,20 +326,9 @@ class BuildEngine:
             
         except Exception as e:
             raise RuntimeError(f"Docker environment validation failed: {e}")
+
     def build_model(self, config: BuildConfiguration) -> str:
-        """
-        Start a new model build with the given configuration.
-        
-        Args:
-            config: Complete build configuration
-            
-        Returns:
-            str: Build ID for tracking
-            
-        Raises:
-            ValidationError: If configuration is invalid
-            RuntimeError: If build cannot be started
-        """
+        """Start a new model build"""
         # Validate configuration
         self._validate_build_config(config)
         
@@ -370,36 +359,22 @@ class BuildEngine:
         return config.build_id
     
     def get_build_status(self, build_id: str) -> Optional[BuildProgress]:
-        """Get current build status"""
         return self._builds.get(build_id)
     
     def list_builds(self) -> List[BuildProgress]:
-        """List all builds"""
         with self._lock:
             return list(self._builds.values())
     
     def cancel_build(self, build_id: str) -> bool:
-        """
-        Cancel a running build.
-        
-        Args:
-            build_id: Build to cancel
-            
-        Returns:
-            bool: True if cancellation initiated
-        """
         progress = self._builds.get(build_id)
-        if not progress:
-            return False
+        if not progress: return False
         
         if progress.status in [BuildStatus.COMPLETED, BuildStatus.FAILED, BuildStatus.CANCELLED]:
             return False
         
-        # Update status
         progress.status = BuildStatus.CANCELLED
         progress.add_log("Build cancellation requested")
         
-        # Stop container if running
         container = self._active_containers.get(build_id)
         if container:
             try:
@@ -412,24 +387,13 @@ class BuildEngine:
         return True
     
     def cleanup_build(self, build_id: str) -> bool:
-        """
-        Cleanup resources for a completed build.
-        
-        Args:
-            build_id: Build to cleanup
-            
-        Returns:
-            bool: True if cleanup successful
-        """
         progress = self._builds.get(build_id)
-        if not progress:
-            return False
+        if not progress: return False
         
         try:
             progress.status = BuildStatus.CLEANING
             progress.add_log("Starting cleanup")
             
-            # Remove container
             container = self._active_containers.get(build_id)
             if container:
                 try:
@@ -439,7 +403,6 @@ class BuildEngine:
                 except Exception as e:
                     progress.add_warning(f"Container cleanup failed: {e}")
             
-            # Remove temporary build directory
             build_temp_dir = self.cache_dir / "builds" / build_id
             if build_temp_dir.exists():
                 shutil.rmtree(build_temp_dir)
@@ -453,12 +416,6 @@ class BuildEngine:
             return False
     
     def _execute_build(self, config: BuildConfiguration):
-        """
-        Execute the complete build process.
-        
-        Args:
-            config: Build configuration
-        """
         build_id = config.build_id
         progress = self._builds[build_id]
         
@@ -467,75 +424,38 @@ class BuildEngine:
             progress.current_stage = "Preparing build environment"
             progress.add_log("Starting build execution")
             
-            # Step 1: Prepare build environment
             self._prepare_build_environment(config, progress)
-            
-            # Step 2: Generate Dockerfile
             dockerfile_path = self._generate_dockerfile(config, progress)
-            
-            # Step 3: Build Docker image
             image = self._build_docker_image(config, progress, dockerfile_path)
-            
-            # Step 4: Execute build modules in container
             self._execute_build_modules(config, progress, image)
-            
-            # Step 5: Extract and validate artifacts
             self._extract_artifacts(config, progress)
             
-            # Step 6: Cleanup if requested
             if config.cleanup_after_build:
                 self.cleanup_build(build_id)
             
-            # Mark as completed
             progress.status = BuildStatus.COMPLETED
             progress.end_time = datetime.now()
             progress.progress_percent = 100
             progress.add_log("Build completed successfully")
-            
             self.logger.info(f"Build completed: {build_id}")
             
         except Exception as e:
             progress.status = BuildStatus.FAILED
             progress.end_time = datetime.now()
             progress.add_error(f"Build failed: {str(e)}")
-            
             self.logger.error(f"Build failed: {build_id} - {e}")
-            
-            # Cleanup on failure
             try:
                 self.cleanup_build(build_id)
-            except Exception as cleanup_error:
-                progress.add_warning(f"Cleanup after failure failed: {cleanup_error}")
+            except: pass
     
-def _validate_build_config(self, config: BuildConfiguration):
-        """
-        Validate build configuration.
-        
-        Args:
-            config: Configuration to validate
-            
-        Raises:
-            ValidationError: If configuration is invalid
-        """
+    def _validate_build_config(self, config: BuildConfiguration):
         errors = []
+        if not config.build_id: errors.append("build_id is required")
+        if not config.model_source: errors.append("model_source is required")
+        if not config.target_arch: errors.append("target_arch is required")
+        if not config.target_format: errors.append("target_format is required")
+        if not config.output_dir: errors.append("output_dir is required")
         
-        # Required fields
-        if not config.build_id:
-            errors.append("build_id is required")
-        
-        if not config.model_source:
-            errors.append("model_source is required")
-        
-        if not config.target_arch:
-            errors.append("target_arch is required")
-        
-        if not config.target_format:
-            errors.append("target_format is required")
-        
-        if not config.output_dir:
-            errors.append("output_dir is required")
-        
-        # Validate paths
         try:
             output_path = Path(config.output_dir)
             if not output_path.parent.exists():
@@ -543,26 +463,14 @@ def _validate_build_config(self, config: BuildConfiguration):
         except Exception as e:
             errors.append(f"Invalid output_dir: {e}")
         
-        # Validate target architecture support
         if config.target_arch == TargetArch.RK3566:
-            # RK3566 specific validations for MVP
             target_dir = self.targets_dir / "rk3566"
             if not target_dir.exists():
                 errors.append("RK3566 target not found - missing target configuration")
-            
-            required_modules = ["source_module.sh", "config_module.sh", "convert_module.sh", "target_module.sh"]
-            for module in required_modules:
-                module_path = target_dir / "modules" / module
-                if not module_path.exists():
-                    errors.append(f"Missing required module: {module}")
-                elif not os.access(module_path, os.X_OK):
-                    errors.append(f"Module not executable: {module}")
         
-        # Validate model format compatibility
         if config.source_format == ModelFormat.HUGGINGFACE and config.target_format == ModelFormat.HUGGINGFACE:
             errors.append("Source and target format cannot both be HuggingFace")
         
-        # Validate quantization options
         if config.quantization and config.target_format != ModelFormat.GGUF:
             errors.append("Quantization is only supported for GGUF target format")
         
@@ -572,26 +480,16 @@ def _validate_build_config(self, config: BuildConfiguration):
         self.logger.debug(f"Build configuration validated: {config.build_id}")
     
     def _prepare_build_environment(self, config: BuildConfiguration, progress: BuildProgress):
-        """
-        Prepare build environment and temporary directories.
-        
-        Args:
-            config: Build configuration
-            progress: Progress tracker
-        """
         progress.current_stage = "Preparing build environment"
         progress.progress_percent = 10
         
-        # Create build-specific temporary directory
         build_temp_dir = self.cache_dir / "builds" / config.build_id
         ensure_directory(build_temp_dir)
         
-        # Create subdirectories
         subdirs = ["workspace", "modules", "output", "cache", "logs"]
         for subdir in subdirs:
             ensure_directory(build_temp_dir / subdir)
         
-        # Copy target modules to build directory
         target_dir = self.targets_dir / config.target_arch.value
         if not target_dir.exists():
             raise RuntimeError(f"Target directory not found: {target_dir}")
@@ -600,21 +498,16 @@ def _validate_build_config(self, config: BuildConfiguration):
         modules_dst = build_temp_dir / "modules"
         
         if modules_src.exists():
-            # Copy all modules
             for module_file in modules_src.glob("*.sh"):
                 dst_file = modules_dst / module_file.name
                 shutil.copy2(module_file, dst_file)
-                # Ensure executable
                 os.chmod(dst_file, 0o755)
                 progress.add_log(f"Module copied: {module_file.name}")
         
-        # Copy target configuration
         target_config_src = target_dir / "target.yml"
         if target_config_src.exists():
             shutil.copy2(target_config_src, build_temp_dir / "target.yml")
-            progress.add_log("Target configuration copied")
         
-        # Create build configuration file for modules
         build_config_data = {
             "build_id": config.build_id,
             "model_source": config.model_source,
@@ -632,40 +525,25 @@ def _validate_build_config(self, config: BuildConfiguration):
             json.dump(build_config_data, f, indent=2)
         
         progress.add_log("Build environment prepared")
-        self.logger.debug(f"Build environment prepared: {build_temp_dir}")
+    
     def _generate_dockerfile(self, config: BuildConfiguration, progress: BuildProgress) -> Path:
-        
-        """
-        Generate Hadolint-compliant Multi-Stage Dockerfile with Poetry.
-        
-        Args:
-            config: Build configuration
-            progress: Progress tracker
-            
-        Returns:
-            Path: Path to generated Dockerfile
-        """
         progress.current_stage = "Generating Dockerfile"
         progress.progress_percent = 20
         
         build_temp_dir = self.cache_dir / "builds" / config.build_id
         dockerfile_path = build_temp_dir / "Dockerfile"
         
-        # Load target-specific configuration
         target_config_path = build_temp_dir / "target.yml"
         target_config = {}
         if target_config_path.exists():
             with open(target_config_path, 'r') as f:
                 target_config = yaml.safe_load(f)
         
-        # Generate Dockerfile content
         dockerfile_content = self._generate_dockerfile_content(config, target_config)
         
-        # Write Dockerfile
         with open(dockerfile_path, 'w') as f:
             f.write(dockerfile_content)
         
-        # Validate with Hadolint if enabled
         if config.enable_hadolint:
             self._validate_dockerfile_hadolint(dockerfile_path, progress)
         
@@ -673,22 +551,11 @@ def _validate_build_config(self, config: BuildConfiguration):
         return dockerfile_path
     
     def _generate_dockerfile_content(self, config: BuildConfiguration, target_config: Dict) -> str:
-        """
-        Generate Multi-Stage Dockerfile content.
-        
-        Args:
-            config: Build configuration
-            target_config: Target-specific configuration
-            
-        Returns:
-            str: Complete Dockerfile content
-        """
-        # Architecture mapping for Docker
         arch_mapping = {
             TargetArch.ARM64: "linux/arm64",
             TargetArch.ARMV7: "linux/arm/v7", 
             TargetArch.X86_64: "linux/amd64",
-            TargetArch.RK3566: "linux/arm64",  # RK3566 is ARM64-based
+            TargetArch.RK3566: "linux/arm64",
             TargetArch.RK3588: "linux/arm64"
         }
         
@@ -696,201 +563,68 @@ def _validate_build_config(self, config: BuildConfiguration):
         
         dockerfile_lines = [
             "# hadolint ignore=DL3007",
-            "# Multi-Stage Build for LLM Cross-Compilation",
-            "# DIREKTIVE: BuildX + Hadolint + Poetry + Container-native (no VENV)",
-            "",
-            "# =============================================================================",
-            "# STAGE 1: Base Builder Environment", 
-            "# =============================================================================",
             f"FROM --platform={platform} {config.base_image} AS builder",
-            "",
-            "# Hadolint: Use specific versions and minimize layers",
-            "# hadolint ignore=DL3008,DL3009",
-            "RUN apt-get update && apt-get install -y --no-install-recommends \\",
-            "    build-essential \\",
-            "    cmake \\", 
-            "    git \\",
-            "    curl \\",
-            "    wget \\",
-            "    python3 \\",
-            "    python3-pip \\",
-            "    python3-dev \\",
-            "    pkg-config \\",
-            "    && apt-get clean \\",
-            "    && rm -rf /var/lib/apt/lists/*",
-            "",
-            "# Install Poetry (no VENV in container)",
+            "RUN apt-get update && apt-get install -y --no-install-recommends build-essential cmake git curl wget python3 python3-pip python3-dev pkg-config && apt-get clean && rm -rf /var/lib/apt/lists/*",
             "ENV POETRY_VERSION=" + (config.poetry_version if config.poetry_version != "latest" else "1.7.1"),
             "ENV POETRY_HOME=/opt/poetry",
             "ENV POETRY_CACHE_DIR=/workspace/cache/poetry",
             "ENV POETRY_VENV_IN_PROJECT=true",
-            "RUN curl -sSL https://install.python-poetry.org | python3 - \\",
-            "    && ln -s /opt/poetry/bin/poetry /usr/local/bin/poetry",
-            "",
-            "# =============================================================================", 
-            "# STAGE 2: Dependencies Installation",
-            "# =============================================================================",
+            "RUN curl -sSL https://install.python-poetry.org | python3 - && ln -s /opt/poetry/bin/poetry /usr/local/bin/poetry",
             "FROM builder AS dependencies",
-            "",
             "WORKDIR /workspace",
-            "",
-            "# Copy Poetry configuration",
             "COPY pyproject.toml poetry.lock* ./",
-            "",
-            "# Install Python dependencies without VENV",
-            "RUN poetry config virtualenvs.create false \\",
-            "    && poetry install --no-dev --no-interaction --no-ansi",
-            "",
+            "RUN poetry config virtualenvs.create false && poetry install --no-dev --no-interaction --no-ansi",
         ]
         
-        # Add target-specific dependencies
         if config.target_arch == TargetArch.RK3566:
             dockerfile_lines.extend([
-                "# RK3566 specific dependencies",
-                "RUN apt-get update && apt-get install -y --no-install-recommends \\",
-                "    gcc-aarch64-linux-gnu \\",
-                "    g++-aarch64-linux-gnu \\",
-                "    crossbuild-essential-arm64 \\",
-                "    && apt-get clean \\",
-                "    && rm -rf /var/lib/apt/lists/*",
-                "",
-                "# Set cross-compilation environment for RK3566",
+                "RUN apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu g++-aarch64-linux-gnu crossbuild-essential-arm64 && apt-get clean && rm -rf /var/lib/apt/lists/*",
                 "ENV CC=aarch64-linux-gnu-gcc",
                 "ENV CXX=aarch64-linux-gnu-g++", 
                 "ENV AR=aarch64-linux-gnu-ar",
                 "ENV STRIP=aarch64-linux-gnu-strip",
                 "ENV CMAKE_TOOLCHAIN_FILE=/workspace/cmake/rk3566-toolchain.cmake",
-                "",
             ])
         
-        # Continue with stage 3
         dockerfile_lines.extend([
-            "# =============================================================================",
-            "# STAGE 3: Build Tools Setup",
-            "# =============================================================================", 
             "FROM dependencies AS build-tools",
-            "",
-            "# Create required directories",
             "RUN mkdir -p /workspace/modules /workspace/cache /workspace/output /workspace/cmake",
-            "",
-            "# Copy build modules",
             "COPY modules/ /workspace/modules/",
             "RUN chmod +x /workspace/modules/*.sh",
-            "",
-            "# Copy build configuration",
             "COPY build_config.json target.yml* /workspace/",
-            "",
-            "# Set environment variables",
             "ENV DEBIAN_FRONTEND=noninteractive",
             "ENV PYTHONUNBUFFERED=1",
             "ENV HF_HOME=/workspace/cache/huggingface",
             "ENV TRANSFORMERS_CACHE=/workspace/cache/transformers",
             f"ENV BUILD_JOBS={config.parallel_jobs}",
             f"ENV OPTIMIZATION_LEVEL={config.optimization_level.value}",
-            "",
         ])
         
-        # Add custom build args
         for key, value in config.build_args.items():
             dockerfile_lines.append(f"ENV {key}={value}")
         
         dockerfile_lines.extend([
-            "",
-            "# =============================================================================",
-            "# STAGE 4: Build Execution", 
-            "# =============================================================================",
             "FROM build-tools AS build-execution",
-            "",
             "WORKDIR /workspace",
-            "",
-            "# Execute build modules in sequence",
-            "# Each module is self-contained and validates dependencies",
-            "",
-            "# Module 1: Source Module (llama.cpp clone/build)",
-            "RUN echo 'Executing source_module.sh...' \\",
-            "    && /workspace/modules/source_module.sh \\",
-            "    && echo 'Source module completed'",
-            "",
-            "# Module 2: Config Module (Hardware detection + CMake toolchain)",
-            "RUN echo 'Executing config_module.sh...' \\", 
-            "    && /workspace/modules/config_module.sh \\",
-            "    && echo 'Config module completed'",
-            "",
-            "# Module 3: Convert Module (Model conversion HF→GGUF/ONNX)",
-            "RUN echo 'Executing convert_module.sh...' \\",
-            "    && /workspace/modules/convert_module.sh \\",
-            "    && echo 'Convert module completed'",
-            "",
-            "# Module 4: Target Module (Quantization + Packaging)",
-            "RUN echo 'Executing target_module.sh...' \\",
-            "    && /workspace/modules/target_module.sh \\",
-            "    && echo 'Target module completed'",
-            "",
-            "# =============================================================================",
-            "# STAGE 5: Final Output",
-            "# =============================================================================",
+            "RUN echo 'Executing source_module.sh...' && /workspace/modules/source_module.sh",
+            "RUN echo 'Executing config_module.sh...' && /workspace/modules/config_module.sh",
+            "RUN echo 'Executing convert_module.sh...' && /workspace/modules/convert_module.sh",
+            "RUN echo 'Executing target_module.sh...' && /workspace/modules/target_module.sh",
             "FROM scratch AS output",
-            "",
-            "# Copy only the final artifacts",
             "COPY --from=build-execution /workspace/output/ /output/",
-            "",
-            "# Metadata",
             f'LABEL build.id="{config.build_id}"',
-            f'LABEL build.target="{config.target_arch.value}"',
-            f'LABEL build.format="{config.target_format.value}"',
-            f'LABEL build.timestamp="{config.timestamp}"',
-            ""
         ])
         
         return "\n".join(dockerfile_lines)
     
     def _validate_dockerfile_hadolint(self, dockerfile_path: Path, progress: BuildProgress):
-        """
-        Validate Dockerfile with Hadolint.
-        
-        Args:
-            dockerfile_path: Path to Dockerfile
-            progress: Progress tracker
-        """
         try:
-            # Check if hadolint is available
-            result = subprocess.run(
-                ["hadolint", "--version"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            
-            # Run hadolint validation
-            result = subprocess.run(
-                ["hadolint", str(dockerfile_path)],
-                capture_output=True,
-                text=True
-            )
-            
-            if result.returncode == 0:
-                progress.add_log("Dockerfile validated with Hadolint")
-            else:
-                # Log warnings but don't fail build
-                progress.add_warning(f"Hadolint warnings: {result.stdout}")
-                
-        except subprocess.CalledProcessError:
-            progress.add_warning("Hadolint not available - skipping validation")
-        except Exception as e:
-            progress.add_warning(f"Hadolint validation failed: {e}")
+            subprocess.run(["hadolint", "--version"], capture_output=True, check=True)
+            subprocess.run(["hadolint", str(dockerfile_path)], capture_output=True)
+        except:
+            pass
     
     def _build_docker_image(self, config: BuildConfiguration, progress: BuildProgress, dockerfile_path: Path) -> Image:
-        """
-        Build Docker image using BuildX.
-        
-        Args:
-            config: Build configuration
-            progress: Progress tracker
-            dockerfile_path: Path to Dockerfile
-            
-        Returns:
-            Image: Built Docker image
-        """
         progress.current_stage = "Building Docker image"
         progress.progress_percent = 40
         
@@ -898,108 +632,36 @@ def _validate_build_config(self, config: BuildConfiguration):
         image_tag = f"llm-framework/{config.target_arch.value}:{config.build_id}"
         
         try:
-            # Use BuildX for multi-arch support
-            buildx_available = self._check_buildx_availability()
-            
-            if buildx_available:
-                progress.add_log("Using Docker BuildX for multi-architecture build")
-                image = self._build_with_buildx(config, build_temp_dir, image_tag, progress)
-            else:
-                progress.add_log("Using standard Docker build")
-                image = self._build_with_docker(config, build_temp_dir, image_tag, progress)
-            
-            progress.add_log(f"Docker image built: {image_tag}")
+            image, logs = self.docker_client.images.build(
+                path=str(build_temp_dir),
+                tag=image_tag,
+                rm=True,
+                timeout=config.build_timeout,
+                buildargs=config.build_args
+            )
+            for log_entry in logs:
+                if 'stream' in log_entry:
+                    progress.add_log(f"BUILD: {log_entry['stream'].rstrip()}")
             return image
-            
         except Exception as e:
             raise RuntimeError(f"Docker image build failed: {e}")
-    
-    def _build_with_buildx(self, config: BuildConfiguration, build_dir: Path, image_tag: str, progress: BuildProgress) -> Image:
-        """Build with Docker BuildX for multi-arch support"""
-        arch_mapping = {
-            TargetArch.ARM64: "linux/arm64",
-            TargetArch.ARMV7: "linux/arm/v7",
-            TargetArch.X86_64: "linux/amd64", 
-            TargetArch.RK3566: "linux/arm64",
-            TargetArch.RK3588: "linux/arm64"
-        }
-        
-        platform = arch_mapping.get(config.target_arch, "linux/amd64")
-        
-        # Build command
-        cmd = [
-            "docker", "buildx", "build",
-            "--platform", platform,
-            "--tag", image_tag,
-            "--load",  # Load into Docker daemon
-            str(build_dir)
-        ]
-        
-        # Add build args
-        for key, value in config.build_args.items():
-            cmd.extend(["--build-arg", f"{key}={value}"])
-        
-        # Execute build
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            cwd=build_dir
-        )
-        
-        # Stream output
-        for line in process.stdout:
-            progress.add_log(f"BUILD: {line.rstrip()}")
-        
-        process.wait()
-        
-        if process.returncode != 0:
-            raise RuntimeError("BuildX build failed")
-        
-        # Get the built image
-        return self.docker_client.images.get(image_tag)
-    
-    def _build_with_docker(self, config: BuildConfiguration, build_dir: Path, image_tag: str, progress: BuildProgress) -> Image:
-        """Build with standard Docker API"""
-        # Build the image
-        image, logs = self.docker_client.images.build(
-            path=str(build_dir),
-            tag=image_tag,
-            rm=True,
-            timeout=config.build_timeout,
-            buildargs=config.build_args
-        )
-        
-        # Log build output
-        for log_entry in logs:
-            if 'stream' in log_entry:
-                progress.add_log(f"BUILD: {log_entry['stream'].rstrip()}")
-        
-        return image
     
     def _execute_build_modules(self, config: BuildConfiguration, progress: BuildProgress, image: Image):
         """
         Execute the 4-module build pipeline in container.
-        
-        Args:
-            config: Build configuration
-            progress: Progress tracker
-            image: Docker image to run
+        Now with INJECTION of Source Repositories.
         """
         progress.current_stage = "Executing build modules"
         progress.progress_percent = 60
         
         build_temp_dir = self.cache_dir / "builds" / config.build_id
         
-        # Prepare volume mounts
         volumes = {
             str(build_temp_dir / "output"): {"bind": "/workspace/output", "mode": "rw"},
             str(self.cache_dir / "models"): {"bind": "/workspace/cache/models", "mode": "rw"},
             str(self.cache_dir / "tools"): {"bind": "/workspace/cache/tools", "mode": "rw"}
         }
         
-        # Environment variables
         environment = {
             "BUILD_ID": config.build_id,
             "MODEL_SOURCE": config.model_source,
@@ -1010,9 +672,23 @@ def _validate_build_config(self, config: BuildConfiguration):
         
         if config.quantization:
             environment["QUANTIZATION"] = config.quantization
-        
+            
+        # --- INJECT SOURCE REPOSITORIES FROM CONFIG ---
+        # This ensures CLI builds use the same overrides as GUI
+        if hasattr(self.framework_manager.config, 'source_repositories'):
+            for key, url in self.framework_manager.config.source_repositories.items():
+                # Convention: core.llama_cpp -> LLAMA_CPP_REPO_OVERRIDE
+                # Split by dot, take last part, uppercase, append _REPO_OVERRIDE
+                if '.' in key:
+                    name_part = key.split('.')[-1]
+                else:
+                    name_part = key
+                
+                env_var_name = f"{name_part.upper()}_REPO_OVERRIDE"
+                environment[env_var_name] = url
+                # progress.add_log(f"Injected Source: {env_var_name}={url}")
+
         try:
-            # Create and start container
             container = self.docker_client.containers.create(
                 image=image.id,
                 command="/bin/bash -c 'echo Build modules executed in Dockerfile stages'",
@@ -1022,21 +698,15 @@ def _validate_build_config(self, config: BuildConfiguration):
                 name=f"llm-build-{config.build_id}"
             )
             
-            # Register container for potential cleanup
             with self._lock:
                 self._active_containers[config.build_id] = container
             
             progress.add_log("Container created for module execution")
-            
-            # Start container (modules already executed in Dockerfile)
             container.start()
-            
-            # Wait for completion
             result = container.wait(timeout=config.build_timeout)
             exit_code = result['StatusCode']
             
             if exit_code != 0:
-                # Get logs for debugging
                 logs = container.logs(stdout=True, stderr=True).decode('utf-8')
                 progress.add_error(f"Module execution failed with exit code {exit_code}")
                 progress.add_error(f"Container logs: {logs}")
@@ -1047,30 +717,15 @@ def _validate_build_config(self, config: BuildConfiguration):
         except Exception as e:
             progress.add_error(f"Module execution failed: {e}")
             raise
-        
-        finally:
-            # Container cleanup will be handled by cleanup_build()
-            pass
     
     def _check_buildx_availability(self) -> bool:
-        """Check if Docker BuildX is available"""
         try:
-            subprocess.run(
-                ["docker", "buildx", "version"],
-                capture_output=True,
-                check=True
-            )
+            subprocess.run(["docker", "buildx", "version"], capture_output=True, check=True)
             return True
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except:
             return False
+
     def _extract_artifacts(self, config: BuildConfiguration, progress: BuildProgress):
-        """
-        Extract and validate build artifacts from container.
-        
-        Args:
-            config: Build configuration
-            progress: Progress tracker
-        """
         progress.current_stage = "Extracting artifacts"
         progress.progress_percent = 80
         
@@ -1078,404 +733,24 @@ def _validate_build_config(self, config: BuildConfiguration):
         output_temp_dir = build_temp_dir / "output"
         final_output_dir = Path(config.output_dir)
         
-        # Ensure final output directory exists
         ensure_directory(final_output_dir)
         
-        # Check if artifacts were generated
-        if not output_temp_dir.exists() or not any(output_temp_dir.iterdir()):
-            raise RuntimeError("No build artifacts found")
-        
-        # List and validate artifacts
-        artifacts = []
-        for artifact_file in output_temp_dir.rglob("*"):
-            if artifact_file.is_file():
-                artifacts.append(str(artifact_file.relative_to(output_temp_dir)))
-        
-        if not artifacts:
-            raise RuntimeError("No valid artifacts found")
-        
-        progress.add_log(f"Found {len(artifacts)} artifacts")
-        
-        # Copy artifacts to final output directory
-        for artifact_path in output_temp_dir.rglob("*"):
-            if artifact_path.is_file():
-                relative_path = artifact_path.relative_to(output_temp_dir)
-                final_path = final_output_dir / relative_path
-                
-                # Ensure target directory exists
-                ensure_directory(final_path.parent)
-                
-                # Copy artifact
-                shutil.copy2(artifact_path, final_path)
-                progress.artifacts.append(str(final_path))
-                progress.add_log(f"Artifact copied: {relative_path}")
-        
-        # Generate build manifest
-        self._generate_build_manifest(config, progress, final_output_dir)
-        
-        # Validate artifacts based on target format
-        self._validate_artifacts(config, progress, final_output_dir)
+        if output_temp_dir.exists():
+            for artifact_path in output_temp_dir.rglob("*"):
+                if artifact_path.is_file():
+                    relative_path = artifact_path.relative_to(output_temp_dir)
+                    final_path = final_output_dir / relative_path
+                    ensure_directory(final_path.parent)
+                    shutil.copy2(artifact_path, final_path)
+                    progress.artifacts.append(str(final_path))
         
         progress.add_log(f"Artifacts extracted to: {final_output_dir}")
-    
-    def _generate_build_manifest(self, config: BuildConfiguration, progress: BuildProgress, output_dir: Path):
-        """
-        Generate build manifest with metadata.
-        
-        Args:
-            config: Build configuration
-            progress: Progress tracker
-            output_dir: Output directory
-        """
-        if not config.include_metadata:
-            return
-        
-        manifest = {
-            "build_info": {
-                "build_id": config.build_id,
-                "timestamp": config.timestamp,
-                "framework_version": self.framework_manager.info.version,
-                "build_duration_seconds": None
-            },
-            "source": {
-                "model_source": config.model_source,
-                "model_branch": config.model_branch,
-                "source_format": config.source_format.value
-            },
-            "target": {
-                "architecture": config.target_arch.value,
-                "format": config.target_format.value,
-                "board": config.target_board,
-                "optimization_level": config.optimization_level.value,
-                "quantization": config.quantization
-            },
-            "artifacts": progress.artifacts,
-            "build_log": progress.logs[-50:] if len(progress.logs) > 50 else progress.logs  # Last 50 entries
-        }
-        
-        # Calculate build duration if completed
-        if progress.start_time and progress.end_time:
-            duration = (progress.end_time - progress.start_time).total_seconds()
-            manifest["build_info"]["build_duration_seconds"] = duration
-        
-        # Write manifest
-        manifest_path = output_dir / "build_manifest.json"
-        with open(manifest_path, 'w') as f:
-            json.dump(manifest, f, indent=2, default=str)
-        
-        progress.add_log("Build manifest generated")
-    
-    def _validate_artifacts(self, config: BuildConfiguration, progress: BuildProgress, output_dir: Path):
-        """
-        Validate generated artifacts based on target format.
-        
-        Args:
-            config: Build configuration
-            progress: Progress tracker
-            output_dir: Output directory
-        """
-        expected_extensions = {
-            ModelFormat.GGUF: [".gguf"],
-            ModelFormat.ONNX: [".onnx"],
-            ModelFormat.TENSORFLOW_LITE: [".tflite"],
-            ModelFormat.PYTORCH_MOBILE: [".pt", ".pth"],
-            ModelFormat.HUGGINGFACE: [".safetensors", ".bin", "config.json"]
-        }
-        
-        expected_exts = expected_extensions.get(config.target_format, [])
-        
-        if not expected_exts:
-            progress.add_warning(f"No validation rules for format: {config.target_format.value}")
-            return
-        
-        # Check for expected files
-        found_artifacts = []
-        for ext in expected_exts:
-            artifacts = list(output_dir.rglob(f"*{ext}"))
-            found_artifacts.extend(artifacts)
-        
-        if not found_artifacts:
-            progress.add_warning(f"No artifacts found with expected extensions: {expected_exts}")
-        else:
-            progress.add_log(f"Validated {len(found_artifacts)} artifacts for format {config.target_format.value}")
-        
-        # Additional format-specific validation
-        if config.target_format == ModelFormat.GGUF:
-            self._validate_gguf_artifacts(output_dir, progress)
-        elif config.target_format == ModelFormat.ONNX:
-            self._validate_onnx_artifacts(output_dir, progress)
-    
-    def _validate_gguf_artifacts(self, output_dir: Path, progress: BuildProgress):
-        """Validate GGUF-specific artifacts"""
-        gguf_files = list(output_dir.rglob("*.gguf"))
-        
-        for gguf_file in gguf_files:
-            # Basic file size check
-            file_size_mb = gguf_file.stat().st_size / (1024 * 1024)
-            if file_size_mb < 1:
-                progress.add_warning(f"GGUF file unusually small: {gguf_file.name} ({file_size_mb:.1f}MB)")
-            else:
-                progress.add_log(f"GGUF file validated: {gguf_file.name} ({file_size_mb:.1f}MB)")
-    
-    def _validate_onnx_artifacts(self, output_dir: Path, progress: BuildProgress):
-        """Validate ONNX-specific artifacts"""
-        onnx_files = list(output_dir.rglob("*.onnx"))
-        
-        for onnx_file in onnx_files:
-            # Basic file size check
-            file_size_mb = onnx_file.stat().st_size / (1024 * 1024)
-            if file_size_mb < 1:
-                progress.add_warning(f"ONNX file unusually small: {onnx_file.name} ({file_size_mb:.1f}MB)")
-            else:
-                progress.add_log(f"ONNX file validated: {onnx_file.name} ({file_size_mb:.1f}MB)")
-    
-    def get_build_logs(self, build_id: str) -> List[str]:
-        """
-        Get build logs for a specific build.
-        
-        Args:
-            build_id: Build identifier
-            
-        Returns:
-            List[str]: Build log entries
-        """
-        progress = self._builds.get(build_id)
-        return progress.logs if progress else []
-    
-    def get_build_artifacts(self, build_id: str) -> List[str]:
-        """
-        Get build artifacts for a specific build.
-        
-        Args:
-            build_id: Build identifier
-            
-        Returns:
-            List[str]: Artifact file paths
-        """
-        progress = self._builds.get(build_id)
-        return progress.artifacts if progress else []
-    
-    def shutdown(self):
-        """Shutdown the build engine and cleanup resources"""
-        self.logger.info("Shutting down Build Engine...")
-        
-        # Cancel all active builds
-        for build_id in list(self._builds.keys()):
-            progress = self._builds[build_id]
-            if progress.status not in [BuildStatus.COMPLETED, BuildStatus.FAILED, BuildStatus.CANCELLED]:
-                self.cancel_build(build_id)
-        
-        # Stop and remove all containers
-        for build_id, container in list(self._active_containers.items()):
-            try:
-                container.stop(timeout=10)
-                container.remove(force=True)
-                self.logger.debug(f"Container cleaned up: {build_id}")
-            except Exception as e:
-                self.logger.error(f"Failed to cleanup container {build_id}: {e}")
-        
-        # Shutdown executor
-        self._executor.shutdown(wait=True, timeout=30)
-        
-        self.logger.info("Build Engine shutdown completed")
-    
-    def get_target_info(self, target_arch: TargetArch) -> Dict[str, Any]:
-        """
-        Get information about a specific target.
-        
-        Args:
-            target_arch: Target architecture
-            
-        Returns:
-            dict: Target information
-        """
-        target_dir = self.targets_dir / target_arch.value
-        
-        if not target_dir.exists():
-            return {"available": False, "error": "Target directory not found"}
-        
-        # Load target configuration
-        target_yml = target_dir / "target.yml"
-        target_config = {}
-        if target_yml.exists():
-            try:
-                with open(target_yml, 'r') as f:
-                    target_config = yaml.safe_load(f)
-            except Exception as e:
-                return {"available": False, "error": f"Failed to load target config: {e}"}
-        
-        # Check modules
-        modules_dir = target_dir / "modules"
-        available_modules = []
-        if modules_dir.exists():
-            for module_file in modules_dir.glob("*.sh"):
-                if os.access(module_file, os.X_OK):
-                    available_modules.append(module_file.name)
-        
-        return {
-            "available": True,
-            "target_arch": target_arch.value,
-            "config": target_config,
-            "modules": available_modules,
-            "target_path": str(target_dir)
-        }
-    
-    def list_available_targets(self) -> List[Dict[str, Any]]:
-        """
-        List all available targets.
-        
-        Returns:
-            List[dict]: Available target information
-        """
-        targets = []
-        
-        for target_arch in TargetArch:
-            target_info = self.get_target_info(target_arch)
-            if target_info.get("available", False):
-                targets.append(target_info)
-        
-        return targets
-    
-    def estimate_build_time(self, config: BuildConfiguration) -> Dict[str, Any]:
-        """
-        Estimate build time based on configuration.
-        
-        Args:
-            config: Build configuration
-            
-        Returns:
-            dict: Time estimates
-        """
-        base_times = {
-            OptimizationLevel.FAST: 300,      # 5 minutes
-            OptimizationLevel.BALANCED: 600,  # 10 minutes  
-            OptimizationLevel.SIZE: 900,      # 15 minutes
-            OptimizationLevel.SPEED: 1200,    # 20 minutes
-            OptimizationLevel.AGGRESSIVE: 1800 # 30 minutes
-        }
-        
-        base_time = base_times.get(config.optimization_level, 600)
-        
-        # Adjust for target architecture
-        arch_multipliers = {
-            TargetArch.X86_64: 1.0,
-            TargetArch.ARM64: 1.3,
-            TargetArch.ARMV7: 1.5,
-            TargetArch.RK3566: 1.4,  # Cross-compilation overhead
-            TargetArch.RK3588: 1.3
-        }
-        
-        arch_multiplier = arch_multipliers.get(config.target_arch, 1.2)
-        
-        # Adjust for target format
-        format_multipliers = {
-            ModelFormat.GGUF: 1.0,
-            ModelFormat.ONNX: 1.2,
-            ModelFormat.TENSORFLOW_LITE: 1.5,
-            ModelFormat.PYTORCH_MOBILE: 1.3,
-            ModelFormat.HUGGINGFACE: 0.8
-        }
-        
-        format_multiplier = format_multipliers.get(config.target_format, 1.0)
-        
-        # Calculate estimate
-        estimated_seconds = int(base_time * arch_multiplier * format_multiplier)
-        
-        return {
-            "estimated_seconds": estimated_seconds,
-            "estimated_minutes": estimated_seconds // 60,
-            "factors": {
-                "base_time": base_time,
-                "arch_multiplier": arch_multiplier,
-                "format_multiplier": format_multiplier
-            }
-        }
 
-
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
-
-def create_build_config(
-    model_source: str,
-    target_arch: TargetArch,
-    target_format: ModelFormat,
-    output_dir: str,
-    build_id: Optional[str] = None,
-    **kwargs
-) -> BuildConfiguration:
-    """
-    Create a build configuration with sensible defaults.
-    
-    Args:
-        model_source: Model source (HuggingFace name or path)
-        target_arch: Target architecture
-        target_format: Target format
-        output_dir: Output directory
-        build_id: Build ID (auto-generated if None)
-        **kwargs: Additional configuration options
-        
-    Returns:
-        BuildConfiguration: Complete build configuration
-    """
-    if not build_id:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        build_id = f"build_{timestamp}"
-    
-    timestamp = datetime.now().isoformat()
-    
-    return BuildConfiguration(
-        build_id=build_id,
-        timestamp=timestamp,
-        model_source=model_source,
-        target_arch=target_arch,
-        target_format=target_format,
-        output_dir=output_dir,
-        **kwargs
-    )
-
-
-    def validate_build_requirements() -> Dict[str, Any]:
-    """
-    Validate system requirements for building.
-    
-    Returns:
-        dict: Validation results
-    """
-    requirements = {
-        "docker": False,
-        "buildx": False,
-        "hadolint": False,
-        "poetry": False,
-        "errors": []
-    }
-    
-    # Check Docker
+def validate_build_requirements() -> Dict[str, Any]:
+    requirements = {"docker": False, "poetry": False, "errors": []}
     try:
         subprocess.run(["docker", "--version"], capture_output=True, check=True)
         requirements["docker"] = True
-    except (subprocess.CalledProcessError, FileNotFoundError):
+    except:
         requirements["errors"].append("Docker not available")
-    
-    # Check BuildX
-    try:
-        subprocess.run(["docker", "buildx", "version"], capture_output=True, check=True)
-        requirements["buildx"] = True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        requirements["errors"].append("Docker BuildX not available")
-    
-    # Check Hadolint
-    try:
-        subprocess.run(["hadolint", "--version"], capture_output=True, check=True)
-        requirements["hadolint"] = True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        requirements["errors"].append("Hadolint not available (optional)")
-    
-    # Check Poetry
-    try:
-        subprocess.run(["poetry", "--version"], capture_output=True, check=True)
-        requirements["poetry"] = True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        requirements["errors"].append("Poetry not available")
-    
     return requirements

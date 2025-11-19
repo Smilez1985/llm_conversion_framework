@@ -507,7 +507,7 @@ class BuildEngine:
             except Exception as cleanup_error:
                 progress.add_warning(f"Cleanup after failure failed: {cleanup_error}")
     
-    def _validate_build_config(self, config: BuildConfiguration):
+def _validate_build_config(self, config: BuildConfiguration):
         """
         Validate build configuration.
         

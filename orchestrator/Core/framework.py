@@ -733,5 +733,3 @@ def validate_framework_installation(install_path: Optional[Path] = None) -> Dict
             result["target_count"] = target_count
     
     return result
-}
-}

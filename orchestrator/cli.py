@@ -2,6 +2,8 @@
 """
 LLM Cross-Compiler Framework - Command Line Interface
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+
+Professional CLI for automation, CI/CD integration, and power users.
 """
 
 import sys
@@ -177,10 +179,10 @@ def config():
 
 @config.command('sources')
 @click.option('--list', '-l', is_flag=True, help='List configured sources')
-@click.option('--add', '-a', nargs=2, help='Add source: SECTION KEY VALUE (e.g. core llama_cpp https://...)')
+@click.option('--add', '-a', nargs=3, help='Add source: SECTION NAME URL (e.g. core llama_cpp https://...)')
 @pass_context
 def config_sources(ctx: FrameworkContext, list: bool, add: tuple):
-    """Manage source repositories"""
+    """Manage source repositories from project_sources.yml"""
     
     sources_file = Path(ctx.config.get('configs_dir', 'configs')) / 'project_sources.yml'
     
@@ -196,13 +198,37 @@ def config_sources(ctx: FrameworkContext, list: bool, add: tuple):
         else:
             console.print("[yellow]No sources configured.[/yellow]")
             
-    # Handle adding source requires manual yaml handling here since it's a specialized file
-    # This is a simplified implementation for the CLI
     if add:
-        console.print("[yellow]To add sources via CLI, please edit configs/project_sources.yml directly.[/yellow]")
-        console.print("Format:")
-        console.print("  section:")
-        console.print("    name: url")
+        if len(add) != 3:
+            console.print("[red]Error: Add requires exactly 3 arguments: SECTION NAME URL[/red]")
+            return
+
+        section, name, url = add
+        
+        # Load existing yaml
+        if sources_file.exists():
+            try:
+                with open(sources_file, 'r') as f:
+                    data = yaml.safe_load(f) or {}
+            except Exception as e:
+                console.print(f"[red]Error loading sources file: {e}[/red]")
+                return
+        else:
+            data = {}
+        
+        # Update data
+        if section not in data:
+            data[section] = {}
+        data[section][name] = url
+        
+        # Write back
+        try:
+            with open(sources_file, 'w') as f:
+                yaml.dump(data, f, default_flow_style=False)
+            console.print(f"[green]Successfully added source: {section}.{name} -> {url}[/green]")
+            console.print("[blue]Note: Restart framework/CLI to apply changes.[/blue]")
+        except Exception as e:
+            console.print(f"[red]Error writing sources file: {e}[/red]")
 
 @cli.group()
 def build():

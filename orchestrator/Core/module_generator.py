@@ -53,6 +53,7 @@ class ModuleGenerator:
         # 1. Create Directory Structure
         ensure_directory(target_dir)
         ensure_directory(target_dir / "modules")
+        ensure_directory(target_dir / "scripts")
         
         # 2. Generate Files
         self._write_dockerfile(target_dir, data)
@@ -217,17 +218,17 @@ echo "Generated $OUTPUT_FILE"
 
 set -euo pipefail
 readonly BUILD_CACHE_DIR="${BUILD_CACHE_DIR:-/build-cache}"
-
-# Setup Logic here (usually standard)
-# ...
+# Standard source setup logic would go here...
+# (In a real scenario, this might copy the robust template we built earlier)
+echo "Source module template initialized"
 '''
         self._write_script(target_dir / "modules" / "source_module.sh", source_content)
         
         # Convert Module (Placeholder)
-        self._write_script(target_dir / "modules" / "convert_module.sh", "#!/bin/bash\n# Convert Module Template\n")
+        self._write_script(target_dir / "modules" / "convert_module.sh", "#!/bin/bash\n# Convert Module Template\necho 'Convert module placeholder'")
         
         # Target Module (Placeholder)
-        self._write_script(target_dir / "modules" / "target_module.sh", "#!/bin/bash\n# Target Module Template\n")
+        self._write_script(target_dir / "modules" / "target_module.sh", "#!/bin/bash\n# Target Module Template\necho 'Target module placeholder'")
 
     def _write_script(self, path: Path, content: str):
         """Write content to file and make executable"""

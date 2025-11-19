@@ -519,8 +519,7 @@ class FrameworkManager:
         """Load configuration from a specific file"""
         config_data = {}
         if config_path.suffix in ['.yml', '.yaml']:
-            config_data = safe_json_load(config_path, {}) # Fallback if yaml fails safe_json handles it? No safe_yaml needed.
-            # Re-implement basic yaml load safely
+            config_data = safe_json_load(config_path, {}) # Fallback
             try:
                 with open(config_path, 'r') as f:
                     config_data = yaml.safe_load(f)

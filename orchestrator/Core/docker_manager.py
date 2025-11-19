@@ -160,9 +160,6 @@ class DockerWorker(QObject):
         if "rockchip_npu.rknn_llm" in sources:
              pipeline_cmd.extend(["-e", f"RKNN_LLM_REPO_OVERRIDE={sources['rockchip_npu.rknn_llm']}"])
              
-        if "rockchip_npu.rknn_model_zoo" in sources:
-             pipeline_cmd.extend(["-e", f"RKNN_MODEL_ZOO_REPO_OVERRIDE={sources['rockchip_npu.rknn_model_zoo']}"])
-
         # Voice Mappings
         if "voice_tts.piper_tts" in sources:
              pipeline_cmd.extend(["-e", f"PIPER_PHONEMIZE_REPO_OVERRIDE={sources['voice_tts.piper_tts']}"])

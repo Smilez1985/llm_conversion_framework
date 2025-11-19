@@ -1,0 +1,15 @@
+# Zentrale Quellen für das LLM Cross-Compiler Framework
+core:
+  llama_cpp: https://github.com/ggerganov/llama.cpp.git
+  transformers: https://github.com/huggingface/transformers
+  
+rockchip_npu:
+  rknn_llm: https://github.com/airockchip/rknn-llm
+  rknn_toolkit2: https://github.com/airockchip/rknn-toolkit2
+
+voice_tts:
+  piper_tts: https://github.com/rhasspy/piper
+  glados_tts: https://github.com/dnhkng/GLaDOS
+
+models:
+  granite_350m: https://huggingface.co/ibm-granite/granite-4.0-h-350m

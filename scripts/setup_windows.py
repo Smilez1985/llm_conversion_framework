@@ -13,6 +13,7 @@ import socket
 import threading
 import tempfile
 from pathlib import Path
+# WICHTIGER FIX: Korrekter Import für Typhinweise
 from typing import Optional, List, Callable
 import requests # Für Internet-Check
 
@@ -223,8 +224,7 @@ class InstallerWindow(tk.Tk):
         
         self._init_ui()
         
-        # FINALER FIX: after() muss mit einem Lambda gebunden werden, 
-        # um den Attribute Error in kompilierten Umgebungen zu vermeiden
+        # FINALER FIX: Ruft die Methode des Objekts korrekt auf
         self.after(100, lambda: self._run_initial_checks_start()) 
 
     def _init_ui(self):
@@ -265,8 +265,7 @@ class InstallerWindow(tk.Tk):
         path_frame.pack(fill='x', pady=5)
         
         default_install_path = Path(os.getenv('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / "Programs" / DEFAULT_INSTALL_DIR_SUFFIX
-        self.install_path_var = tk.StringVar(value=str(default_install_path))
-        self.install_path_entry = ttk.Entry(path_frame, textvariable=self.install_path_var, width=50)
+        self.install_path_entry = ttk.Entry(path_frame, textvariable=tk.StringVar(value=str(default_install_path)), width=50)
         self.install_path_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
         
         ttk.Button(path_frame, text="Browse...", command=self._browse_for_folder).pack(side='right')
@@ -357,7 +356,7 @@ class InstallerWindow(tk.Tk):
             return True
         except: return False
 
-    def _initial_checks_start(self):
+    def _run_initial_checks_start(self):
         """Startet den Thread für die Systemprüfung."""
         threading.Thread(target=self._run_initial_checks_threaded, daemon=True).start()
 

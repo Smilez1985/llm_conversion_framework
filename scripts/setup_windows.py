@@ -14,7 +14,7 @@ import threading
 import tempfile
 from pathlib import Path
 from typing import Optional, List, Callable
-import requests 
+import requests # Für Internet-Check
 
 # Tkinter Imports für die grafische Oberfläche
 try:
@@ -224,7 +224,7 @@ class InstallerWindow(tk.Tk):
         
         self._init_ui()
         
-        # WICHTIGER FIX: Ruft die Methode des Objekts korrekt auf
+        # FIX: Startet die Checks im nächsten Zyklus, wenn das Objekt vollständig initialisiert ist
         self.after(100, self._run_initial_checks_start) 
 
     def _init_ui(self):
@@ -271,8 +271,10 @@ class InstallerWindow(tk.Tk):
         
         ttk.Button(path_frame, text="Browse...", command=self._browse_for_folder).pack(side='right')
         
-        self.desktop_shortcut_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(loc_frame, text="Create Desktop Shortcut", variable=self.desktop_shortcut_var).pack(anchor='w', pady=5)
+        self.desktop_shortcut_checkbox = ttk.Checkbutton(loc_frame, text="Create Desktop Shortcut")
+        self.desktop_shortcut_checkbox.state(['!alternate', 'selected']) # Setzt Default auf True
+        self.desktop_shortcut_checkbox.pack(anchor='w', pady=5)
+        self.desktop_shortcut_var = tk.BooleanVar(value=True) # Variable wird nicht direkt benötigt, da der Zustand über .instate() abgefragt wird
 
         # --- Log & Progress (Row 3, 4, 5) ---
         ttk.Label(main_frame, text="Installation Log:").grid(row=3, column=0, sticky='w', pady=(10, 0))
@@ -358,7 +360,6 @@ class InstallerWindow(tk.Tk):
 
     def _initial_checks_start(self):
         """Startet den Thread für die Systemprüfung."""
-        # FIX: Der Thread muss die Methode des Objekts aufrufen
         threading.Thread(target=self._run_initial_checks_threaded, daemon=True).start()
 
     def _run_initial_checks_threaded(self):
@@ -366,15 +367,12 @@ class InstallerWindow(tk.Tk):
         try:
             self.update_log("Führe Systemvoraussetzungen-Checks durch...", "orange")
 
-            # --- Docker Check ---
             docker_ok = self._check_docker_status()
             self._set_status_label(self.docker_status, "OK" if docker_ok else "NOT FOUND", "green" if docker_ok else "red")
             
-            # --- Git Check ---
             git_ok = self._check_git_status()
             self._set_status_label(self.git_status, "OK" if git_ok else "NOT FOUND", "green" if git_ok else "red")
             
-            # --- Internet Check ---
             internet_ok = self._check_internet_status()
             self._set_status_label(self.internet_status, "OK" if internet_ok else "FAILED", "green" if internet_ok else "red")
 
@@ -392,7 +390,8 @@ class InstallerWindow(tk.Tk):
 
     def _start_installation(self):
         target_dir = Path(self.install_path_entry.get()).resolve()
-        desktop_shortcut = self.desktop_shortcut_checkbox.get()
+        # Abfrage des Checkbox-Status über .instate()
+        desktop_shortcut = self.desktop_shortcut_checkbox.instate(['selected'])
         
         if not target_dir.parent.exists():
             messagebox.showerror("Invalid Path", f"The parent directory for {target_dir} does not exist.")
@@ -439,10 +438,7 @@ class InstallerWindow(tk.Tk):
 
 if __name__ == '__main__':
     # Initialisiere Win32-COM für Desktop-Shortcuts (VBScript wird verwendet)
-    try:
-        import win32com.client # Test, ob pywin32 vorhanden ist
-    except ImportError:
-        print("WARNUNG: 'pywin32' ist nicht installiert. Desktop-Shortcuts werden über VBScript erstellt.")
-
+    # Entferne die nutzlose und verwirrende Warnung, da VBScript der Fallback ist.
+    
     app = InstallerWindow()
     app.mainloop()

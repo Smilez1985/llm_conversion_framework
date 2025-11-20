@@ -1,49 +1,50 @@
-# llm_conversion_framework 
+# llm_conversion_framework [WARNUNG: Das komplette Projekt wurde mit Hilfe von KI (Claude/Gemini) erstellt und ist, Stand 15.11.2025, noch ungetestet!]
 
-Ein GUI-basiertes LLM Deployment Framework, das:  Beliebige LLMs automatisiert optimieren &amp; quantisieren kann Für jeden CPU, GPU oder NPU perfekt optimiert MVP: RK3566 Support
+Ein GUI-basiertes LLM Deployment Framework, das beliebige LLMs automatisiert optimieren & quantisieren kann. Für jede CPU, GPU oder NPU perfekt optimiert. **MVP: RK3566 Support.**
+
+# 🚀 LLM Cross-Compiler Framework
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-20.10+-blue.svg)](https://docs.docker.com/get-docker/)
 [![Poetry](https://img.shields.io/badge/poetry-1.5+-blue.svg)](https://python-poetry.org/)
 
-# **Professional modulares Framework für Cross-Compilation von Large Language Models auf Edge-Hardware**
+**Professionelles modulares Framework für Cross-Compilation von Large Language Models auf Edge-Hardware**
 
 Eliminiert die Komplexität der Cross-Kompilierung und Quantisierung von LLMs für fragmentierte Edge-Hardware (CPUs, GPUs, NPUs). Community-driven, Docker-basiert, production-ready.
 
-# 🚀 LLM Cross-Compiler Framework
+---
 
 **🛠️ Schluss mit Dependency-Hölle: Ein universelles Cross-Compiling Framework für ALLE KI-Hardware.**
 
-Text: Wir haben ein Problem gelöst, das jeder kennt, aber niemand angeht: Die saubere Kompilierung von LLMs und NPU-Tools für unterschiedliche Hardware-Architekturen.
+Wir haben ein Problem gelöst, das jeder kennt, aber niemand angeht: Die saubere Kompilierung von LLMs und NPU-Tools für unterschiedliche Hardware-Architekturen.
 
-Ich stelle vor: Das LLM Cross-Compiler Framework. Es ist keine einfache "Installations-Anleitung", sondern eine Docker-basierte Fertigungsstraße, die Source-Code (HuggingFace, llama.cpp, Vosk) vollautomatisch in optimierte Binaries für dein Zielsystem verwandelt.
+Ich stelle vor: Das **LLM Cross-Compiler Framework**. Es ist keine einfache "Installations-Anleitung", sondern eine Docker-basierte Fertigungsstraße, die Source-Code (HuggingFace, llama.cpp, Vosk) vollautomatisch in optimierte Binaries für dein Zielsystem verwandelt.
 
-# 🚀 Was es kann (MVP):
+### 🚀 Was es kann (MVP):
 
-Vollständige Cross-Compilation für Rockchip RK3566/RK3588 (inkl. NPU-Support via RKNN).
+* Vollständige Cross-Compilation für **Rockchip RK3566/RK3588** (inkl. NPU-Support via RKNN).
+* Windows-Installer & GUI für einfache Bedienung.
+* Zentrale "Single-Source-of-Truth" Architektur für Repositories.
 
-Windows-Installer & GUI für einfache Bedienung.
+### 🌍 Wo das Potential liegt (Und wo ich DICH brauche):
+Die Architektur ist hardware-agnostisch. Das Framework ist so gebaut, dass es alles kompilieren kann – von kleinen Edge-NPUs bis zu massiven Server-Farmen. Ich besitze nur Rockchip-Hardware, aber das Framework ist bereit für mehr:
 
-Zentrale "Single-Source-of-Truth" Architektur für Repositories.
+* NVIDIA Jetson / Desktop GPUs?
+* Intel NPUs / ARCs?
+* RISC-V Boards?
+* AMD ROCm?
 
-🌍 Wo das Potential liegt (Und wo ich DICH brauche): 
-   Die Architektur ist hardware-agnostisch. 
-   Das Framework ist so gebaut, dass es alles kompilieren kann – von kleinen Edge-NPUs bis zu massiven Server-Farmen. 
-   Ich besitze nur Rockchip-Hardware, aber das Framework ist bereit für mehr:
-
-NVIDIA Jetson / Desktop GPUs?
-Intel NPUs / ARCs?
-RISC-V Boards?
-AMD ROCm?
-
-🤝 Der Aufruf: Das Gerüst steht. Die Logik ist solide. Jetzt braucht es die Community, um die Module für eure Hardware zu schreiben. Das System ist modular: Ein neues Target ist nur ein Ordner und ein Dockerfile entfernt.
+### 🤝 Der Aufruf:
+Das Gerüst steht. Die Logik ist solide. Jetzt braucht es die Community, um die Module für eure Hardware zu schreiben. Das System ist modular: Ein neues Target ist nur ein Ordner und ein Dockerfile entfernt.
 
 **Lasst uns den Goldstandard für KI-Deployment bauen. Zusammen.**
 
-👉 Fork it, build it, push it: [Link zum Repo]:(https://github.com/Smilez1985/llm_conversion_framework)
+👉 **Fork it, build it, push it:** [GitHub Repository](https://github.com/Smilez1985/llm_conversion_framework)
 
 > **⚠️ HINWEIS:** Dieses Projekt ist ein experimenteller Proof-of-Concept (Stand 20.11.2025) und wurde KI-gestützt entwickelt. Tests stehen noch aus.
+
+---
 
 ## 🎯 Features
 
@@ -61,7 +62,7 @@ AMD ROCm?
 ### Prerequisites
 
 - **Docker** 20.10+ mit docker-compose
-- **Python** 3.10+ 
+- **Python** 3.10+
 - **Poetry** 1.5+ für Dependency Management
 - **Git** für Repository-Verwaltung
 
@@ -70,7 +71,7 @@ AMD ROCm?
 ```bash
 # 1. Repository klonen
 git clone https://github.com/Smilez1985/llm_conversion_framework.git
-cd llm-cross-compiler-framework
+cd llm_conversion_framework
 
 # 2. Dependencies installieren
 poetry install
@@ -84,34 +85,36 @@ poetry run llm-builder
 
 ### Erste Schritte
 
-1. **Hardware-Profil erstellen** auf Ihrem Zielsystem:
-   ```bash
-   # Auf Ihrem RK3566/Zielsystem ausführen
-   curl -O https://raw.githubusercontent.com/Smilez1985/llm_conversion_framework/main/scripts/hardware_probe.sh
-   chmod +x hardware_probe.sh
-   ./hardware_probe.sh
-   # Erzeugt: target_hardware_config.txt
-   ```
+1. **Hardware-Profil erstellen**  auf Ihrem Zielsystem:
 
-2. **Modell konvertieren**:
-   ```bash
-   # Via GUI: File → Import Hardware Profile → target_hardware_config.txt hochladen
-   # Build Configuration → Modell wählen → Target wählen → Build starten
-   
-   # Oder via CLI:
-   poetry run llm-cli build \
-     --model models/granite-h-350m \
-     --target rockchip \
-     --quantization Q4_K_M \
-     --hardware-profile configs/my_rk3566.txt
-   ```
+```Bash
+# Auf Ihrem RK3566/Zielsystem ausführen
+curl -O https://raw.githubusercontent.com/Smilez1985/llm_conversion_framework/main/scripts/hardware_probe.sh
+chmod +x hardware_probe.sh
+./hardware_probe.sh
+# Erzeugt: target_hardware_config.txt
+```
 
-3. **Deployment**:
-   ```bash
-   # Output findet sich in output/packages/
-   cd output/packages/granite-h-350m_q4km_aarch64_latest/
-   ./deploy.sh /opt/ai_models/
-   ```
+2. **Modell konvertieren:**
+``` Bash
+# Via GUI: File → Import Hardware Profile → target_hardware_config.txt hochladen
+# Build Configuration → Modell wählen → Target wählen → Build starten
+
+# Oder via CLI:
+poetry run llm-cli build \
+  --model models/granite-h-350m \
+  --target rockchip \
+  --quantization Q4_K_M \
+  --hardware-profile configs/my_rk3566.txt
+```
+
+3. **Deployment:**
+
+```Bash
+# Output findet sich in output/packages/
+cd output/packages/granite-h-350m_q4km_aarch64_latest/
+./deploy.sh /opt/ai_models/
+```
 
 ## 🏗️ Architektur
 
@@ -120,13 +123,13 @@ poetry run llm-builder
 llm-cross-compiler-framework/
 ├── orchestrator/           # Framework Core (GUI + CLI)
 ├── targets/                # Hardware-spezifische Module
-│   ├── rockchip/          # ✅ Radxa/Rockchip (RK3566, RK3588)
-│   ├── nvidia-jetson/     # 🚧 NVIDIA Jetson Familie  
-│   ├── raspberry-pi/      # 🚧 Raspberry Pi Familie
-│   └── _template/         # Template für neue Targets
-├── community/             # Community-contributed Targets
-├── docs/                  # Dokumentation
-└── scripts/               # Setup & Deployment Tools
+│   ├── rockchip/           # ✅ Radxa/Rockchip (RK3566, RK3588)
+│   ├── nvidia-jetson/      # 🚧 NVIDIA Jetson Familie
+│   ├── raspberry-pi/       # 🚧 Raspberry Pi Familie
+│   └── _template/          # Template für neue Targets
+├── community/              # Community-contributed Targets
+├── docs/                   # Dokumentation
+└── scripts/                # Setup & Deployment Tools
 ```
 
 ### Unterstützte Hardware
@@ -139,7 +142,6 @@ llm-cross-compiler-framework/
 | **Intel NPU** | 📋 Planned | Meteor Lake | OpenVINO |
 | **Hailo** | 📋 Planned | Hailo-8, Hailo-10 | HailoRT |
 
-### Workflow: 4-Module-Architektur
 
 Jede Hardware-Familie implementiert 4 standardisierte Module:
 

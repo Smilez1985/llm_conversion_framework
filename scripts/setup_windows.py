@@ -106,7 +106,7 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
 
     # 1. Zielordner vorbereiten
     log_callback(f"Bereite Zielordner '{destination_path}' vor...", "info")
-    progress_callback(5)
+    progress_callback(5, "Starte Installation...")
     if destination_path.exists():
         shutil.rmtree(destination_path)
         log_callback("Bestehende Installation gelöscht.", "info")
@@ -114,7 +114,7 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
 
     # 2. Kopiere das Repo-Gerüst
     log_callback("Kopiere Framework-Dateien...", "info")
-    progress_callback(20)
+    progress_callback(20, "Kopiere Dateien...")
     shutil.copytree(repo_root, destination_path, ignore=IGNORE_PATTERNS, dirs_exist_ok=True)
 
     # 3. Launcher kopieren
@@ -124,7 +124,7 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
          raise Exception(f"KRITISCH: Launcher EXE nicht gefunden unter: {launcher_src}. Bitte zuerst kompilieren!")
     
     log_callback("Kopiere den signierten Launcher...", "info")
-    progress_callback(40)
+    progress_callback(40, "Kopiere Launcher...")
     shutil.copy2(launcher_src, launcher_dst)
 
     # 4. Basiskonfiguration und leere Ordner
@@ -133,7 +133,7 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
     for d in ["output", "cache", "logs"]: (destination_path / d).mkdir(exist_ok=True)
     
     log_callback("Basiskonfiguration abgeschlossen.", "success")
-    progress_callback(50)
+    progress_callback(50, "Basiskonfiguration abgeschlossen.")
 
     # 5. Desktop-Shortcut erstellen
     if desktop_shortcut:
@@ -149,12 +149,14 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
 # ============================================================================
 
 class InstallationWorker(threading.Thread):
+    # WICHTIG: Die Signatur des Workers wird nun an die korrigierte
+    # progress_callback-Signatur angepasst.
     def __init__(self, target_dir: Path, desktop_shortcut: bool, log_callback: Callable, progress_callback: Callable):
         super().__init__(daemon=True)
         self.target_dir = target_dir
         self.desktop_shortcut = desktop_shortcut
         self.log = log_callback
-        self.progress = progress_callback
+        self.progress_update = progress_callback # Umbenannt zur Klarheit
         self.success = False
         self.message = ""
 
@@ -173,32 +175,33 @@ class InstallationWorker(threading.Thread):
             max_retries = 5
             while retries < max_retries:
                 if self._check_internet_status():
-                    self.progress(70 + i * (20 // len(images)), f"Lade Docker Image: {img} (Versuch {retries + 1}/{max_retries})...")
+                    # KORRIGIERT: Nachricht wird nun an update_progress gesendet
+                    self.progress_update(70 + i * (20 // len(images)), f"Lade Docker Image: {img} (Versuch {retries + 1}/{max_retries})...")
                     try:
                         subprocess.run(["docker", "pull", img], check=True, creationflags=subprocess.CREATE_NO_WINDOW, capture_output=True)
                         self.log(f"Image '{img}' erfolgreich gepullt.", "success")
                         break 
                     except subprocess.CalledProcessError as e:
-                        self.log(f"Pull von '{img}' fehlgeschlagen: {e.stderr.strip()}", "orange")
+                        self.log(f"Pull von '{img}' fehlgeschlagen: {e.stderr.strip()}", "error") # Ändere orange zu error, da es eine Fehlermeldung ist
                         retries += 1
                         time.sleep(5)
                 else:
-                    self.log("Keine Internetverbindung. Warte 10 Sekunden...", "orange")
+                    self.log("Keine Internetverbindung. Warte 10 Sekunden...", "warning")
                     time.sleep(10) 
             
             if retries == max_retries:
-                 self.log(f"WARNUNG: Pull von '{img}' nach mehreren Versuchen fehlgeschlagen. Installation wird fortgesetzt.", "orange")
+                 self.log(f"WARNUNG: Pull von '{img}' nach mehreren Versuchen fehlgeschlagen. Installation wird fortgesetzt.", "warning")
 
     def run(self):
         try:
             # 1. Installation der Dateien
-            install_application(self.target_dir, self.desktop_shortcut, self.log, self.progress)
+            install_application(self.target_dir, self.desktop_shortcut, self.log, self.progress_update)
             
             # 2. Docker Pre-Pull
-            self.progress(70, "Starte Docker Pre-Pull...")
+            self.progress_update(70, "Starte Docker Pre-Pull...")
             self._pre_pull_docker()
             
-            self.progress(100, "Installation abgeschlossen.")
+            self.progress_update(100, "Installation abgeschlossen.")
             self.success = True
             self.message = "Installation erfolgreich abgeschlossen."
 
@@ -213,6 +216,20 @@ class InstallationWorker(threading.Thread):
 
 class InstallerWindow(tk.Tk):
     """Hauptfenster des Tkinter Installers."""
+    
+    # Mapping der semantischen Farben auf Tkinter/Hex-Farben
+    COLOR_MAPPING = {
+        "info": "blue",
+        "success": "green",
+        "error": "red",
+        "warning": "orange",
+        "blue": "blue",
+        "red": "red",
+        "green": "green",
+        "orange": "orange",
+        "normal": "#0f0" # Standard Log Farbe
+    }
+    
     def __init__(self):
         super().__init__()
         self.title(f"Install {INSTALL_APP_NAME}")
@@ -253,7 +270,7 @@ class InstallerWindow(tk.Tk):
         req_frame.grid(row=1, column=0, sticky='ew', pady=5)
         
         self.docker_status = self._create_status_label(req_frame, "Docker Desktop (WSL2):")
-        # KORREKTUR DER FEHLERHAFTEN ZEILE: 'req(req_frame)' entfernt
+        # KORRIGIERT: 'req(req_frame)' entfernt, behebt NameError
         self.git_status = self._create_status_label(req_frame, "Git for Windows:") 
         self.internet_status = self._create_status_label(req_frame, "Internet Connectivity:")
 
@@ -306,16 +323,21 @@ class InstallerWindow(tk.Tk):
         return status_label
 
     def update_log(self, message: str, color: str = None):
-        """Aktualisiert das Log-Fenster im Haupt-Thread (safe call)."""
+        """
+        Aktualisiert das Log-Fenster im Haupt-Thread (safe call).
+        KORRIGIERT: Verwendet COLOR_MAPPING, um TclError zu vermeiden.
+        """
         def do_update():
             self.log_text.config(state='normal')
-            tag_name = ""
-            if color:
-                tag_name = f"color_{color}"
-                if tag_name not in self.log_text.tag_names():
-                    self.log_text.tag_config(tag_name, foreground=color)
             
-            self.log_text.insert('end', f"[{time.strftime('%H:%M:%S')}] {message}\n", tag_name if color else "")
+            # Map semantische Farbe zu Tkinter Farbe/Tag
+            tk_color = self.COLOR_MAPPING.get(color, self.COLOR_MAPPING["normal"])
+            tag_name = f"color_{tk_color}"
+            
+            if tag_name not in self.log_text.tag_names():
+                self.log_text.tag_config(tag_name, foreground=tk_color)
+            
+            self.log_text.insert('end', f"[{time.strftime('%H:%M:%S')}] {message}\n", tag_name)
             self.log_text.see('end')
             self.log_text.config(state='disabled')
             self.update_idletasks()
@@ -364,7 +386,7 @@ class InstallerWindow(tk.Tk):
     def _run_initial_checks_threaded(self):
         """Führt alle System-Checks im Thread aus."""
         try:
-            self.update_log("Führe Systemvoraussetzungen-Checks durch...", "orange")
+            self.update_log("Führe Systemvoraussetzungen-Checks durch...", "warning")
 
             docker_ok = self._check_docker_status()
             self._set_status_label(self.docker_status, "OK" if docker_ok else "NOT FOUND", "green" if docker_ok else "red")
@@ -376,16 +398,16 @@ class InstallerWindow(tk.Tk):
             self._set_status_label(self.internet_status, "OK" if internet_ok else "FAILED", "green" if internet_ok else "red")
 
             if not docker_ok:
-                self.update_log("KRITISCH: Docker Desktop ist erforderlich und läuft nicht. Installation gesperrt.", "red")
+                self.update_log("KRITISCH: Docker Desktop ist erforderlich und läuft nicht. Installation gesperrt.", "error")
             
             if docker_ok: 
                 self.after(0, lambda: self.install_button.config(state='normal'))
-                self.update_log("Alle Kern-Voraussetzungen erfüllt. Bereit zur Installation.", "green")
+                self.update_log("Alle Kern-Voraussetzungen erfüllt. Bereit zur Installation.", "success")
             else:
                 self.after(0, lambda: self.install_button.config(state='disabled'))
 
         except Exception as e:
-            self.update_log(f"Error during system check: {e}", "red")
+            self.update_log(f"Error during system check: {e}", "error")
 
     def _start_installation(self):
         
@@ -401,23 +423,26 @@ class InstallerWindow(tk.Tk):
         
         # Setze den Wert auf die Variable
         self.progress_var.set(0) 
-        self.update_log("Installation gestartet...", "blue")
+        self.update_log("Installation gestartet...", "info")
 
         # Worker und Thread erstellen
         self.current_install_thread = InstallationWorker(target_dir, desktop_shortcut, self.update_log, self.update_progress)
         self.current_install_thread.start()
         self.after(500, self._check_installation_progress)
 
-    def update_progress(self, percent: int, message: str):
-        """Wird vom Worker-Thread aufgerufen, muss in den Haupt-Thread zurück."""
+    def update_progress(self, percent: int, message: str = ""):
+        """
+        Wird vom Worker-Thread aufgerufen (oder intern), um Fortschritt und Meldung zu aktualisieren.
+        KORRIGIERT: 'message' ist nun optional (default "") und wird korrekt im Thread aufgerufen.
+        """
         def do_update():
             # Setze den Wert auf die Variable
             self.progress_var.set(percent)
-            # Log-Nachricht nur aktualisieren, wenn sie nicht leer ist (oder 100%)
-            if message or percent == 100:
-                 self.update_log(message)
+            # Log-Nachricht nur aktualisieren, wenn sie nicht leer ist
+            if message:
+                 self.update_log(message, "info") # Progress-Meldungen sind INFO
         
-        self.after(0, do_update)
+        self.after(0, do_update) # Führe die UI-Änderung im Haupt-Thread aus
 
     def _check_installation_progress(self):
         if self.current_install_thread and self.current_install_thread.is_alive():
@@ -429,12 +454,12 @@ class InstallerWindow(tk.Tk):
                 
                 if success:
                     self.progress_var.set(100)
-                    self.update_log("✅ Installation erfolgreich abgeschlossen.", "green")
+                    self.update_log("✅ Installation erfolgreich abgeschlossen.", "success")
                     messagebox.showinfo("Installation Complete", message)
                     self.destroy()
                 else:
                     self.progress_var.set(0)
-                    self.update_log(f"❌ Installation fehlgeschlagen:\n{message}", "red")
+                    self.update_log(f"❌ Installation fehlgeschlagen:\n{message}", "error")
                     messagebox.showerror("Installation Failed", f"Ein Fehler ist aufgetreten:\n{message}")
                     self.install_button.config(state='normal')
                     self.cancel_button.config(state='normal')

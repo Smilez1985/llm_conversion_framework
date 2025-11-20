@@ -70,7 +70,6 @@ def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: 
     shortcut_path = os.path.join(desktop, f"{INSTALL_APP_NAME}.lnk")
     
     try:
-        # VBScript als Fallback
         target_exe_str = str(target_exe_path.absolute()).replace("\\", "\\\\")
         working_dir_str = str(working_directory.absolute()).replace("\\", "\\\\")
         icon_location_str = str(icon_path.absolute()).replace("\\", "\\\\") if icon_path and icon_path.exists() else ""
@@ -191,10 +190,10 @@ class InstallationWorker(threading.Thread):
 
     def run(self):
         try:
-            # Installation der Dateien
+            # 1. Installation der Dateien
             install_application(self.target_dir, self.desktop_shortcut, self.log, self.progress)
             
-            # Docker Pre-Pull
+            # 2. Docker Pre-Pull
             self.progress(70, "Starte Docker Pre-Pull...")
             self._pre_pull_docker()
             
@@ -224,8 +223,9 @@ class InstallerWindow(tk.Tk):
         
         self._init_ui()
         
-        # FIX: Startet die Checks im nächsten Zyklus, wenn das Objekt vollständig initialisiert ist
-        self.after(100, self._run_initial_checks_start) 
+        # FINALER FIX: after() muss mit einem Lambda gebunden werden, 
+        # um den Attribute Error in kompilierten Umgebungen zu vermeiden
+        self.after(100, lambda: self._run_initial_checks_start()) 
 
     def _init_ui(self):
         # --- Styling ---
@@ -242,7 +242,7 @@ class InstallerWindow(tk.Tk):
 
         # Konfiguriere Zeilen- und Spaltengewichte für Skalierung
         main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_rowconfigure(5, weight=1) # Log-Fenster soll sich ausdehnen
+        main_frame.grid_rowconfigure(4, weight=1) # Log-Fenster soll sich ausdehnen
 
         # --- Title ---
         ttk.Label(main_frame, text=f"Welcome to {INSTALL_APP_NAME} Setup", font=('Arial', 16, 'bold')).grid(row=0, column=0, pady=10, sticky='ew')
@@ -272,15 +272,14 @@ class InstallerWindow(tk.Tk):
         ttk.Button(path_frame, text="Browse...", command=self._browse_for_folder).pack(side='right')
         
         self.desktop_shortcut_checkbox = ttk.Checkbutton(loc_frame, text="Create Desktop Shortcut")
-        self.desktop_shortcut_checkbox.state(['!alternate', 'selected']) # Setzt Default auf True
+        self.desktop_shortcut_checkbox.state(['!alternate', 'selected']) 
         self.desktop_shortcut_checkbox.pack(anchor='w', pady=5)
-        self.desktop_shortcut_var = tk.BooleanVar(value=True) # Variable wird nicht direkt benötigt, da der Zustand über .instate() abgefragt wird
 
-        # --- Log & Progress (Row 3, 4, 5) ---
+        # --- Log & Progress (Row 3, 4) ---
         ttk.Label(main_frame, text="Installation Log:").grid(row=3, column=0, sticky='w', pady=(10, 0))
         
         self.log_text = ScrolledText(main_frame, wrap='word', height=8, state='disabled', font=('Courier New', 9), bg='#333', fg='#0f0')
-        self.log_text.grid(row=4, column=0, sticky='nsew', pady=(0, 5)) # Nimmt den Platz ein (expand=True)
+        self.log_text.grid(row=4, column=0, sticky='nsew', pady=(0, 5)) 
 
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100, mode='determinate')
@@ -288,7 +287,7 @@ class InstallerWindow(tk.Tk):
 
         # --- Buttons Frame (Row 6: WICHTIG: Fixiert die Buttons ganz unten) ---
         button_frame = ttk.Frame(main_frame, style='TFrame')
-        button_frame.grid(row=6, column=0, sticky='ew', pady=10) # Ganz unten
+        button_frame.grid(row=6, column=0, sticky='ew', pady=10) 
         
         self.install_button = ttk.Button(button_frame, text="Install", command=self._start_installation, state='disabled')
         self.install_button.pack(side='left', fill='x', expand=True, padx=(0, 5))
@@ -390,7 +389,6 @@ class InstallerWindow(tk.Tk):
 
     def _start_installation(self):
         target_dir = Path(self.install_path_entry.get()).resolve()
-        # Abfrage des Checkbox-Status über .instate()
         desktop_shortcut = self.desktop_shortcut_checkbox.instate(['selected'])
         
         if not target_dir.parent.exists():
@@ -437,8 +435,5 @@ class InstallerWindow(tk.Tk):
 
 
 if __name__ == '__main__':
-    # Initialisiere Win32-COM für Desktop-Shortcuts (VBScript wird verwendet)
-    # Entferne die nutzlose und verwirrende Warnung, da VBScript der Fallback ist.
-    
     app = InstallerWindow()
     app.mainloop()

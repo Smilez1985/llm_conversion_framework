@@ -253,7 +253,8 @@ class InstallerWindow(tk.Tk):
         req_frame.grid(row=1, column=0, sticky='ew', pady=5)
         
         self.docker_status = self._create_status_label(req_frame, "Docker Desktop (WSL2):")
-        self.git_status = self._create_status_label(req(req_frame), "Git for Windows:")
+        # KORREKTUR DER FEHLERHAFTEN ZEILE: 'req(req_frame)' entfernt
+        self.git_status = self._create_status_label(req_frame, "Git for Windows:") 
         self.internet_status = self._create_status_label(req_frame, "Internet Connectivity:")
 
         # --- Installation Location (Row 2) ---
@@ -387,8 +388,6 @@ class InstallerWindow(tk.Tk):
             self.update_log(f"Error during system check: {e}", "red")
 
     def _start_installation(self):
-        # Der Fehler liegt hier: Progressbar ist ein Widget, das set nicht direkt hat.
-        # Es muss die Variable gesetzt werden.
         
         target_dir = Path(self.install_path_entry.get()).resolve()
         desktop_shortcut = self.desktop_shortcut_checkbox.instate(['selected'])
@@ -400,7 +399,7 @@ class InstallerWindow(tk.Tk):
         self.install_button.config(state='disabled')
         self.cancel_button.config(state='disabled')
         
-        # FIX: Setze den Wert auf die Variable
+        # Setze den Wert auf die Variable
         self.progress_var.set(0) 
         self.update_log("Installation gestartet...", "blue")
 
@@ -412,9 +411,11 @@ class InstallerWindow(tk.Tk):
     def update_progress(self, percent: int, message: str):
         """Wird vom Worker-Thread aufgerufen, muss in den Haupt-Thread zurück."""
         def do_update():
-            # FIX: Setze den Wert auf die Variable
+            # Setze den Wert auf die Variable
             self.progress_var.set(percent)
-            self.update_log(message)
+            # Log-Nachricht nur aktualisieren, wenn sie nicht leer ist (oder 100%)
+            if message or percent == 100:
+                 self.update_log(message)
         
         self.after(0, do_update)
 

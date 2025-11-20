@@ -44,6 +44,19 @@ Das Gerüst steht. Die Logik ist solide. Jetzt braucht es die Community, um die 
 
 > **⚠️ HINWEIS:** Dieses Projekt ist ein experimenteller Proof-of-Concept (Stand 20.11.2025) und wurde KI-gestützt entwickelt. Tests stehen noch aus.
 
+> **⚠️ HINWEIS:**
+> ### Installation von Docker Desktop (Wichtig!)
+>
+> Das Framework nutzt Docker Desktop mit WSL2 für alle Build-Prozesse. Dies ist eine **zwingende Voraussetzung** und kann nicht vom Framework selbst installiert werden.
+>
+> 1.  **Aktivieren Sie WSL2** (Windows Subsystem for Linux 2) über die PowerShell.
+> 2.  Installieren Sie das [WSL2 Linux-Kernel-Update-Paket](https://wslstore.blob.core.windows.net/wslupdate/wsl_update_x64.msi).
+> 3.  Laden Sie [Docker Desktop für Windows](https://docs.docker.com/desktop/install/windows-install/) herunter und installieren Sie es.
+> 4.  Stellen Sie in den Docker-Einstellungen sicher, dass die **WSL2-Integration** aktiviert ist.
+>
+> Das Framework prüft automatisch, ob Docker läuft, bevor die Installation fortgesetzt wird.
+
+
 ---
 
 ## 🎯 Features

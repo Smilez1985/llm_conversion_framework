@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Windows Installer (Full Repo Install - Tkinter GUI)
-DIREKTIVE: Goldstandard, vollständig, Text-basiert (Tkinter), Netzwerk-Resilient.
+DIREKTIVE: Goldstandard, vollständig, GUI-basiert (Tkinter), Netzwerk-Resilient.
 
 Zweck:
 - Führt eine Tkinter-GUI für die Installation aus.
@@ -19,7 +19,8 @@ import socket
 import threading
 import tempfile
 from pathlib import Path
-from typing import Optional, List
+# >>> WICHTIGER FIX: Hinzufügen der fehlenden Typhinweise
+from typing import Optional, List, Callable
 import requests # Für Internet-Check
 
 # Tkinter Imports für die grafische Oberfläche
@@ -28,13 +29,14 @@ try:
     from tkinter import ttk, filedialog, messagebox
     from tkinter.scrolledtext import ScrolledText
 except ImportError:
-    print("FATAL ERROR: Tkinter is not available. Installation requires Tkinter.")
+    print("FATAL ERROR: Tkinter is not available. Please ensure it's installed or use a different installer method.")
     sys.exit(1)
 
 
 # --- KONFIGURATION & GLOBALS ---
 INSTALL_APP_NAME = "LLM-Builder"
 DEFAULT_INSTALL_DIR_SUFFIX = "LLM-Framework"
+REPO_ROOT: Path = Path('.') # Wird zur Laufzeit initialisiert.
 
 # Ordner, die NICHT zum User kopiert werden sollen
 IGNORE_PATTERNS = shutil.ignore_patterns(
@@ -47,7 +49,7 @@ IGNORE_PATTERNS = shutil.ignore_patterns(
 )
 
 # ============================================================================
-# UTILITY FUNKTIONEN
+# UTILITY FUNKTIONEN (Kernlogik)
 # ============================================================================
 
 def _find_repo_root_at_runtime() -> Optional[Path]:
@@ -70,6 +72,7 @@ def _find_repo_root_at_runtime() -> Optional[Path]:
         current_path = parent
     return None
 
+
 def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: Optional[Path] = None) -> bool:
     """Erstellt einen Desktop-Shortcut."""
     desktop = os.path.join(os.environ['USERPROFILE'], 'Desktop')
@@ -85,7 +88,7 @@ def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: 
         Set oWS = WScript.CreateObject("WScript.Shell")
         sLinkFile = "{shortcut_path}"
         Set oLink = oWS.CreateShortcut(sLinkFile)
-        oLink.TargetPath = "{target_exe_path}"
+        oLink.TargetPath = "{target_exe_str}"
         oLink.WorkingDirectory = "{working_dir_str}"
         oLink.IconLocation = "{icon_location_str}"
         oLink.Description = "Launch LLM Cross-Compiler Framework"
@@ -102,7 +105,7 @@ def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: 
         return False
 
 # ============================================================================
-# INSTALLER THREAD LOGIC
+# INSTALLATION WORKER (THREADED LOGIC)
 # ============================================================================
 
 class InstallationWorker(threading.Thread):
@@ -132,8 +135,9 @@ class InstallationWorker(threading.Thread):
                 if self._check_internet_status():
                     self.progress(70 + i * (20 // len(images)), f"Lade Docker Image: {img} (Versuch {retries + 1}/{max_retries})...")
                     try:
-                        subprocess.run(["docker", "pull", img], check=True, creationflags=subprocess.CREATE_NO_WINDOW, capture_output=True)
-                        self.log(f"Image '{img}' erfolgreich gepullt.")
+                        # subprocess.CREATE_NO_WINDOW = 0x08000000
+                        subprocess.run(["docker", "pull", img], check=True, creationflags=0x08000000, capture_output=True)
+                        self.log(f"Image '{img}' erfolgreich gepullt.", "green")
                         break 
                     except subprocess.CalledProcessError as e:
                         self.log(f"Pull von '{img}' fehlgeschlagen: {e.stderr.strip()}", "orange")
@@ -145,13 +149,13 @@ class InstallationWorker(threading.Thread):
             
             if retries == max_retries:
                  self.log(f"WARNUNG: Pull von '{img}' nach mehreren Versuchen fehlgeschlagen. Installation wird fortgesetzt.", "orange")
-
+    
     def run(self):
         try:
-            self.repo_root = _find_repo_root_at_runtime()
-            if not self.repo_root:
-                raise Exception("CRITICAL: Repository-Root nicht gefunden. Installation fehlgeschlagen.")
-
+            repo_root = _find_repo_root_at_runtime()
+            if not repo_root:
+                raise Exception("CRITICAL: Repository-Root nicht gefunden. Installation abgebrochen.")
+            
             # 1. Zielordner vorbereiten
             self.progress(5, f"Bereite Zielordner '{self.target_dir}' vor...")
             if self.target_dir.exists():
@@ -160,10 +164,10 @@ class InstallationWorker(threading.Thread):
 
             # 2. Kopiere das Repo-Gerüst
             self.progress(20, "Kopiere Framework-Dateien...")
-            shutil.copytree(self.repo_root, self.target_dir, ignore=IGNORE_PATTERNS, dirs_exist_ok=True)
+            shutil.copytree(repo_root, self.target_dir, ignore=IGNORE_PATTERNS, dirs_exist_ok=True)
 
             # 3. Launcher kopieren
-            launcher_src = self.repo_root / "dist" / f"{INSTALL_APP_NAME}.exe"
+            launcher_src = repo_root / "dist" / f"{INSTALL_APP_NAME}.exe"
             launcher_dst = self.target_dir / f"{INSTALL_APP_NAME}.exe"
             if not launcher_src.exists():
                  raise Exception(f"KRITISCH: Launcher EXE nicht gefunden unter: {launcher_src}. Bitte zuerst kompilieren!")
@@ -171,13 +175,10 @@ class InstallationWorker(threading.Thread):
             self.progress(40, "Kopiere den signierten Launcher...")
             shutil.copy2(launcher_src, launcher_dst)
 
-            # 4. Icon und leere Ordner erstellen
-            icon_src = self.repo_root / f"{INSTALL_APP_NAME}.ico"
-            if icon_src.exists():
-                shutil.copy2(icon_src, self.target_dir / f"{INSTALL_APP_NAME}.ico")
-            
-            for d in ["output", "cache", "logs"]:
-                (self.target_dir / d).mkdir(exist_ok=True)
+            # 4. Basiskonfiguration und leere Ordner
+            icon_src = repo_root / f"{INSTALL_APP_NAME}.ico"
+            if icon_src.exists(): shutil.copy2(icon_src, self.target_dir / f"{INSTALL_APP_NAME}.ico")
+            for d in ["output", "cache", "logs"]: (self.target_dir / d).mkdir(exist_ok=True)
             self.progress(50, "Basiskonfiguration abgeschlossen.")
 
             # 5. Desktop-Shortcut erstellen
@@ -189,6 +190,7 @@ class InstallationWorker(threading.Thread):
             self.progress(70, "Starte Docker Pre-Pull...")
             self._pre_pull_docker()
             
+            self.progress(100, "Installation erfolgreich abgeschlossen.")
             self.success = True
             self.message = "Installation erfolgreich abgeschlossen."
 
@@ -205,23 +207,24 @@ class InstallerWindow(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"Install {INSTALL_APP_NAME}")
-        # WICHTIGE LAYOUT-ANPASSUNG: Mindestgröße setzen, aber nicht fixieren
         self.geometry("600x550")
-        self.resizable(False, False)
+        self.resizable(False, False) # Fixiert die Größe
         
         self.current_install_thread: Optional[InstallationWorker] = None
-        self.after_id = None # Für Timer
         
         self._init_ui()
         self.after(100, self._initial_checks)
 
     def _init_ui(self):
-        # --- Styling (Basic) ---
+        # --- Styling ---
         self.style = ttk.Style(self)
         self.style.theme_use('clam')
         self.style.configure('TFrame', background='#e0e0e0')
-        
-        # --- Main Frame (Trägt alles) ---
+        self.style.configure('TLabel', background='#e0e0e0', font=('Arial', 10))
+        self.style.configure('TButton', font=('Arial', 10, 'bold'), padding=6, background='#007bff', foreground='white')
+        self.style.map('TButton', background=[('active', '#0056b3')], foreground=[('active', 'white')])
+
+        # --- Main Frame ---
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill='both', expand=True)
 
@@ -235,7 +238,7 @@ class InstallerWindow(tk.Tk):
         self.docker_status = self._create_status_label(req_frame, "Docker Desktop (WSL2):")
         self.git_status = self._create_status_label(req_frame, "Git for Windows:")
         self.internet_status = self._create_status_label(req_frame, "Internet Connectivity:")
-        
+
         # --- Installation Location ---
         loc_frame = ttk.LabelFrame(main_frame, text="Installation Location", padding=10)
         loc_frame.pack(fill='x', pady=5)
@@ -257,9 +260,8 @@ class InstallerWindow(tk.Tk):
 
         # --- Log & Progress ---
         ttk.Label(main_frame, text="Installation Log:").pack(anchor='w', pady=(10, 0))
-        # Log-Fenster mit ScrolledText für unendliche Größe und Fixierung
         self.log_text = ScrolledText(main_frame, wrap='word', height=8, state='disabled', font=('Courier New', 9), bg='#333', fg='#0f0')
-        self.log_text.pack(fill='x', pady=(0, 5)) # Füllt die Breite
+        self.log_text.pack(fill='x', pady=(0, 5)) 
 
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100, mode='determinate')
@@ -277,25 +279,36 @@ class InstallerWindow(tk.Tk):
 
 
     def _create_status_label(self, parent_frame: ttk.LabelFrame, text: str) -> ttk.Label:
-        """Erstellt ein Label für Statusanzeigen."""
         frame = ttk.Frame(parent_frame, style='TFrame')
         frame.pack(fill='x', pady=2)
         
         ttk.Label(frame, text=text, width=25, anchor='w', style='TLabel').pack(side='left')
-        status_label = ttk.Label(frame, text="Checking...", style='Status.TLabel') 
+        status_label = ttk.Label(frame, text="Checking...", style='Status.TLabel', foreground='orange') # TKinter-Farben
         status_label.pack(side='right', anchor='e')
         return status_label
 
     def update_log(self, message: str, color: str = None):
-        self.log_text.config(state='normal')
-        tag_name = ""
-        if color:
-            tag_name = f"color_{color}"
-            self.log_text.tag_config(tag_name, foreground=color)
-        
-        self.log_text.insert('end', f"[{time.strftime('%H:%M:%S')}] {message}\n", tag_name if color else "")
-        self.log_text.see('end')
-        self.log_text.config(state='disabled')
+        """Aktualisiert das Log-Fenster im Haupt-Thread."""
+        def do_update():
+            self.log_text.config(state='normal')
+            tag_name = ""
+            if color:
+                tag_name = f"color_{color}"
+                if tag_name not in self.log_text.tag_names():
+                    self.log_text.tag_config(tag_name, foreground=color)
+            
+            self.log_text.insert('end', f"[{time.strftime('%H:%M:%S')}] {message}\n", tag_name if color else "")
+            self.log_text.see('end')
+            self.log_text.config(state='disabled')
+            self.update_idletasks()
+
+        if threading.current_thread() != threading.main_thread():
+            self.after(0, do_update)
+        else:
+            do_update()
+
+    def _set_status_label(self, label: ttk.Label, text: str, color: str):
+        label.config(text=text, foreground=color)
         self.update_idletasks() 
 
     def _browse_for_folder(self):
@@ -306,80 +319,106 @@ class InstallerWindow(tk.Tk):
                 target_path = target_path / DEFAULT_INSTALL_DIR_SUFFIX
             self.install_path_var.set(str(target_path))
 
-    def _set_status_label(self, label: ttk.Label, text: str, color: str):
-        label.config(text=text, foreground=color)
-        self.update_idletasks() 
-
     def _check_docker_status(self) -> bool:
         try:
-            # Stummer Aufruf, da die Fehlermeldung nur im Log relevant ist
             result = subprocess.run(["docker", "info"], capture_output=True, text=True, check=False, creationflags=subprocess.CREATE_NO_WINDOW)
             return result.returncode == 0
-        except FileNotFoundError:
-            return False
-        except Exception:
-            return False
+        except: return False
 
     def _check_git_status(self) -> bool:
         try:
             result = subprocess.run(["git", "--version"], capture_output=True, text=True, check=True, creationflags=subprocess.CREATE_NO_WINDOW)
             return result.returncode == 0
-        except FileNotFoundError:
-            return False
-        except Exception:
-            return False
+        except: return False
 
     def _check_internet_status(self) -> bool:
         try:
             requests.head("http://www.google.com", timeout=3)
             return True
-        except requests.exceptions.RequestException:
-            return False
-        except Exception:
-            return False
+        except: return False
 
-    def _initial_checks(self):
-        self.update_log("Führe Systemvoraussetzungen-Checks durch...")
-        
-        # --- Docker Check ---
-        docker_ok = self._check_docker_status()
-        self._set_status_label(self.docker_status, "OK" if docker_ok else "NOT FOUND", "green" if docker_ok else "red")
-        
-        # --- Git Check ---
-        git_ok = self._check_git_status()
-        self._set_status_label(self.git_status, "OK" if git_ok else "NOT FOUND", "green" if git_ok else "red")
-        
-        # --- Internet Check ---
-        internet_ok = self._check_internet_status()
-        self._set_status_label(self.internet_status, "OK" if internet_ok else "FAILED", "green" if internet_ok else "red")
-        
-        # --- Kritische Prüfung und Log-Meldung ---
-        if not docker_ok:
-            self.update_log("\nKRITISCH: Docker Desktop ist nicht gefunden oder läuft nicht.", "red")
-            self.update_log("Bitte installieren Sie Docker Desktop (mit WSL2-Integration), bevor Sie das Framework nutzen.", "red")
-        
-        if not git_ok:
-            self.update_log("WARNUNG: Git ist nicht installiert. Auto-Updates werden nicht funktionieren.", "orange")
+    def check_requirements(self):
+        def background_check():
+            try:
+                # Da dies in einem Thread läuft, müssen wir auf den Haupt-Thread zurückschalten, um UI zu aktualisieren
+                def update_ui_status(label, text, color):
+                    self.after(0, lambda: self._set_status_label(label, text, color))
 
-        if docker_ok: 
-            self.install_button.config(state='normal')
-            self.update_log("Alle Kern-Voraussetzungen erfüllt. Bereit zur Installation.")
-        else:
-            self.install_button.config(state='disabled')
+                docker_ok = self._check_docker_status()
+                update_ui_status(self.docker_status, "OK" if docker_ok else "NOT FOUND", "green" if docker_ok else "red")
+                
+                git_ok = self._check_git_status()
+                update_ui_status(self.git_status, "OK" if git_ok else "NOT FOUND", "green" if git_ok else "red")
+                
+                internet_ok = self._check_internet_status()
+                update_ui_status(self.internet_status, "OK" if internet_ok else "FAILED", "green" if internet_ok else "red")
 
+                if not docker_ok:
+                    self.update_log("\nKRITISCH: Docker Desktop ist erforderlich und läuft nicht.", "red")
+                    self.update_log("Bitte installieren Sie Docker Desktop (mit WSL2-Integration) und starten Sie es, bevor Sie fortfahren.", "red")
+                
+                if docker_ok: 
+                    self.after(0, lambda: self.install_button.config(state='normal'))
+                    self.update_log("Alle Kern-Voraussetzungen erfüllt. Bereit zur Installation.")
+                else:
+                    self.after(0, lambda: self.install_button.config(state='disabled'))
+
+            except Exception as e:
+                self.update_log(f"Error during system check: {e}", "red")
+
+        threading.Thread(target=background_check, daemon=True).start()
+
+    def start_installation(self):
+        target_dir = Path(self.install_path_entry.get()).resolve()
+        desktop_shortcut = self.desktop_shortcut_var.get()
+        
+        if not target_dir.parent.exists():
+            messagebox.showerror("Invalid Path", f"The parent directory for {target_dir} does not exist.")
+            return
+
+        self.install_button.config(state='disabled')
+        self.cancel_button.config(state='disabled')
+        self.progress_var.set(0)
+        self.update_log("Installation gestartet...")
+
+        # Worker und Thread erstellen
+        self.current_install_thread = InstallationWorker(target_dir, desktop_shortcut, self.update_log, self.update_progress)
+        self.current_install_thread.start()
+        self.after(500, self._check_installation_progress)
+
+    def update_progress(self, percent: int, message: str):
+        """Wird vom Worker-Thread aufgerufen, muss in den Haupt-Thread zurück."""
+        def do_update():
+            self.progress_var.set(percent)
+            self.update_log(message)
+        
+        self.after(0, do_update) # Führt die Funktion im Haupt-Thread aus
 
     def _check_installation_progress(self):
         if self.current_install_thread and self.current_install_thread.is_alive():
             self.after(500, self._check_installation_progress)
         else:
-            # Ergebnisse werden im Thread verarbeitet und der Log-Call ist final
-            pass
+            if self.current_install_thread:
+                success = self.current_install_thread.success
+                message = self.current_install_thread.message
+                
+                if success:
+                    self.progress_var.set(100)
+                    self.update_log("✅ Installation erfolgreich abgeschlossen.", "green")
+                    messagebox.showinfo("Installation Complete", message)
+                    self.destroy() 
+                else:
+                    self.progress_var.set(0)
+                    self.update_log(f"❌ Installation fehlgeschlagen:\n{message}", "red")
+                    messagebox.showerror("Installation Failed", f"Ein Fehler ist aufgetreten:\n{message}")
+                    self.install_button.config(state='normal')
+                    self.cancel_button.config(state='normal')
 
 
 if __name__ == '__main__':
-    # Initialisiere Win32-COM für Desktop-Shortcuts (VBScript wird verwendet)
+    # Initialisiere Win32-COM (VBScript wird verwendet)
     try:
-        import win32com.client # Test, ob pywin32 vorhanden ist (für die Shortcut-Erstellung)
+        import win32com.client 
     except ImportError:
         print("WARNUNG: 'pywin32' ist nicht installiert. Desktop-Shortcuts werden über VBScript erstellt.")
 

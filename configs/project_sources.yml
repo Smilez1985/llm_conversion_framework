@@ -1,15 +1,28 @@
 # Zentrale Quellen für das LLM Cross-Compiler Framework
+# Verified: 2025-11-20
+
 core:
+  # Core Inference Engine for CPU
   llama_cpp: https://github.com/ggerganov/llama.cpp.git
+  # Python Transformers for conversion scripts
   transformers: https://github.com/huggingface/transformers
-  
+
 rockchip_npu:
+  # LLM specific NPU inference
   rknn_llm: https://github.com/airockchip/rknn-llm
+  # General NPU Toolkit (needed for Piper/Vosk/ONNX)
   rknn_toolkit2: https://github.com/airockchip/rknn-toolkit2
+  # Model Zoo (contains useful examples and libs)
+  rknn_model_zoo: https://github.com/airockchip/rknn_model_zoo
 
 voice_tts:
+  # Fast Neural TTS
   piper_tts: https://github.com/rhasspy/piper
+  # GLaDOS Personality Core
   glados_tts: https://github.com/dnhkng/GLaDOS
+  # Vosk API (Speech to Text) - Added for completeness of voice pipeline
+  vosk_api: https://github.com/alphacep/vosk-api
 
 models:
+  # IBM Granite 4.0 350M (Hybrid/Dense) - Perfect for RK3566
   granite_350m: https://huggingface.co/ibm-granite/granite-4.0-h-350m

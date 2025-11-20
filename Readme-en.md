@@ -32,13 +32,24 @@ Eliminates the complexity of cross-compiling and quantizing LLMs for fragmented 
 - **Poetry** 1.5+ for dependency management
 - **Git** for repository management
 
+> **⚠️ ATTENTION:**
+> ### Installing Docker Desktop (Critical Requirement)
+>
+> The framework utilizes Docker Desktop with WSL2 for all cross-compilation processes. This is a **mandatory prerequisite** and must be installed before running the framework.
+>
+> 1.  **Enable WSL2** (Windows Subsystem for Linux 2) via PowerShell.
+> 2.  Install the [WSL2 Linux Kernel Update Package](https://wslstore.blob.core.windows.net/wslupdate/wsl_update_x64.msi).
+> 3.  Download and install [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/).
+> 4.  Ensure that **WSL2 Integration** is enabled in your Docker Desktop settings.
+> 
+> The framework will automatically check if Docker is running before allowing the installation to proceed.
 
 
 ### Installation
 
 ```bash
 # 1. Clone repository
-git clone [https://github.com/Smilez1985/llm_conversion_framework.git]
+git clone https://github.com/Smilez1985/llm_conversion_framework.git
 cd llm_conversion_framework
 ```
 ```
@@ -59,7 +70,7 @@ poetry run llm-builder
 
 ```bash
 # Run this on your RK3566/Target System
-curl -O [https://github.com/Smilez1985/llm_conversion_framework/raw/main/scripts/hardware_probe.sh]
+curl -O https://github.com/Smilez1985/llm_conversion_framework/raw/main/scripts/hardware_probe.sh
 chmod +x hardware_probe.sh
 ./hardware_probe.sh
 # Generates: target_hardware_config.txt

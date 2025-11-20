@@ -221,11 +221,12 @@ class InstallerWindow(tk.Tk):
         self.resizable(True, True) # Skalierung aktivieren!
         
         self.current_install_thread: Optional[InstallationWorker] = None
+        self.progress_var = tk.DoubleVar(value=0) # Muss im __init__ des Tk-Root liegen
         
         self._init_ui()
         
         # FINALER FIX: Ruft die Methode des Objekts korrekt auf
-        self.after(100, lambda: self._run_initial_checks_start()) 
+        self.after(100, self._run_initial_checks_start) 
 
     def _init_ui(self):
         # --- Styling ---
@@ -252,7 +253,7 @@ class InstallerWindow(tk.Tk):
         req_frame.grid(row=1, column=0, sticky='ew', pady=5)
         
         self.docker_status = self._create_status_label(req_frame, "Docker Desktop (WSL2):")
-        self.git_status = self._create_status_label(req_frame, "Git for Windows:")
+        self.git_status = self._create_status_label(req(req_frame), "Git for Windows:")
         self.internet_status = self._create_status_label(req_frame, "Internet Connectivity:")
 
         # --- Installation Location (Row 2) ---
@@ -265,14 +266,13 @@ class InstallerWindow(tk.Tk):
         path_frame.pack(fill='x', pady=5)
         
         default_install_path = Path(os.getenv('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / "Programs" / DEFAULT_INSTALL_DIR_SUFFIX
-        self.install_path_var = tk.StringVar(value=str(default_install_path))
-        self.install_path_entry = ttk.Entry(path_frame, textvariable=self.install_path_var, width=50)
+        self.install_path_entry = ttk.Entry(path_frame, textvariable=tk.StringVar(value=str(default_install_path)), width=50)
         self.install_path_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
         
         ttk.Button(path_frame, text="Browse...", command=self._browse_for_folder).pack(side='right')
         
         self.desktop_shortcut_checkbox = ttk.Checkbutton(loc_frame, text="Create Desktop Shortcut")
-        self.desktop_shortcut_checkbox.state(['!alternate', 'selected']) 
+        self.desktop_shortcut_checkbox.state(['!alternate', 'selected']) # Setzt Default auf True
         self.desktop_shortcut_checkbox.pack(anchor='w', pady=5)
 
         # --- Log & Progress (Row 3, 4) ---
@@ -281,7 +281,6 @@ class InstallerWindow(tk.Tk):
         self.log_text = ScrolledText(main_frame, wrap='word', height=8, state='disabled', font=('Courier New', 9), bg='#333', fg='#0f0')
         self.log_text.grid(row=4, column=0, sticky='nsew', pady=(0, 5)) 
 
-        self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100, mode='determinate')
         self.progress_bar.grid(row=5, column=0, sticky='ew', pady=5)
 
@@ -388,7 +387,9 @@ class InstallerWindow(tk.Tk):
             self.update_log(f"Error during system check: {e}", "red")
 
     def _start_installation(self):
-        # 1. Pfad-Vorschlag prüfen und korrigieren, falls nötig
+        # Der Fehler liegt hier: Progressbar ist ein Widget, das set nicht direkt hat.
+        # Es muss die Variable gesetzt werden.
+        
         target_dir = Path(self.install_path_entry.get()).resolve()
         desktop_shortcut = self.desktop_shortcut_checkbox.instate(['selected'])
         
@@ -398,7 +399,9 @@ class InstallerWindow(tk.Tk):
 
         self.install_button.config(state='disabled')
         self.cancel_button.config(state='disabled')
-        self.progress_bar.set(0)
+        
+        # FIX: Setze den Wert auf die Variable
+        self.progress_var.set(0) 
         self.update_log("Installation gestartet...", "blue")
 
         # Worker und Thread erstellen
@@ -409,7 +412,8 @@ class InstallerWindow(tk.Tk):
     def update_progress(self, percent: int, message: str):
         """Wird vom Worker-Thread aufgerufen, muss in den Haupt-Thread zurück."""
         def do_update():
-            self.progress_bar.set(percent)
+            # FIX: Setze den Wert auf die Variable
+            self.progress_var.set(percent)
             self.update_log(message)
         
         self.after(0, do_update)
@@ -423,12 +427,12 @@ class InstallerWindow(tk.Tk):
                 message = self.current_install_thread.message
                 
                 if success:
-                    self.progress_bar.set(100)
+                    self.progress_var.set(100)
                     self.update_log("✅ Installation erfolgreich abgeschlossen.", "green")
                     messagebox.showinfo("Installation Complete", message)
                     self.destroy()
                 else:
-                    self.progress_bar.set(0)
+                    self.progress_var.set(0)
                     self.update_log(f"❌ Installation fehlgeschlagen:\n{message}", "red")
                     messagebox.showerror("Installation Failed", f"Ein Fehler ist aufgetreten:\n{message}")
                     self.install_button.config(state='normal')

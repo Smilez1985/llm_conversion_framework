@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Windows Installer (Full Repo Install - Tkinter GUI)
-DIREKTIVE: Goldstandard, vollständig, GUI-basiert (Tkinter), Netzwerk-Resilient, Skalierbar.
+DIREKTIVE: Goldstandard, vollständig, GUI-basiert (Tkinter), Netzwerk-Resilient.
 """
 
 import os
@@ -14,7 +14,7 @@ import threading
 import tempfile
 from pathlib import Path
 from typing import Optional, List, Callable
-import requests # Für Internet-Check
+import requests 
 
 # Tkinter Imports für die grafische Oberfläche
 try:
@@ -70,6 +70,7 @@ def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: 
     shortcut_path = os.path.join(desktop, f"{INSTALL_APP_NAME}.lnk")
     
     try:
+        # VBScript als Fallback
         target_exe_str = str(target_exe_path.absolute()).replace("\\", "\\\\")
         working_dir_str = str(working_directory.absolute()).replace("\\", "\\\\")
         icon_location_str = str(icon_path.absolute()).replace("\\", "\\\\") if icon_path and icon_path.exists() else ""
@@ -78,7 +79,7 @@ def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: 
         Set oWS = WScript.CreateObject("WScript.Shell")
         sLinkFile = "{shortcut_path}"
         Set oLink = oWS.CreateShortcut(sLinkFile)
-        oLink.TargetPath = "{target_exe_path}"
+        oLink.TargetPath = "{target_exe_str}"
         oLink.WorkingDirectory = "{working_dir_str}"
         oLink.IconLocation = "{icon_location_str}"
         oLink.Description = "Launch LLM Cross-Compiler Framework"
@@ -190,10 +191,10 @@ class InstallationWorker(threading.Thread):
 
     def run(self):
         try:
-            # 1. Installation der Dateien
+            # Installation der Dateien
             install_application(self.target_dir, self.desktop_shortcut, self.log, self.progress)
             
-            # 2. Docker Pre-Pull
+            # Docker Pre-Pull
             self.progress(70, "Starte Docker Pre-Pull...")
             self._pre_pull_docker()
             
@@ -215,8 +216,7 @@ class InstallerWindow(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"Install {INSTALL_APP_NAME}")
-        # MINDESTGRÖSSE setzen und Skalierung aktivieren
-        self.geometry("600x550") 
+        self.geometry("600x550")
         self.minsize(500, 450) # Mindestgröße festlegen
         self.resizable(True, True) # Skalierung aktivieren!
         
@@ -224,8 +224,8 @@ class InstallerWindow(tk.Tk):
         
         self._init_ui()
         
-        # FIX: Startet die Checks im nächsten Zyklus, wenn das Objekt vollständig initialisiert ist
-        self.after(100, self._initial_checks_start) 
+        # WICHTIGER FIX: Ruft die Methode des Objekts korrekt auf
+        self.after(100, self._run_initial_checks_start) 
 
     def _init_ui(self):
         # --- Styling ---
@@ -265,8 +265,8 @@ class InstallerWindow(tk.Tk):
         path_frame.pack(fill='x', pady=5)
         
         default_install_path = Path(os.getenv('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / "Programs" / DEFAULT_INSTALL_DIR_SUFFIX
-        self.install_path_entry = ttk.Entry(path_frame, width=50)
-        self.install_path_entry.insert(0, str(default_install_path))
+        self.install_path_var = tk.StringVar(value=str(default_install_path))
+        self.install_path_entry = ttk.Entry(path_frame, textvariable=self.install_path_var, width=50)
         self.install_path_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
         
         ttk.Button(path_frame, text="Browse...", command=self._browse_for_folder).pack(side='right')
@@ -333,7 +333,7 @@ class InstallerWindow(tk.Tk):
         if folder_selected:
             target_path = Path(folder_selected)
             if not target_path.name.lower().endswith(DEFAULT_INSTALL_DIR_SUFFIX.lower()):
-                target_path = target_path / DEFAULT_INSTALLER_DIR_SUFFIX
+                target_path = target_path / DEFAULT_INSTALL_DIR_SUFFIX
             self.install_path_entry.delete(0, 'end')
             self.install_path_entry.insert(0, str(target_path))
 
@@ -366,12 +366,15 @@ class InstallerWindow(tk.Tk):
         try:
             self.update_log("Führe Systemvoraussetzungen-Checks durch...", "orange")
 
+            # --- Docker Check ---
             docker_ok = self._check_docker_status()
             self._set_status_label(self.docker_status, "OK" if docker_ok else "NOT FOUND", "green" if docker_ok else "red")
             
+            # --- Git Check ---
             git_ok = self._check_git_status()
             self._set_status_label(self.git_status, "OK" if git_ok else "NOT FOUND", "green" if git_ok else "red")
             
+            # --- Internet Check ---
             internet_ok = self._check_internet_status()
             self._set_status_label(self.internet_status, "OK" if internet_ok else "FAILED", "green" if internet_ok else "red")
 
@@ -435,5 +438,11 @@ class InstallerWindow(tk.Tk):
 
 
 if __name__ == '__main__':
+    # Initialisiere Win32-COM für Desktop-Shortcuts (VBScript wird verwendet)
+    try:
+        import win32com.client # Test, ob pywin32 vorhanden ist
+    except ImportError:
+        print("WARNUNG: 'pywin32' ist nicht installiert. Desktop-Shortcuts werden über VBScript erstellt.")
+
     app = InstallerWindow()
     app.mainloop()

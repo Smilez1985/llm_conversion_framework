@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Windows Installer (Full Repo Install - Tkinter GUI)
-DIREKTIVE: Goldstandard, vollständig, GUI-basiert (Tkinter), Netzwerk-Resilient.
-
-Zweck:
-- Führt eine Tkinter-GUI für die Installation aus.
-- Prüft Systemvoraussetzungen (Docker, Git, Internet).
-- Kopiert das GESAMTE Repository-Gerüst (für das Auto-Update).
-- Lädt Docker-Images vor.
+DIREKTIVE: Goldstandard, vollständig, GUI-basiert (Tkinter), Netzwerk-Resilient, Skalierbar.
 """
 
 import os
@@ -76,7 +70,6 @@ def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: 
     shortcut_path = os.path.join(desktop, f"{INSTALL_APP_NAME}.lnk")
     
     try:
-        # VBScript als Fallback, da pywin32 nicht garantiert ist, aber nötig für Python-EXEs
         target_exe_str = str(target_exe_path.absolute()).replace("\\", "\\\\")
         working_dir_str = str(working_directory.absolute()).replace("\\", "\\\\")
         icon_location_str = str(icon_path.absolute()).replace("\\", "\\\\") if icon_path and icon_path.exists() else ""
@@ -85,7 +78,7 @@ def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: 
         Set oWS = WScript.CreateObject("WScript.Shell")
         sLinkFile = "{shortcut_path}"
         Set oLink = oWS.CreateShortcut(sLinkFile)
-        oLink.TargetPath = "{target_exe_str}"
+        oLink.TargetPath = "{target_exe_path}"
         oLink.WorkingDirectory = "{working_dir_str}"
         oLink.IconLocation = "{icon_location_str}"
         oLink.Description = "Launch LLM Cross-Compiler Framework"
@@ -197,10 +190,10 @@ class InstallationWorker(threading.Thread):
 
     def run(self):
         try:
-            # Installation der Dateien
+            # 1. Installation der Dateien
             install_application(self.target_dir, self.desktop_shortcut, self.log, self.progress)
             
-            # Docker Pre-Pull
+            # 2. Docker Pre-Pull
             self.progress(70, "Starte Docker Pre-Pull...")
             self._pre_pull_docker()
             
@@ -222,8 +215,10 @@ class InstallerWindow(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"Install {INSTALL_APP_NAME}")
-        self.geometry("600x550")
-        self.resizable(False, False) 
+        # MINDESTGRÖSSE setzen und Skalierung aktivieren
+        self.geometry("600x550") 
+        self.minsize(500, 450) # Mindestgröße festlegen
+        self.resizable(True, True) # Skalierung aktivieren!
         
         self.current_install_thread: Optional[InstallationWorker] = None
         
@@ -241,24 +236,28 @@ class InstallerWindow(tk.Tk):
         self.style.configure('TButton', font=('Arial', 10, 'bold'), padding=6, background='#007bff', foreground='white')
         self.style.map('TButton', background=[('active', '#0056b3')], foreground=[('active', 'white')])
 
-        # --- Main Frame ---
+        # --- Main Frame (Gitter-Manager für Skalierung) ---
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill='both', expand=True)
 
-        # --- Title ---
-        ttk.Label(main_frame, text=f"Welcome to {INSTALL_APP_NAME} Setup", font=('Arial', 16, 'bold')).pack(pady=10)
+        # Konfiguriere Zeilen- und Spaltengewichte für Skalierung
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_rowconfigure(5, weight=1) # Log-Fenster soll sich ausdehnen
 
-        # --- System Requirements ---
+        # --- Title ---
+        ttk.Label(main_frame, text=f"Welcome to {INSTALL_APP_NAME} Setup", font=('Arial', 16, 'bold')).grid(row=0, column=0, pady=10, sticky='ew')
+
+        # --- System Requirements (Row 1) ---
         req_frame = ttk.LabelFrame(main_frame, text="System Requirements Check", padding=10)
-        req_frame.pack(fill='x', pady=5)
+        req_frame.grid(row=1, column=0, sticky='ew', pady=5)
         
         self.docker_status = self._create_status_label(req_frame, "Docker Desktop (WSL2):")
         self.git_status = self._create_status_label(req_frame, "Git for Windows:")
         self.internet_status = self._create_status_label(req_frame, "Internet Connectivity:")
 
-        # --- Installation Location ---
+        # --- Installation Location (Row 2) ---
         loc_frame = ttk.LabelFrame(main_frame, text="Installation Location", padding=10)
-        loc_frame.pack(fill='x', pady=5)
+        loc_frame.grid(row=2, column=0, sticky='ew', pady=5)
         
         ttk.Label(loc_frame, text="Where do you want to install the Framework?").pack(anchor='w')
         
@@ -266,8 +265,8 @@ class InstallerWindow(tk.Tk):
         path_frame.pack(fill='x', pady=5)
         
         default_install_path = Path(os.getenv('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / "Programs" / DEFAULT_INSTALL_DIR_SUFFIX
-        self.install_path_var = tk.StringVar(value=str(default_install_path))
-        self.install_path_entry = ttk.Entry(path_frame, textvariable=self.install_path_var, width=50)
+        self.install_path_entry = ttk.Entry(path_frame, width=50)
+        self.install_path_entry.insert(0, str(default_install_path))
         self.install_path_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
         
         ttk.Button(path_frame, text="Browse...", command=self._browse_for_folder).pack(side='right')
@@ -275,18 +274,19 @@ class InstallerWindow(tk.Tk):
         self.desktop_shortcut_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(loc_frame, text="Create Desktop Shortcut", variable=self.desktop_shortcut_var).pack(anchor='w', pady=5)
 
-        # --- Log & Progress ---
-        ttk.Label(main_frame, text="Installation Log:").pack(anchor='w', pady=(10, 0))
+        # --- Log & Progress (Row 3, 4, 5) ---
+        ttk.Label(main_frame, text="Installation Log:").grid(row=3, column=0, sticky='w', pady=(10, 0))
+        
         self.log_text = ScrolledText(main_frame, wrap='word', height=8, state='disabled', font=('Courier New', 9), bg='#333', fg='#0f0')
-        self.log_text.pack(fill='x', pady=(0, 5)) 
+        self.log_text.grid(row=4, column=0, sticky='nsew', pady=(0, 5)) # Nimmt den Platz ein (expand=True)
 
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(main_frame, variable=self.progress_var, maximum=100, mode='determinate')
-        self.progress_bar.pack(fill='x', pady=5)
+        self.progress_bar.grid(row=5, column=0, sticky='ew', pady=5)
 
-        # --- Buttons Frame (WICHTIG: Fixiert die Buttons ganz unten) ---
+        # --- Buttons Frame (Row 6: WICHTIG: Fixiert die Buttons ganz unten) ---
         button_frame = ttk.Frame(main_frame, style='TFrame')
-        button_frame.pack(fill='x', pady=10) 
+        button_frame.grid(row=6, column=0, sticky='ew', pady=10) # Ganz unten
         
         self.install_button = ttk.Button(button_frame, text="Install", command=self._start_installation, state='disabled')
         self.install_button.pack(side='left', fill='x', expand=True, padx=(0, 5))
@@ -319,7 +319,6 @@ class InstallerWindow(tk.Tk):
             self.log_text.config(state='disabled')
             self.update_idletasks()
 
-        # Tkinter Call ist hier notwendig, um aus dem Thread sicher zu schreiben
         if threading.current_thread() != threading.main_thread():
             self.after(0, do_update)
         else:
@@ -359,6 +358,7 @@ class InstallerWindow(tk.Tk):
 
     def _initial_checks_start(self):
         """Startet den Thread für die Systemprüfung."""
+        # FIX: Der Thread muss die Methode des Objekts aufrufen
         threading.Thread(target=self._run_initial_checks_threaded, daemon=True).start()
 
     def _run_initial_checks_threaded(self):
@@ -366,15 +366,12 @@ class InstallerWindow(tk.Tk):
         try:
             self.update_log("Führe Systemvoraussetzungen-Checks durch...", "orange")
 
-            # --- Docker Check ---
             docker_ok = self._check_docker_status()
             self._set_status_label(self.docker_status, "OK" if docker_ok else "NOT FOUND", "green" if docker_ok else "red")
             
-            # --- Git Check ---
             git_ok = self._check_git_status()
             self._set_status_label(self.git_status, "OK" if git_ok else "NOT FOUND", "green" if git_ok else "red")
             
-            # --- Internet Check ---
             internet_ok = self._check_internet_status()
             self._set_status_label(self.internet_status, "OK" if internet_ok else "FAILED", "green" if internet_ok else "red")
 
@@ -438,10 +435,5 @@ class InstallerWindow(tk.Tk):
 
 
 if __name__ == '__main__':
-    # Fix für PyInstaller: Setze den Startpfad
-    global REPO_ROOT
-    if getattr(sys, 'frozen', False):
-        REPO_ROOT = Path(sys.executable).parent
-    
     app = InstallerWindow()
     app.mainloop()

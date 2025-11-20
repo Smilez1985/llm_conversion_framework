@@ -76,33 +76,46 @@ def _find_repo_root_at_runtime() -> Optional[Path]:
         current_path = parent
     return None
 
-def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: Optional[Path] = None):
+def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: Optional[Path] = None) -> bool:
     """Erstellt einen Desktop-Shortcut unter Windows."""
     desktop = os.path.join(os.environ['USERPROFILE'], 'Desktop')
     shortcut_path = os.path.join(desktop, f"{INSTALL_APP_NAME}.lnk")
     
     try:
-        target_exe_str = str(target_exe_path.absolute()).replace("\\", "\\\\")
-        working_dir_str = str(working_directory.absolute()).replace("\\", "\\\\")
-        icon_location_str = str(icon_path.absolute()).replace("\\", "\\\\") if icon_path and icon_path.exists() else ""
-        
-        vbs_script = f"""
-        Set oWS = WScript.CreateObject("WScript.Shell")
-        sLinkFile = "{shortcut_path}"
-        Set oLink = oWS.CreateShortcut(sLinkFile)
-        oLink.TargetPath = "{target_exe_str}"
-        oLink.WorkingDirectory = "{working_dir_str}"
-        oLink.IconLocation = "{icon_location_str}"
-        oLink.Description = "Launch LLM Cross-Compiler Framework"
-        oLink.Save
-        """
-        
-        vbs_file = Path(tempfile.gettempdir()) / "create_shortcut.vbs"
-        with open(vbs_file, "w") as f:
-            f.write(vbs_script)
-        subprocess.run(["cscript", "//Nologo", str(vbs_file)], check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-        vbs_file.unlink()
-        return True
+        # Hier ist die Logik für pywin32, falls installiert
+        try:
+            import win32com.client
+            shell = win32com.client.Dispatch("WScript.Shell")
+            shortcut = shell.CreateShortCut(shortcut_path)
+            shortcut.Targetpath = str(target_exe_path.absolute())
+            shortcut.WorkingDirectory = str(working_directory.absolute())
+            if icon_path and icon_path.exists():
+                shortcut.IconLocation = str(icon_path.absolute())
+            shortcut.Save()
+            return True
+        except ImportError:
+            # Fallback zu VBScript, wenn pywin32 nicht da ist
+            target_exe_str = str(target_exe_path.absolute()).replace("\\", "\\\\")
+            working_dir_str = str(working_directory.absolute()).replace("\\", "\\\\")
+            icon_location_str = str(icon_path.absolute()).replace("\\", "\\\\") if icon_path and icon_path.exists() else ""
+            
+            vbs_script = f"""
+            Set oWS = WScript.CreateObject("WScript.Shell")
+            sLinkFile = "{shortcut_path}"
+            Set oLink = oWS.CreateShortcut(sLinkFile)
+            oLink.TargetPath = "{target_exe_str}"
+            oLink.WorkingDirectory = "{working_dir_str}"
+            oLink.IconLocation = "{icon_location_str}"
+            oLink.Description = "Launch LLM Cross-Compiler Framework"
+            oLink.Save
+            """
+            
+            vbs_file = Path(tempfile.gettempdir()) / "create_shortcut.vbs"
+            with open(vbs_file, "w") as f:
+                f.write(vbs_script)
+            subprocess.run(["cscript", "//Nologo", str(vbs_file)], check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            vbs_file.unlink()
+            return True
     except Exception:
         return False
 
@@ -129,11 +142,18 @@ class InstallerGUI(tk.Tk):
         self.style.theme_use('clam')
         self.style.configure('TFrame', background='#e0e0e0')
         self.style.configure('TLabel', background='#e0e0e0', font=('Arial', 10))
-        self.style.configure('TButton', font=('Arial', 10, 'bold'), padding=6)
-        self.style.map('TButton', background=[('active', '#c0c0c0')])
+        self.style.configure('TButton', font=('Arial', 10, 'bold'), padding=6, background='#007bff', foreground='white') # Bessere Button-Farbe
+        self.style.map('TButton', background=[('active', '#0056b3')], foreground=[('active', 'white')])
         self.style.configure('TEntry', fieldbackground='#ffffff', font=('Arial', 10))
         self.style.configure('TCheckbutton', background='#e0e0e0', font=('Arial', 10))
         
+        # Spezifisches Styling für Statuslabels
+        self.style.configure('Status.TLabel', font=('Arial', 10, 'bold'))
+        self.style.map('Status.TLabel', 
+                       foreground=[('!disabled', 'green', 'ok'),
+                                   ('!disabled', 'red', 'nok'),
+                                   ('!disabled', 'orange', 'checking')])
+
         # --- Main Frame ---
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill='both', expand=True)
@@ -170,6 +190,7 @@ class InstallerGUI(tk.Tk):
 
         # --- Log & Progress ---
         ttk.Label(main_frame, text="Installation Log:").pack(anchor='w', pady=(10, 0))
+        # Log-Fenster mit dunklem Hintergrund und grünem Text
         self.log_text = ScrolledText(main_frame, wrap='word', height=8, state='disabled', font=('Courier New', 9), bg='#333', fg='#0f0')
         self.log_text.pack(fill='x', pady=(0, 5))
         
@@ -178,7 +199,7 @@ class InstallerGUI(tk.Tk):
         self.progress_bar.pack(fill='x', pady=5)
 
         # --- Buttons ---
-        button_frame = ttk.Frame(main_frame)
+        button_frame = ttk.Frame(main_frame, style='TFrame')
         button_frame.pack(fill='x', pady=10)
         
         self.install_button = ttk.Button(button_frame, text="Install", command=self._start_installation, state='disabled')
@@ -192,14 +213,19 @@ class InstallerGUI(tk.Tk):
         frame = ttk.Frame(parent_frame, style='TFrame')
         frame.pack(fill='x', pady=2)
         
-        ttk.Label(frame, text=text, width=25, anchor='w').pack(side='left')
-        status_label = ttk.Label(frame, text="Checking...", foreground='orange', font=('Arial', 10, 'bold'))
+        ttk.Label(frame, text=text, width=25, anchor='w', style='TLabel').pack(side='left')
+        status_label = ttk.Label(frame, text="Checking...", style='Status.TLabel') # Nutze Status.TLabel
         status_label.pack(side='right', anchor='e')
         return status_label
 
-    def update_log(self, message: str):
+    def update_log(self, message: str, color: str = None): # Farbe ist jetzt optional
         self.log_text.config(state='normal')
-        self.log_text.insert('end', f"[{time.strftime('%H:%M:%S')}] {message}\n")
+        tag_name = ""
+        if color:
+            tag_name = f"color_{color}"
+            self.log_text.tag_config(tag_name, foreground=color)
+        
+        self.log_text.insert('end', f"[{time.strftime('%H:%M:%S')}] {message}\n", tag_name if color else "")
         self.log_text.see('end')
         self.log_text.config(state='disabled')
         self.update_idletasks() # UI sofort aktualisieren
@@ -212,9 +238,11 @@ class InstallerGUI(tk.Tk):
                 target_path = target_path / DEFAULT_INSTALL_DIR_SUFFIX
             self.install_path_var.set(str(target_path))
 
-    def _set_status_label(self, label: ttk.Label, text: str, color: str):
-        label.config(text=text, foreground=color)
-        self.update_idletasks() # UI sofort aktualisieren
+    def _set_status_label(self, label: ttk.Label, text: str, status_type: str):
+        # Aktualisiert den Status und setzt den Style Tag
+        label.config(text=text)
+        label.state((status_type,)) # Setzt den Status 'ok', 'nok', 'checking'
+        self.update_idletasks()
 
     def _initial_checks(self):
         self.update_log("Führe Systemvoraussetzungen-Checks durch...")
@@ -225,26 +253,29 @@ class InstallerGUI(tk.Tk):
             messagebox.showerror("Installation Error", "Critical: Repository root not found. Cannot proceed.")
             return
 
+        # Docker Check
         docker_ok = self._check_docker_status()
-        self._set_status_label(self.docker_status, "OK" if docker_ok else "Not Found", "green" if docker_ok else "red")
-        
-        git_ok = self._check_git_status()
-        self._set_status_label(self.git_status, "OK" if git_ok else "Not Found", "green" if git_ok else "red")
-        
-        internet_ok = self._check_internet_status()
-        self._set_status_label(self.internet_status, "OK" if internet_ok else "Failed", "green" if internet_ok else "red")
-
-        if docker_ok:
-            self.install_button.config(state='normal')
-            self.update_log("Alle Kern-Voraussetzungen erfüllt. Bereit zur Installation.")
-        else:
+        self._set_status_label(self.docker_status, "OK" if docker_ok else "Not Found", "ok" if docker_ok else "nok")
+        if not docker_ok:
+            self.update_log("KRITISCH: Docker Desktop ist erforderlich und läuft nicht. Bitte installieren Sie Docker Desktop von https://www.docker.com/products/docker-desktop/ und starten Sie es, bevor Sie fortfahren.", "red")
+            messagebox.showerror("Docker Missing", "Docker Desktop ist nicht installiert oder läuft nicht. Dies ist eine kritische Voraussetzung.")
             self.install_button.config(state='disabled')
-            self.update_log("KRITISCH: Docker Desktop ist erforderlich und läuft nicht. Installation gesperrt.", "red")
-        
+            return # Installation blockieren, wenn Docker fehlt
+
+        # Git Check
+        git_ok = self._check_git_status()
+        self._set_status_label(self.git_status, "OK" if git_ok else "Not Found", "ok" if git_ok else "nok")
         if not git_ok:
-            self.update_log("WARNUNG: Git ist nicht installiert. Auto-Updates werden nicht funktionieren.", "orange")
+            self.update_log("WARNUNG: Git for Windows ist nicht installiert. Das Auto-Update-Feature des Frameworks wird nicht funktionieren. Installation fortgesetzt.", "orange")
+        
+        # Internet Check
+        internet_ok = self._check_internet_status()
+        self._set_status_label(self.internet_status, "OK" if internet_ok else "Failed", "ok" if internet_ok else "nok")
         if not internet_ok:
-            self.update_log("WARNUNG: Keine Internetverbindung. Docker-Images können nicht vorgepullt werden.", "orange")
+            self.update_log("WARNUNG: Keine Internetverbindung. Docker-Images können nicht vorgepullt und Auto-Updates nicht durchgeführt werden.", "orange")
+
+        self.install_button.config(state='normal')
+        self.update_log("Alle Kern-Voraussetzungen erfüllt. Bereit zur Installation.")
 
     def _check_docker_status(self) -> bool:
         try:
@@ -332,7 +363,7 @@ class InstallerGUI(tk.Tk):
 
             # 6. Docker Pre-Pull
             self.update_progress(70, "Starte Docker Pre-Pull (dies kann einen Moment dauern)...")
-            self._pre_pull_docker_images_threaded(destination_path)
+            self._pre_pull_docker_images_threaded()
 
             self.update_progress(100, "Installation erfolgreich abgeschlossen.")
             messagebox.showinfo("Installation Complete", "Das LLM-Framework wurde erfolgreich installiert!")
@@ -345,7 +376,7 @@ class InstallerGUI(tk.Tk):
             self.cancel_button.config(state='normal')
             self.progress_var.set(0)
 
-    def _pre_pull_docker_images_threaded(self, destination_path: Path):
+    def _pre_pull_docker_images_threaded(self):
         images = ["debian:bookworm-slim", "quay.io/vektorlab/ctop:latest"]
         
         for i, img in enumerate(images):
@@ -379,11 +410,12 @@ class InstallerGUI(tk.Tk):
             self.after(500, self._check_installation_progress) # Prüft alle 500ms
         else:
             self.update_log("Installationsthread beendet.")
-            # Die Ergebnisverarbeitung wird bereits im _run_installation_steps am Ende gemacht (durch messagebox)
 
 
 if __name__ == '__main__':
     # Initialisiere Win32-COM für Desktop-Shortcuts (für direkten Import in _create_shortcut)
+    # Dies geschieht HIER, um die Warnung nur einmalig in der Konsole zu zeigen, 
+    # aber der VBScript-Fallback ist immer noch primär in _create_shortcut
     try:
         import win32com.client # Erfordert 'pip install pywin32'
     except ImportError:

@@ -1,5 +1,5 @@
 # llm_conversion_framework 
-**[WARNUNG, das komplette Projekt wurde mit Hilfe von KI (Claude/Gemeni) erstellt und ist, stand 15.11.2025, noch ungetestet!]**
+
 Ein GUI-basiertes LLM Deployment Framework, das:  Beliebige LLMs automatisiert optimieren &amp; quantisieren kann Für jeden CPU, GPU oder NPU perfekt optimiert MVP: RK3566 Support
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -42,6 +42,8 @@ AMD ROCm?
 **Lasst uns den Goldstandard für KI-Deployment bauen. Zusammen.**
 
 👉 Fork it, build it, push it: [Link zum Repo]:(https://github.com/Smilez1985/llm_conversion_framework)
+
+> **⚠️ HINWEIS:** Dieses Projekt ist ein experimenteller Proof-of-Concept (Stand 20.11.2025) und wurde KI-gestützt entwickelt. Tests stehen noch aus.
 
 ## 🎯 Features
 

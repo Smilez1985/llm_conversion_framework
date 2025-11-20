@@ -2,7 +2,7 @@
 """
 LLM Cross-Compiler Framework - Main Orchestrator GUI
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
-THIN CLIENT VERSION: Führt Auto-Update im Basisverzeichnis aus.
+THIN CLIENT VERSION: Führt Auto-Update im Basisverzeichnis aus und sucht den Repo-Root.
 """
 
 import sys
@@ -38,56 +38,72 @@ from orchestrator.Core.module_generator import ModuleGenerator
 
 
 # ============================================================================
-# AUTO-UPDATE LOGIC (THIN CLIENT STARTUP)
+# ROBUSTE STARTUP-LOGIK (SUCHT REPO-ROOT)
 # ============================================================================
 
-def get_base_dir():
-    """Determine the absolute base directory of the application."""
+def find_repo_root():
+    """Sucht nach oben im Dateisystem nach dem Repository-Root-Ordner (Marken: targets/ oder .git)."""
+    
+    # 1. Startpunkt: Wo liegt die EXE?
     if getattr(sys, 'frozen', False):
-        # If run as compiled EXE, the base dir is where the EXE is located
-        return Path(sys.executable).parent
+        start_path = Path(sys.executable).parent
     else:
-        # If run as script, the base dir is the repo root
-        return Path(__file__).resolve().parent.parent
+        start_path = Path(__file__).resolve().parent.parent
 
-BASE_DIR = get_base_dir()
+    current_path = start_path
+
+    # 2. Suche in der aktuellen Verzeichnisstruktur nach oben (max. 10 Ebenen)
+    # bis wir die Ordner targets/ und configs/ finden
+    for _ in range(10): 
+        # Marker-Prüfung: Sind dies die notwendigen Framework-Ordner?
+        if (current_path / "targets").is_dir() and (current_path / "configs").is_dir():
+            return current_path
+        
+        # Sicherheits-Prüfung: Ist es ein Git-Repo?
+        if (current_path / ".git").is_dir():
+            return current_path
+            
+        parent = current_path.parent
+        if parent == current_path:
+            break # Dateisystem-Root erreicht
+        current_path = parent
+
+    # 3. Fallback: Wir geben den initialen Startpfad zurück (wird fehlschlagen)
+    return start_path
+
+
+BASE_DIR = find_repo_root()
 
 def run_auto_update():
-    """Attempts to run 'git pull' in the application's base directory."""
+    """Führt 'git pull' im gefundenen Basisverzeichnis aus."""
     git_dir = BASE_DIR / ".git"
     if not git_dir.exists():
-        print(f"[Auto-Update] No .git directory found in {BASE_DIR}. Skipping update.")
+        print(f"[Auto-Update] Kein .git-Verzeichnis gefunden in {BASE_DIR}. Überspringe Update.")
         return
 
-    print(f"[Auto-Update] Checking for updates in {BASE_DIR}...")
+    print(f"[Auto-Update] Prüfe auf Updates in {BASE_DIR}...")
     try:
-        # On Windows, call git directly. Ensure git is in PATH.
-        # Using shell=True to avoid console window popping up if possible, 
-        # though capture_output helps too.
         result = subprocess.run(
             ["git", "pull"],
             cwd=BASE_DIR,
             capture_output=True,
             text=True,
             check=True,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            creationflags=0x08000000 if sys.platform == 'win32' else 0
         )
         if "Already up to date." in result.stdout:
-            print("[Auto-Update] Application is up to date.")
+            print("[Auto-Update] Anwendung ist auf dem neuesten Stand.")
         else:
-            print("[Auto-Update] Successfully updated.")
-            print(result.stdout)
-            # In a production app, you might prompt for restart here if core DLLs changed.
-            # For this Python app, changes often apply next run anyway.
+            print("[Auto-Update] Update erfolgreich geladen.")
             
     except subprocess.CalledProcessError as e:
-        print(f"[Auto-Update] Failed:\n{e.stderr}")
+        print(f"[Auto-Update] Fehler:\n{e.stderr}")
     except FileNotFoundError:
-         print("[Auto-Update] 'git' command not found. Please install Git for auto-updates.")
+         print("[Auto-Update] 'git' wurde nicht gefunden. Bitte installieren Sie Git.")
     except Exception as e:
-        print(f"[Auto-Update] Unexpected error: {e}")
+        print(f"[Auto-Update] Unerwarteter Fehler: {e}")
 
-# Change working directory to base dir so relative paths act correctly
+# Wechselt das Arbeitsverzeichnis, damit ALLE relativen Pfade im Code korrekt sind
 os.chdir(BASE_DIR)
 
 
@@ -305,12 +321,9 @@ class ModuleCreationWizard(QWizard):
             "detection_commands": "lscpu"
         }
         
-        # NOTE: In thin client mode, BASE_DIR is the app root.
-        # The targets folder should be relative to BASE_DIR.
         targets_dir = BASE_DIR / "targets"
         
         try:
-            # Ensure targets directory exists if running from fresh install
             targets_dir.mkdir(exist_ok=True)
             
             generator = ModuleGenerator(targets_dir)
@@ -340,17 +353,16 @@ class MainOrchestrator(QMainWindow):
         config_path = BASE_DIR / "configs" / "framework_config.json"
         
         try:
-            self.config = FrameworkConfig(config_path=str(config_path) if config_path.exists() else None)
+            # Pfade im FrameworkManager relativ zum BASE_DIR setzen
+            config = FrameworkConfig()
+            config.targets_dir = str(BASE_DIR / config.targets_dir)
+            config.models_dir = str(BASE_DIR / config.models_dir)
+            config.output_dir = str(BASE_DIR / config.output_dir)
+            config.configs_dir = str(BASE_DIR / config.configs_dir)
+            config.cache_dir = str(BASE_DIR / config.cache_dir)
+            config.logs_dir = str(BASE_DIR / config.logs_dir)
             
-            # Adjust paths in config to be absolute based on BASE_DIR
-            self.config.targets_dir = str(BASE_DIR / self.config.targets_dir)
-            self.config.models_dir = str(BASE_DIR / self.config.models_dir)
-            self.config.output_dir = str(BASE_DIR / self.config.output_dir)
-            self.config.configs_dir = str(BASE_DIR / self.config.configs_dir)
-            self.config.cache_dir = str(BASE_DIR / self.config.cache_dir)
-            self.config.logs_dir = str(BASE_DIR / self.config.logs_dir)
-            
-            self.framework_manager = FrameworkManager(self.config)
+            self.framework_manager = FrameworkManager(config)
             self.framework_manager.initialize()
             
             self.docker_manager = DockerManager()
@@ -361,7 +373,7 @@ class MainOrchestrator(QMainWindow):
             self.docker_manager.build_completed.connect(self.on_build_completed)
             
         except Exception as e:
-            QMessageBox.critical(None, "Initialization Error", f"Failed to init framework: {e}\nBase Dir: {BASE_DIR}")
+            QMessageBox.critical(None, "Initialization Error", f"Failed to init framework: {e}\nRepo Root: {BASE_DIR}")
             sys.exit(1)
             
         self.init_ui()

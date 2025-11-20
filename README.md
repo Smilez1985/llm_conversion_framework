@@ -69,7 +69,7 @@ AMD ROCm?
 
 ```bash
 # 1. Repository klonen
-git clone https://github.com/Smilez1985/llm_conversion_framework/tree/main
+git clone https://github.com/Smilez1985/llm_conversion_framework.git
 cd llm-cross-compiler-framework
 
 # 2. Dependencies installieren
@@ -87,7 +87,7 @@ poetry run llm-builder
 1. **Hardware-Profil erstellen** auf Ihrem Zielsystem:
    ```bash
    # Auf Ihrem RK3566/Zielsystem ausführen
-   curl -O https://github.com/Smilez1985/llm_conversion_framework/tree/main/scripts/hardware_probe.sh
+   curl -O https://raw.githubusercontent.com/Smilez1985/llm_conversion_framework/main/scripts/hardware_probe.sh
    chmod +x hardware_probe.sh
    ./hardware_probe.sh
    # Erzeugt: target_hardware_config.txt

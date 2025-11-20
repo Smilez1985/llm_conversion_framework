@@ -13,7 +13,6 @@ import socket
 import threading
 import tempfile
 from pathlib import Path
-# WICHTIGER FIX: Korrekter Import für Typhinweise
 from typing import Optional, List, Callable
 import requests # Für Internet-Check
 
@@ -71,6 +70,7 @@ def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: 
     shortcut_path = os.path.join(desktop, f"{INSTALL_APP_NAME}.lnk")
     
     try:
+        # VBScript als Fallback
         target_exe_str = str(target_exe_path.absolute()).replace("\\", "\\\\")
         working_dir_str = str(working_directory.absolute()).replace("\\", "\\\\")
         icon_location_str = str(icon_path.absolute()).replace("\\", "\\\\") if icon_path and icon_path.exists() else ""
@@ -265,7 +265,8 @@ class InstallerWindow(tk.Tk):
         path_frame.pack(fill='x', pady=5)
         
         default_install_path = Path(os.getenv('LOCALAPPDATA', str(Path.home() / 'AppData' / 'Local'))) / "Programs" / DEFAULT_INSTALL_DIR_SUFFIX
-        self.install_path_entry = ttk.Entry(path_frame, textvariable=tk.StringVar(value=str(default_install_path)), width=50)
+        self.install_path_var = tk.StringVar(value=str(default_install_path))
+        self.install_path_entry = ttk.Entry(path_frame, textvariable=self.install_path_var, width=50)
         self.install_path_entry.pack(side='left', fill='x', expand=True, padx=(0, 5))
         
         ttk.Button(path_frame, text="Browse...", command=self._browse_for_folder).pack(side='right')
@@ -387,6 +388,7 @@ class InstallerWindow(tk.Tk):
             self.update_log(f"Error during system check: {e}", "red")
 
     def _start_installation(self):
+        # 1. Pfad-Vorschlag prüfen und korrigieren, falls nötig
         target_dir = Path(self.install_path_entry.get()).resolve()
         desktop_shortcut = self.desktop_shortcut_checkbox.instate(['selected'])
         

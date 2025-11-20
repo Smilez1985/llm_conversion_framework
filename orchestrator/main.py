@@ -21,10 +21,11 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QGroupBox, QFormLayout,
     QLineEdit, QComboBox, QCheckBox, QSpinBox, QFileDialog,
     QMessageBox, QSplitter, QListWidget, QTableWidget, QTableWidgetItem,
-    QDialog, QHeaderView, QWizard, QWizardPage, QRadioButton, QButtonGroup
+    QDialog, QHeaderView, QWizard, QWizardPage, QRadioButton, QButtonGroup,
+    QInputDialog
 )
 from PySide6.QtCore import Qt, QThread, pyqtSignal, QTimer, QSettings, QProcess
-from PySide6.QtGui import QFont, QColor
+from PySide6.QtGui import QFont, QColor, QAction
 
 import docker
 
@@ -32,6 +33,83 @@ import docker
 from orchestrator.Core.docker_manager import DockerManager
 from orchestrator.Core.framework import FrameworkConfig, FrameworkManager
 from orchestrator.Core.module_generator import ModuleGenerator
+
+
+# ============================================================================
+# ADD SOURCE DIALOG
+# ============================================================================
+
+class AddSourceDialog(QDialog):
+    """Dialog to add a new source repository"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add New Source Repository")
+        self.setMinimumWidth(500)
+        
+        layout = QVBoxLayout(self)
+        
+        form = QFormLayout()
+        self.section_edit = QComboBox()
+        self.section_edit.addItems(["core", "rockchip_npu", "voice_tts", "models", "custom"])
+        self.section_edit.setEditable(True)
+        form.addRow("Category (Section):", self.section_edit)
+        
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("e.g., my_special_tool")
+        form.addRow("Name (Key):", self.name_edit)
+        
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("https://github.com/...")
+        form.addRow("Git URL:", self.url_edit)
+        
+        layout.addLayout(form)
+        
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+        
+        btns = QHBoxLayout()
+        self.test_btn = QPushButton("Test URL")
+        self.test_btn.clicked.connect(self.test_url)
+        btns.addWidget(self.test_btn)
+        
+        self.save_btn = QPushButton("Add Source")
+        self.save_btn.clicked.connect(self.accept)
+        self.save_btn.setEnabled(False)
+        btns.addWidget(self.save_btn)
+        
+        layout.addLayout(btns)
+        
+    def test_url(self):
+        url = self.url_edit.text().strip()
+        if not url:
+            self.status_label.setText("Please enter a URL.")
+            return
+            
+        self.status_label.setText("Testing connection...")
+        QApplication.processEvents()
+        
+        try:
+            test_url = url
+            if url.endswith('.git'): test_url = url[:-4]
+
+            response = requests.head(test_url, timeout=5, allow_redirects=True)
+            if response.status_code < 400:
+                self.status_label.setText("✅ URL is valid and reachable.")
+                self.status_label.setStyleSheet("color: green")
+                self.save_btn.setEnabled(True)
+            else:
+                self.status_label.setText(f"❌ URL returned status: {response.status_code}")
+                self.status_label.setStyleSheet("color: red")
+        except Exception as e:
+            self.status_label.setText(f"❌ Connection failed: {str(e)}")
+            self.status_label.setStyleSheet("color: red")
+
+    def get_data(self):
+        return {
+            "section": self.section_edit.currentText(),
+            "name": self.name_edit.text(),
+            "url": self.url_edit.text()
+        }
 
 # ============================================================================
 # MODULE CREATION WIZARD
@@ -83,7 +161,7 @@ class ModuleCreationWizard(QWizard):
         layout.addRow("SDK / Backend:", self.sdk_edit)
         
         page.setLayout(layout)
-        page.registerField("name*", self.name_edit) # Mandatory
+        page.registerField("name*", self.name_edit) 
         return page
 
     def create_docker_page(self):
@@ -141,8 +219,7 @@ class ModuleCreationWizard(QWizard):
         return page
 
     def initializePage(self, page_id):
-        # IDs are 0-indexed based on addPage order
-        if page_id == 4: # Summary Page
+        if page_id == 4: 
             self.update_summary()
 
     def update_summary(self):
@@ -158,7 +235,6 @@ class ModuleCreationWizard(QWizard):
         self.summary_text.setText(summary)
 
     def accept(self):
-        # Collect Data
         self.module_data = {
             "module_name": self.name_edit.text(),
             "architecture": self.arch_combo.currentText(),
@@ -174,7 +250,6 @@ class ModuleCreationWizard(QWizard):
         }
         
         try:
-            # Use Core Generator
             targets_dir = Path("targets") 
             generator = ModuleGenerator(targets_dir)
             output_path = generator.generate_module(self.module_data)
@@ -189,86 +264,6 @@ class ModuleCreationWizard(QWizard):
         except Exception as e:
             QMessageBox.critical(self, "Generation Error", f"Failed to generate module: {e}")
 
-
-# ============================================================================
-# ADD SOURCE DIALOG
-# ============================================================================
-
-class AddSourceDialog(QDialog):
-    """Dialog to add a new source repository"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add New Source Repository")
-        self.setMinimumWidth(500)
-        
-        layout = QVBoxLayout(self)
-        
-        form = QFormLayout()
-        self.section_edit = QComboBox()
-        self.section_edit.addItems(["core", "rockchip_npu", "voice_tts", "models", "custom"])
-        self.section_edit.setEditable(True)
-        form.addRow("Section (Category):", self.section_edit)
-        
-        self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("e.g., my_special_tool")
-        form.addRow("Name (Key):", self.name_edit)
-        
-        self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("https://github.com/...")
-        form.addRow("Git URL:", self.url_edit)
-        
-        layout.addLayout(form)
-        
-        self.status_label = QLabel("")
-        layout.addWidget(self.status_label)
-        
-        btns = QHBoxLayout()
-        self.test_btn = QPushButton("Test URL")
-        self.test_btn.clicked.connect(self.test_url)
-        btns.addWidget(self.test_btn)
-        
-        self.save_btn = QPushButton("Add Source")
-        self.save_btn.clicked.connect(self.accept)
-        self.save_btn.setEnabled(False)
-        btns.addWidget(self.save_btn)
-        
-        layout.addLayout(btns)
-        
-    def test_url(self):
-        url = self.url_edit.text().strip()
-        if not url:
-            self.status_label.setText("Please enter a URL.")
-            return
-            
-        self.status_label.setText("Testing connection...")
-        QApplication.processEvents()
-        
-        try:
-            # Simple check if URL is reachable
-            # Remove .git suffix for web check if needed, but git clone needs it. 
-            # Requests handles redirects.
-            test_url = url
-            if url.endswith('.git'):
-                 test_url = url[:-4]
-
-            response = requests.head(test_url, timeout=5, allow_redirects=True)
-            if response.status_code < 400:
-                self.status_label.setText("✅ URL is valid and reachable.")
-                self.status_label.setStyleSheet("color: green")
-                self.save_btn.setEnabled(True)
-            else:
-                self.status_label.setText(f"❌ URL returned status: {response.status_code}")
-                self.status_label.setStyleSheet("color: red")
-        except Exception as e:
-            self.status_label.setText(f"❌ Connection failed: {str(e)}")
-            self.status_label.setStyleSheet("color: red")
-
-    def get_data(self):
-        return {
-            "section": self.section_edit.currentText(),
-            "name": self.name_edit.text(),
-            "url": self.url_edit.text()
-        }
 
 # ============================================================================
 # MAIN GUI CLASS
@@ -299,32 +294,53 @@ class MainOrchestrator(QMainWindow):
         
     def init_ui(self):
         self.setWindowTitle("LLM Cross-Compiler Framework")
-        self.setMinimumSize(1200, 800)
+        self.setMinimumSize(1200, 850)
+        self.setStyleSheet("""
+            QMainWindow, QWidget { background-color: #2b2b2b; color: #ffffff; }
+            QGroupBox { border: 1px solid #555; margin-top: 10px; font-weight: bold; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
+            QLineEdit, QComboBox, QTextEdit, QTableWidget { 
+                background-color: #353535; border: 1px solid #555; color: #fff; 
+            }
+            QPushButton { 
+                background-color: #404040; border: 1px solid #555; padding: 5px; 
+            }
+            QPushButton:hover { background-color: #505050; }
+            QProgressBar { border: 1px solid #555; text-align: center; }
+            QProgressBar::chunk { background-color: #007acc; }
+        """)
+        
+        self.create_menu_bar()
         
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
         
-        # Tabs
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
         
-        # Tab 1: Build
         self.build_tab = QWidget()
         self.setup_build_tab()
         self.tabs.addTab(self.build_tab, "Build & Monitor")
         
-        # Tab 2: Sources
         self.sources_tab = QWidget()
         self.setup_sources_tab()
         self.tabs.addTab(self.sources_tab, "Sources & Repositories")
         
-        # Toolbar for Wizard
-        toolbar = self.addToolBar("Tools")
-        wizard_action = toolbar.addAction("Create New Module")
-        wizard_action.triggered.connect(self.open_module_wizard)
+        self.load_sources_to_table()
+
+    def create_menu_bar(self):
+        menubar = self.menuBar()
         
-        self.load_sources()
+        tools_menu = menubar.addMenu("&Tools")
+        
+        wizard_action = QAction("Create New Module...", self)
+        wizard_action.triggered.connect(self.open_module_wizard)
+        tools_menu.addAction(wizard_action)
+        
+        audit_action = QAction("🛡️ Audit Docker Image...", self)
+        audit_action.triggered.connect(self.run_image_audit)
+        tools_menu.addAction(audit_action)
 
     def setup_build_tab(self):
         layout = QVBoxLayout(self.build_tab)
@@ -338,7 +354,7 @@ class MainOrchestrator(QMainWindow):
         c_layout.addWidget(self.model_name)
         
         self.target_combo = QComboBox()
-        self.target_combo.addItems(["rk3566", "rk3588", "raspberry_pi"])
+        self.target_combo.addItems(["rk3566", "rk3588", "raspberry_pi", "nvidia_jetson"])
         c_layout.addWidget(QLabel("Target:"))
         c_layout.addWidget(self.target_combo)
         
@@ -365,91 +381,99 @@ class MainOrchestrator(QMainWindow):
         layout = QVBoxLayout(self.sources_tab)
         
         toolbar = QHBoxLayout()
-        self.reload_sources_btn = QPushButton("Reload Sources")
-        self.reload_sources_btn.clicked.connect(self.load_sources)
-        toolbar.addWidget(self.reload_sources_btn)
         
-        self.add_source_btn = QPushButton("Add Source...")
-        self.add_source_btn.clicked.connect(self.add_source)
-        toolbar.addWidget(self.add_source_btn)
+        refresh_btn = QPushButton("🔄 Reload from YAML")
+        refresh_btn.clicked.connect(self.load_sources_to_table)
+        toolbar.addWidget(refresh_btn)
+        
+        add_btn = QPushButton("➕ Add Source...")
+        add_btn.clicked.connect(self.open_add_source_dialog)
+        toolbar.addWidget(add_btn)
         
         toolbar.addStretch()
         layout.addLayout(toolbar)
         
         self.sources_table = QTableWidget()
         self.sources_table.setColumnCount(3)
-        self.sources_table.setHorizontalHeaderLabels(["Section", "Name (Key)", "URL"])
+        self.sources_table.setHorizontalHeaderLabels(["Category", "Key", "Repository URL"])
         self.sources_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.sources_table.setAlternatingRowColors(True)
         layout.addWidget(self.sources_table)
-
-    def load_sources(self):
-        self.sources_table.setRowCount(0)
-        yaml_path = Path("configs/project_sources.yml")
         
-        if not yaml_path.exists():
-            self.log("No project_sources.yml found.")
-            return
-            
-        try:
-            with open(yaml_path, 'r') as f:
-                data = yaml.safe_load(f)
-            
-            row = 0
-            for section, items in data.items():
-                if isinstance(items, dict):
-                    for key, url in items.items():
-                        self.sources_table.insertRow(row)
-                        self.sources_table.setItem(row, 0, QTableWidgetItem(section))
-                        self.sources_table.setItem(row, 1, QTableWidgetItem(key))
-                        self.sources_table.setItem(row, 2, QTableWidgetItem(str(url)))
-                        row += 1
-                else:
-                    self.sources_table.insertRow(row)
-                    self.sources_table.setItem(row, 0, QTableWidgetItem("root"))
-                    self.sources_table.setItem(row, 1, QTableWidgetItem(section))
-                    self.sources_table.setItem(row, 2, QTableWidgetItem(str(items)))
-                    row += 1
-            self.log("Sources reloaded successfully.")
-            
-            # Also update framework config
-            self.framework_manager._load_extended_configuration()
-            
-        except Exception as e:
-            self.log(f"Error loading sources: {e}")
+        layout.addWidget(QLabel("These sources are loaded from configs/project_sources.yml"))
 
-    def add_source(self):
+    def load_sources_to_table(self):
+        self.framework_manager._load_extended_configuration()
+        sources = self.framework_manager.config.source_repositories
+        
+        self.sources_table.setRowCount(0)
+        row = 0
+        for key, url in sources.items():
+            if '.' in key: cat, name = key.split('.', 1)
+            else: cat, name = "general", key
+                
+            self.sources_table.insertRow(row)
+            self.sources_table.setItem(row, 0, QTableWidgetItem(cat))
+            self.sources_table.setItem(row, 1, QTableWidgetItem(name))
+            self.sources_table.setItem(row, 2, QTableWidgetItem(url))
+            row += 1
+            
+    def open_add_source_dialog(self):
         dlg = AddSourceDialog(self)
         if dlg.exec() == QDialog.Accepted:
             data = dlg.get_data()
-            self.save_source_to_yaml(data)
-            self.load_sources()
-
-    def save_source_to_yaml(self, new_source):
-        yaml_path = Path("configs/project_sources.yml")
-        
+            self.save_new_source(data)
+            
+    def save_new_source(self, data):
+        yaml_path = Path(self.framework_manager.config.configs_dir) / "project_sources.yml"
         if yaml_path.exists():
-            with open(yaml_path, 'r') as f:
-                config = yaml.safe_load(f) or {}
-        else:
-            config = {}
+            with open(yaml_path, 'r') as f: config = yaml.safe_load(f) or {}
+        else: config = {}
         
-        section = new_source['section']
-        name = new_source['name']
-        url = new_source['url']
+        section = data['section']
+        name = data['name']
+        url = data['url']
         
-        if section not in config:
-            config[section] = {}
-        
+        if section not in config: config[section] = {}
         config[section][name] = url
         
-        with open(yaml_path, 'w') as f:
-            yaml.dump(config, f, default_flow_style=False)
-        
-        self.log(f"Added source: {section}.{name}")
+        try:
+            with open(yaml_path, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False)
+            self.log(f"Added new source: {section}.{name}")
+            self.load_sources_to_table()
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", f"Could not write to YAML: {e}")
 
     def open_module_wizard(self):
         wizard = ModuleCreationWizard(self)
         wizard.exec()
+
+    def run_image_audit(self):
+        """Runs the CI Image Audit script via GUI"""
+        image_tag, ok = QInputDialog.getText(
+            self, "Docker Image Audit", 
+            "Enter Image Tag to audit (e.g. llm-framework/rockchip:latest):",
+            QLineEdit.Normal, "llm-framework/rockchip:latest"
+        )
+        
+        if ok and image_tag:
+            self.log(f"Starting audit for {image_tag}...")
+            
+            self.audit_process = QProcess()
+            self.audit_process.setProcessChannelMode(QProcess.MergedChannels)
+            
+            self.audit_process.readyReadStandardOutput.connect(
+                lambda: self.on_build_output("AUDIT", self.audit_process.readAllStandardOutput().data().decode().strip())
+            )
+            
+            script_path = Path("scripts/ci_image_audit.sh").absolute()
+            
+            cmd = [str(script_path), image_tag]
+            if sys.platform == "win32":
+                 cmd = ["bash"] + cmd
+                 
+            self.audit_process.start(cmd[0], cmd[1:])
 
     def start_build(self):
         model = self.model_name.text().strip()

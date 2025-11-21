@@ -20,8 +20,7 @@ PATH_SEP = os.pathsep
 SITE_PACKAGES_PATH = "" 
 
 # --- BUILD ARGUMENTE (Für die externe PyInstaller-Ausführung) ---
-# HINWEIS: Das externe Programm MUSS 'PyInstaller' aus dem Root-Verzeichnis
-# des Repositories ausführen, um die relativen Pfade (configs, targets etc.) korrekt aufzulösen.
+# DIESE Liste muss Ihr externes Programm auslesen, um die Argumente zu erhalten.
 
 PYINSTALLER_CMD_ARGS: List[str] = [
     # Allgemeine Optionen
@@ -32,7 +31,7 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     
     # FIX: Hidden Import für yaml/PyYAML. Dies zwingt PyInstaller, alle C-Komponenten zu bündeln.
     "--hidden-import", "yaml", 
-    "--hidden-import", "shutil", # Hilft beim Einbinden von OS-Helfern
+    "--hidden-import", "shutil", 
 
     # FIX: Collect-All für kritische, oft fehlschlagende Module
     "--collect-all", "orchestrator", 
@@ -41,16 +40,15 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     "--collect-all", "requests",
     "--collect-all", "rich", 
     
-    # Data Files (Verwendet PATH_SEP als Trenner, um Cross-Plattform-Daten zu bündeln)
+    # Data Files (Wichtig für configs/targets Pfaderkennung zur Laufzeit)
     "--add-data", f"configs{PATH_SEP}configs",
     "--add-data", f"targets{PATH_SEP}targets",
     "--add-data", f"Docker Setup/docker-compose.yml{PATH_SEP}.",
     
-    # Optional: Icon
-    # Der externe Prozess muss prüfen, ob die Datei existiert, bevor er diese Zeilen anhängt.
-    # *([f"--icon={ICON_FILE}"] if Path(ICON_FILE).exists() else []),
+    # Optional: Icon-Datei
+    f"--icon={ICON_FILE}",
     
-    # Main Script (MUSS die letzte Position einnehmen)
+    # Main Script (Wird vom externen Programm als letztes Argument hinzugefügt)
     MAIN_SCRIPT
 ]
 

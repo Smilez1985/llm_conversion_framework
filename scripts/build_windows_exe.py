@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Windows Build Script für LLM Cross-Compiler Framework
-DIREKTIVE: Erstellt eine Standalone .exe und signiert sie (Self-Signed).
+DIREKTIVE: Goldstandard, erstellt eine Standalone .exe ohne Signierung.
+ZWECK: Erstellt die ausführbare Datei für das GUI-Frontend.
 """
 
 import os
@@ -52,9 +53,10 @@ def build_exe():
         # WICHTIG: Explicit paths für PyInstaller in komplexen VENVs
         *([f"--paths={site_packages}"] if site_packages else []),
 
-        # FIX: Hidden Import für yaml/PyYAML. Dies zwingt PyInstaller, alle Komponenten zu bündeln.
+        # FIX: Hidden Import für yaml/PyYAML. Erzwingt das Bundling der C-Erweiterungen.
         "--hidden-import", "yaml", 
-
+        "--hidden-import", "shutil",
+        
         # FIX: Collect-All für kritische, oft fehlschlagende Module
         "--collect-all", "orchestrator", 
         "--collect-all", "PySide6",
@@ -83,50 +85,6 @@ def build_exe():
         sys.exit(1)
 
 
-def self_sign_exe():
-    """Erstellt ein Zertifikat und signiert die EXE (Nur Windows)"""
-    if sys.platform != "win32":
-        logger.warning("Signierung übersprungen (Nur auf Windows möglich).")
-        return
-
-    exe_path = Path(DIST_DIR) / f"{APP_NAME}.exe"
-    if not exe_path.exists():
-        logger.error("EXE nicht gefunden, Signierung abgebrochen.")
-        return
-
-    logger.info("Beginne Self-Signing Prozess (PowerShell)...")
-    
-    # PowerShell-Skript zum Erstellen und Signieren
-    ps_script = f"""
-    $certName = "LLM-Framework-SelfSigned"
-    $exePath = "{exe_path.absolute()}"
-    
-    Write-Host "Suche existierendes Zertifikat..."
-    $cert = Get-ChildItem Cert:\\CurrentUser\\My | Where-Object {{ $_.Subject -match $certName }} | Select-Object -First 1
-    
-    if (-not $cert) {{
-        Write-Host "Erstelle neues Code-Signing Zertifikat..."
-        # Verwende -DnsName für Windows 10/11
-        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=$certName" -DnsName "$certName.local" -CertStoreLocation Cert:\\CurrentUser\\My
-        Write-Host "Zertifikat erstellt: $($cert.Thumbprint)"
-    }} else {{
-        Write-Host "Zertifikat gefunden: $($cert.Thumbprint)"
-    }}
-    
-    Write-Host "Signiere EXE..."
-    Set-AuthenticodeSignature -FilePath $exePath -Certificate $cert
-    
-    Write-Host "Signierung abgeschlossen."
-    """
-    
-    # PowerShell ausführen
-    try:
-        subprocess.run(["powershell", "-Command", ps_script], check=True, creationflags=0x08000000) # Führen Sie PowerShell ohne Konsolenfenster aus
-        logger.info("✅ EXE erfolgreich signiert!")
-        logger.info("HINWEIS: Damit Windows der EXE vertraut, muss das Zertifikat auf dem Ziel-PC in 'Vertrauenswürdige Stammzertifizierungsstellen' importiert werden.")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Signierung fehlgeschlagen: {e}")
-
 if __name__ == "__main__":
     # Root-Verzeichnis prüfen
     if not Path("orchestrator").exists():
@@ -135,4 +93,7 @@ if __name__ == "__main__":
         
     check_pyinstaller()
     build_exe()
-    self_sign_exe()
+    
+    # ACHTUNG: Die Signierung wird hier absichtlich NICHT durchgeführt,
+    # um sie Ihrem externen Programm zu überlassen.
+    logger.info("Build-Skript abgeschlossen. Führen Sie nun Ihr Signierungsprogramm aus.")

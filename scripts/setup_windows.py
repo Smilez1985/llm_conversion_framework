@@ -30,6 +30,10 @@ except ImportError:
 INSTALL_APP_NAME = "LLM-Builder"
 DEFAULT_INSTALL_DIR_SUFFIX = "LLM-Framework"
 
+# WICHTIG: Offizielle URL für die neueste MSVC x64 Redistributable (v14+)
+MSVC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+MSVC_REDIST_FILENAME = "vc_redist.x64.exe"
+
 # Ordner, die NICHT zum User kopiert werden sollen
 IGNORE_PATTERNS = shutil.ignore_patterns(
     ".git", ".gitignore", ".gitattributes",
@@ -124,11 +128,9 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
     def custom_ignore(directory, contents):
         ignored = IGNORE_PATTERNS(directory, contents)
         if Path(directory).resolve() == repo_root.resolve():
-            # KORRIGIERT: Konvertiert Set zu Liste, bevor mit Liste verbunden wird (für ältere Python-Versionen)
             return list(ignored) + ['dist', 'build']
         return ignored
 
-    # Fehler hier: shutil.copytree ruft custom_ignore auf
     shutil.copytree(repo_root, destination_path, ignore=custom_ignore, dirs_exist_ok=True)
     
     # 3. Launcher kopieren (WICHTIG: Nimmt an, dass LLM-Builder.exe neben dem Installer liegt)
@@ -181,6 +183,42 @@ class InstallationWorker(threading.Thread):
         except:
             return False
 
+    def _install_msvc_redistributable(self):
+        """Lädt das offizielle MSVC Redistributable Paket herunter und installiert es still."""
+        
+        temp_dir = Path(tempfile.gettempdir())
+        msvc_path = temp_dir / MSVC_REDIST_FILENAME
+        
+        self.log(f"Prüfe auf MSVC Redistributable...", "info")
+        
+        # 1. Herunterladen
+        if not msvc_path.exists():
+            self.log(f"Lade MSVC Redistributable von Microsoft herunter...", "warning")
+            try:
+                response = requests.get(MSVC_REDIST_URL, stream=True, timeout=30)
+                response.raise_for_status()
+                with open(msvc_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                self.log("Download erfolgreich.", "success")
+            except Exception as e:
+                self.log(f"FEHLER beim Download des MSVC-Pakets: {e}", "error")
+                return
+        else:
+            self.log("MSVC Installer bereits im Temp-Ordner gefunden.", "success")
+
+        # 2. Stille Installation
+        self.log("Starte stille Installation des MSVC Redistributable...", "info")
+        try:
+            # /install führt eine stille Installation ohne Benutzeroberfläche durch
+            subprocess.run([str(msvc_path), "/install", "/quiet", "/norestart"], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            self.log("MSVC Redistributable erfolgreich installiert/aktualisiert.", "success")
+        except subprocess.CalledProcessError as e:
+            self.log(f"FEHLER: MSVC Installation fehlgeschlagen (Code {e.returncode}). Dies kann zu Laufzeitfehlern führen.", "error")
+        except Exception as e:
+            self.log(f"Unerwarteter Fehler bei MSVC Installation: {e}", "error")
+
+
     def _pre_pull_docker(self):
         images = ["debian:bookworm-slim", "quay.io/vektorlab/ctop:latest"]
         
@@ -210,6 +248,10 @@ class InstallationWorker(threading.Thread):
 
     def run(self):
         try:
+            # 0. Kritisches Host-Deployment: MSVC C++ Runtime
+            self.progress_update(0, "Starte kritische Host-Komponenten-Installation (MSVC C++ Runtime)...")
+            self._install_msvc_redistributable()
+            
             # 1. Installation der Dateien
             install_application(self.target_dir, self.desktop_shortcut, self.log, self.progress_update)
             

@@ -124,9 +124,11 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
     def custom_ignore(directory, contents):
         ignored = IGNORE_PATTERNS(directory, contents)
         if Path(directory).resolve() == repo_root.resolve():
-            return ignored + ['dist', 'build']
+            # KORRIGIERT: Konvertiert Set zu Liste, bevor mit Liste verbunden wird (für ältere Python-Versionen)
+            return list(ignored) + ['dist', 'build']
         return ignored
 
+    # Fehler hier: shutil.copytree ruft custom_ignore auf
     shutil.copytree(repo_root, destination_path, ignore=custom_ignore, dirs_exist_ok=True)
     
     # 3. Launcher kopieren (WICHTIG: Nimmt an, dass LLM-Builder.exe neben dem Installer liegt)

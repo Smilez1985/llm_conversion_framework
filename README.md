@@ -1,4 +1,4 @@
-# llm_conversion_framework [WARNUNG: Das komplette Projekt wurde mit Hilfe von KI (Claude/Gemini) erstellt und ist, Stand 15.11.2025, noch ungetestet!]
+# llm_conversion_framework 
 
 Ein GUI-basiertes LLM Deployment Framework, das beliebige LLMs automatisiert optimieren & quantisieren kann. Für jede CPU, GPU oder NPU perfekt optimiert. **MVP: RK3566 Support.**
 

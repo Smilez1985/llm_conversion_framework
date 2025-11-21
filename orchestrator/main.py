@@ -42,25 +42,28 @@ from orchestrator.Core.module_generator import ModuleGenerator
 # ============================================================================
 
 def find_repo_root():
-    """Sucht nach oben im Dateisystem nach dem Repository-Root-Ordner (Marken: targets/ oder .git)."""
+    """
+    Sucht nach oben im Dateisystem nach dem Repository-Root-Ordner (Marker: targets/ und configs/).
+    Diese Logik funktioniert sowohl im Entwicklungsmodus als auch als gebundener Thin Client.
+    """
     
     # 1. Startpunkt: Wo liegt die EXE?
     if getattr(sys, 'frozen', False):
-        start_path = Path(sys.executable).parent
+        # Wenn aus einer EXE gestartet (PyInstaller-Bundle)
+        start_path = Path(sys.executable).parent 
     else:
+        # Wenn direkt als Python-Skript gestartet (Entwicklung)
         start_path = Path(__file__).resolve().parent.parent
 
     current_path = start_path
 
     # 2. Suche in der aktuellen Verzeichnisstruktur nach oben (max. 10 Ebenen)
     # bis wir die Ordner targets/ und configs/ finden
+    REPO_MARKERS = ["targets", "configs"]
+    
     for _ in range(10): 
         # Marker-Prüfung: Sind dies die notwendigen Framework-Ordner?
-        if (current_path / "targets").is_dir() and (current_path / "configs").is_dir():
-            return current_path
-        
-        # Sicherheits-Prüfung: Ist es ein Git-Repo?
-        if (current_path / ".git").is_dir():
+        if all((current_path / marker).is_dir() for marker in REPO_MARKERS):
             return current_path
             
         parent = current_path.parent
@@ -68,7 +71,7 @@ def find_repo_root():
             break # Dateisystem-Root erreicht
         current_path = parent
 
-    # 3. Fallback: Wir geben den initialen Startpfad zurück (wird fehlschlagen)
+    # 3. Fallback: Wir geben den initialen Startpfad zurück (Installation Root)
     return start_path
 
 
@@ -103,12 +106,17 @@ def run_auto_update():
     except Exception as e:
         print(f"[Auto-Update] Unerwarteter Fehler: {e}")
 
-# Wechselt das Arbeitsverzeichnis, damit ALLE relativen Pfade im Code korrekt sind
-os.chdir(BASE_DIR)
+# KORRIGIERT: Wechselt das Arbeitsverzeichnis, damit ALLE relativen Pfade im Code (insbesondere Imports)
+# relativ zur Repository-Wurzel sind.
+try:
+    os.chdir(BASE_DIR)
+except Exception as e:
+    # Dies sollte im Normalfall nicht passieren, außer die Root-Erkennung schlägt fehl.
+    print(f"KRITISCHER FEHLER: Konnte das Arbeitsverzeichnis nicht zu {BASE_DIR} wechseln: {e}")
 
 
 # ============================================================================
-# ADD SOURCE DIALOG
+# RESTLICHER GUI-CODE (UNVERÄNDERT ZUM VORHERIGEN ZUSTAND)
 # ============================================================================
 
 class AddSourceDialog(QDialog):

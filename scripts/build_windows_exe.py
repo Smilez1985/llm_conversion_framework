@@ -18,7 +18,8 @@ ICON_FILE = "assets/icon.ico"  # Optional, falls vorhanden
 DIST_DIR = "dist"
 BUILD_DIR = "build"
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Logging-Setup: Schreibt Logs in den lokalen Ordner
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', filename='build_log.txt', filemode='w')
 logger = logging.getLogger(__name__)
 
 def check_pyinstaller():
@@ -34,15 +35,32 @@ def build_exe():
     """Erstellt die .exe mit PyInstaller"""
     logger.info("Starte Build-Prozess...")
     
+    # Pfade, die PyInstaller nach versteckten Imports durchsuchen soll
+    try:
+        site_packages = subprocess.check_output([sys.executable, "-c", "import site; print(site.getsitepackages()[0])"]).decode().strip()
+    except:
+        site_packages = ""
+    
     # Basis-Kommando
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm",
         "--clean",
-        "--windowed",  # Keine Konsole für GUI
+        "--windowed",  # Keine Konsole für GUI (für den GUI-Launcher)
         "--name", APP_NAME,
-        "--collect-all", "orchestrator", # Wichtig für relative Imports
+        
+        # WICHTIG: Explicit paths für PyInstaller in komplexen VENVs
+        *([f"--paths={site_packages}"] if site_packages else []),
+
+        # FIX: Hidden Import für yaml/PyYAML. Dies zwingt PyInstaller, alle Komponenten zu bündeln.
+        "--hidden-import", "yaml", 
+
+        # FIX: Collect-All für kritische, oft fehlschlagende Module
+        "--collect-all", "orchestrator", 
         "--collect-all", "PySide6",
+        "--collect-all", "yaml",       
+        "--collect-all", "requests",
+        "--collect-all", "rich", 
         
         # Pfade zu Assets/Configs einbinden
         "--add-data", f"configs{os.pathsep}configs",
@@ -56,8 +74,14 @@ def build_exe():
     if os.path.exists(ICON_FILE):
         cmd.extend(["--icon", ICON_FILE])
         
-    subprocess.check_call(cmd)
-    logger.info(f"Build erfolgreich! Datei liegt in: {os.path.abspath(DIST_DIR)}")
+    try:
+        # Führt den PyInstaller-Befehl aus
+        subprocess.check_call(cmd)
+        logger.info(f"Build erfolgreich! Datei liegt in: {os.path.abspath(DIST_DIR)}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Build fehlgeschlagen mit Fehlercode {e.returncode}. Details im build_log.txt.")
+        sys.exit(1)
+
 
 def self_sign_exe():
     """Erstellt ein Zertifikat und signiert die EXE (Nur Windows)"""
@@ -82,7 +106,8 @@ def self_sign_exe():
     
     if (-not $cert) {{
         Write-Host "Erstelle neues Code-Signing Zertifikat..."
-        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=$certName" -CertStoreLocation Cert:\\CurrentUser\\My
+        # Verwende -DnsName für Windows 10/11
+        $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=$certName" -DnsName "$certName.local" -CertStoreLocation Cert:\\CurrentUser\\My
         Write-Host "Zertifikat erstellt: $($cert.Thumbprint)"
     }} else {{
         Write-Host "Zertifikat gefunden: $($cert.Thumbprint)"
@@ -96,7 +121,7 @@ def self_sign_exe():
     
     # PowerShell ausführen
     try:
-        subprocess.run(["powershell", "-Command", ps_script], check=True)
+        subprocess.run(["powershell", "-Command", ps_script], check=True, creationflags=0x08000000) # Führen Sie PowerShell ohne Konsolenfenster aus
         logger.info("✅ EXE erfolgreich signiert!")
         logger.info("HINWEIS: Damit Windows der EXE vertraut, muss das Zertifikat auf dem Ziel-PC in 'Vertrauenswürdige Stammzertifizierungsstellen' importiert werden.")
     except subprocess.CalledProcessError as e:

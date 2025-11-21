@@ -48,8 +48,9 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     # Optional: Icon-Datei
     f"--icon={ICON_FILE}",
     
-    # Main Script (Wird vom externen Programm als letztes Argument hinzugefügt)
-    MAIN_SCRIPT
+    # Der Entry Point (orchestrator/main.py) wird von Ihrem externen Programm
+    # als letztes Argument HINZUGEFÜGT.
+    # MAIN_SCRIPT
 ]
 
 # --- Build Metadaten (für die Logik des externen Programms) ---

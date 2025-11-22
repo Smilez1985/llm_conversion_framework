@@ -19,9 +19,21 @@ ICON_FILE = "assets/icon.ico"
 PATH_SEP = os.pathsep 
 SITE_PACKAGES_PATH = "" 
 
-# --- BUILD ARGUMENTE (Für die externe PyInstaller-Ausführung) ---
-# DIESE Liste muss Ihr externes Programm auslesen, um die Argumente zu erhalten.
+# Definitive Liste der PyYAML-Untermodule, die PyInstaller oft übersieht
+PYYAML_DEEP_IMPORTS = [
+    'yaml.loader',
+    'yaml.dumper',
+    'yaml.scanner',
+    'yaml.parser',
+    'yaml.composer',
+    'yaml.constructor',
+    'yaml.resolver',
+    'yaml.representer',
+    'yaml.emitter',
+    'yaml.serializer',
+]
 
+# --- BUILD ARGUMENTE (Für die externe PyInstaller-Ausführung) ---
 PYINSTALLER_CMD_ARGS: List[str] = [
     # Allgemeine Optionen
     "--noconfirm",
@@ -30,14 +42,19 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     "--name", APP_NAME,
     
     # WICHTIG: Explicit paths für PyInstaller in komplexen VENVs
-    # Das externe Programm kann hier eigene --paths hinzufügen.
-    # Beispiel: *([f"--paths={SITE_PACKAGES_PATH}"] if SITE_PACKAGES_PATH else []),
+    *([f"--paths={SITE_PACKAGES_PATH}"] if SITE_PACKAGES_PATH else []),
 
-    # FIX: Hidden Import für yaml/PyYAML. Dies zwingt PyInstaller, alle C-Komponenten zu bündeln.
+    # FIX 1 (YAML C-Code): Hidden Import für yaml/PyYAML. Dies zwingt PyInstaller, alle C-Komponenten zu bündeln.
     "--hidden-import", "yaml", 
     "--hidden-import", "shutil", 
+]
 
-    # FIX: Collect-All für kritische, oft fehlschlagende Module
+# Füge die tieferen YAML-Module hinzu
+for module in PYYAML_DEEP_IMPORTS:
+    PYINSTALLER_CMD_ARGS.extend(["--hidden-import", module])
+
+# Führe Collect-All nach den Hidden Imports durch
+PYINSTALLER_CMD_ARGS.extend([
     "--collect-all", "orchestrator", 
     "--collect-all", "PySide6",
     "--collect-all", "yaml",       
@@ -54,7 +71,7 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     
     # Main Script (Wird vom externen Programm als letztes Argument HINZUGEFÜGT)
     MAIN_SCRIPT
-]
+])
 
 # --- Build Metadaten (für die Logik des externen Programms) ---
 BUILD_METADATA: Dict[str, Any] = {

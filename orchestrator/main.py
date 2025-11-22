@@ -10,7 +10,7 @@ import os
 import json
 import logging
 import subprocess
-import pyyaml
+import yaml
 import requests
 from pathlib import Path
 from typing import Dict, List, Optional, Any

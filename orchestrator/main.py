@@ -2,7 +2,7 @@
 """
 LLM Cross-Compiler Framework - Main Orchestrator GUI
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
-THIN CLIENT VERSION: Führt Auto-Update im Basisverzeichnis aus und sucht den Repo-Root.
+THIN CLIENT VERSION: Führt robustes Auto-Update im Basisverzeichnis aus (Ping-Loop).
 """
 
 import sys
@@ -33,11 +33,12 @@ from PySide6.QtGui import QFont, QColor, QAction
 
 import docker
 
-# Import Core & Utils
+# Import Core
 from orchestrator.Core.docker_manager import DockerManager
 from orchestrator.Core.framework import FrameworkConfig, FrameworkManager
 from orchestrator.Core.module_generator import ModuleGenerator
-from orchestrator.utils.updater import UpdateManager  # Integrierter Updater
+from orchestrator.utils.updater import UpdateManager
+
 
 # ============================================================================
 # ROBUSTE STARTUP-LOGIK (SUCHT REPO-ROOT)
@@ -60,10 +61,11 @@ def find_repo_root():
     current_path = start_path
 
     # 2. Suche in der aktuellen Verzeichnisstruktur nach oben (max. 10 Ebenen)
+    # bis wir die Ordner targets/ und configs/ finden
     REPO_MARKERS = ["targets", "configs"]
     
     for _ in range(10): 
-        # Marker-Prüfung
+        # Marker-Prüfung: Sind dies die notwendigen Framework-Ordner?
         if all((current_path / marker).is_dir() for marker in REPO_MARKERS):
             return current_path
             
@@ -72,88 +74,81 @@ def find_repo_root():
             break # Dateisystem-Root erreicht
         current_path = parent
 
-    # 3. Fallback: Wir geben den initialen Startpfad zurück
+    # 3. Fallback: Wir geben den initialen Startpfad zurück (Installation Root)
     return start_path
 
 
 BASE_DIR = find_repo_root()
 
-def run_startup_git_pull():
+def run_auto_update():
     """
-    Versucht beim Start ein stilles git pull (Blockierend).
-    Dies ist der Fallback für Kommandozeilen-Starts.
+    Führt 'git pull' im gefundenen Basisverzeichnis aus.
+    Implementiert eine robuste 'While Ping Loop', um Internetabbrüche abzufangen 
+    und Timeouts während des Updates zu verhindern.
     """
     git_dir = BASE_DIR / ".git"
     if not git_dir.exists():
+        print(f"[Auto-Update] Kein .git-Verzeichnis gefunden in {BASE_DIR}. Überspringe Update.")
         return
 
-    try:
-        # Nur Pull, wenn git verfügbar ist. Fehler werden ignoriert um Start nicht zu verzögern.
-        subprocess.run(
-            ["git", "pull"],
-            cwd=BASE_DIR,
-            capture_output=True,
-            timeout=5,
-            creationflags=0x08000000 if sys.platform == 'win32' else 0
-        )
-    except Exception:
-        pass
+    print(f"[Auto-Update] Prüfe auf Updates in {BASE_DIR}...")
+    
+    # Endlosschleife für Retry-Mechanismus (bricht nur bei Erfolg oder fatalem Fehler ab)
+    while True:
+        # 1. Ping Loop: Warte aktiv auf Internetverbindung
+        # Dies verhindert, dass git pull ins Leere läuft
+        while True:
+            try:
+                # Ping Google DNS (8.8.8.8) auf Port 53 (DNS) - schnell und zuverlässig
+                socket.create_connection(("8.8.8.8", 53), timeout=5)
+                break # Internet ist da, raus aus der Warteschleife
+            except OSError:
+                print("[Auto-Update] Warte auf Internetverbindung...")
+                time.sleep(5) # 5 Sekunden warten vor nächstem Ping
+        
+        # 2. Versuch des Git Pulls
+        try:
+            result = subprocess.run(
+                ["git", "pull"],
+                cwd=BASE_DIR,
+                capture_output=True,
+                text=True,
+                check=True,
+                creationflags=0x08000000 if sys.platform == 'win32' else 0
+            )
+            
+            if "Already up to date." in result.stdout:
+                print("[Auto-Update] Anwendung ist auf dem neuesten Stand.")
+            else:
+                print("[Auto-Update] Update erfolgreich geladen.")
+            
+            break # Erfolg -> Schleife beenden
+            
+        except subprocess.CalledProcessError as e:
+            # Git hat einen Fehler geworfen (z.B. Verbindung während Download verloren)
+            print(f"[Auto-Update] Fehler beim Download (Verbindung verloren?): {e.stderr.strip()}")
+            print("[Auto-Update] Pausiere und warte auf Wiederherstellung der Verbindung...")
+            time.sleep(2)
+            continue # Zurück zum Start (Ping Loop), dann erneuter Pull-Versuch
+            
+        except FileNotFoundError:
+             print("[Auto-Update] 'git' wurde nicht gefunden. Bitte installieren Sie Git.")
+             break # Fataler Fehler
+        except Exception as e:
+            print(f"[Auto-Update] Unerwarteter Fehler: {e}")
+            break # Fataler Fehler
 
-# Arbeitsverzeichnis setzen
+# KORRIGIERT: Wechselt das Arbeitsverzeichnis, damit ALLE relativen Pfade im Code (insbesondere Imports)
+# relativ zur Repository-Wurzel sind.
 try:
     os.chdir(BASE_DIR)
 except Exception as e:
+    # Dies sollte im Normalfall nicht passieren, außer die Root-Erkennung schlägt fehl.
     print(f"KRITISCHER FEHLER: Konnte das Arbeitsverzeichnis nicht zu {BASE_DIR} wechseln: {e}")
 
 
 # ============================================================================
-# BACKGROUND WORKER (UPDATER)
-# ============================================================================
-
-class UpdateWorker(QThread):
-    """
-    Worker-Thread für Update-Prüfung mit Ping-Loop (Non-Blocking).
-    Prüft erst auf Internetverbindung, dann auf Git-Updates.
-    """
-    update_available = pyqtSignal(bool)
-    
-    def __init__(self, app_root):
-        super().__init__()
-        self.app_root = app_root
-        self._is_running = True
-
-    def run(self):
-        # 1. Ping Loop: Warte auf Internet (max 10 Sekunden Versuch)
-        timeout = 10
-        start_time = time.time()
-        connected = False
-        
-        while time.time() - start_time < timeout and self._is_running:
-            try:
-                # Ping Google DNS (8.8.8.8) port 53 (DNS) - sehr schnell und zuverlässig
-                socket.create_connection(("8.8.8.8", 53), timeout=2)
-                connected = True
-                break
-            except OSError:
-                time.sleep(1)
-        
-        if not connected:
-            return # Kein Internet, kein Update-Check
-
-        # 2. Git Check (nur wenn Internet da ist)
-        try:
-            updater = UpdateManager(self.app_root)
-            if updater.check_for_updates():
-                self.update_available.emit(True)
-        except Exception:
-            pass # Silent fail im Hintergrund
-
-    def stop(self):
-        self._is_running = False
-
-
-# ============================================================================
-# DIALOGS & WIZARDS
+# RESTLICHER GUI-CODE
 # ============================================================================
 
 class AddSourceDialog(QDialog):
@@ -228,6 +223,9 @@ class AddSourceDialog(QDialog):
             "url": self.url_edit.text()
         }
 
+# ============================================================================
+# MODULE CREATION WIZARD
+# ============================================================================
 
 class ModuleCreationWizard(QWizard):
     """5-Step Module Creation Wizard using Core Generator"""
@@ -415,37 +413,11 @@ class MainOrchestrator(QMainWindow):
             self.docker_manager.build_completed.connect(self.on_build_completed)
             
         except Exception as e:
-            # Fallback für den Fall, dass die GUI noch nicht steht
-            print(f"CRITICAL INIT ERROR: {e}")
             QMessageBox.critical(None, "Initialization Error", f"Failed to init framework: {e}\nRepo Root: {BASE_DIR}")
             sys.exit(1)
             
         self.init_ui()
         
-        # Starte Update-Check im Hintergrund (Ping-Loop + Git Check)
-        self.update_worker = UpdateWorker(BASE_DIR)
-        self.update_worker.update_available.connect(self.on_update_available)
-        # Verzögert starten, damit die GUI zuerst sichtbar ist (2000ms)
-        QTimer.singleShot(2000, self.update_worker.start)
-
-    def on_update_available(self, available):
-        """Slot der aufgerufen wird, wenn ein Update gefunden wurde."""
-        if available:
-            reply = QMessageBox.question(
-                self, "Update Verfügbar", 
-                "Eine neue Version des LLM-Builders ist verfügbar.\n\n"
-                "Jetzt herunterladen und neu starten?\n(Die Anwendung wird kurz geschlossen)",
-                QMessageBox.Yes | QMessageBox.No
-            )
-            
-            if reply == QMessageBox.Yes:
-                self.log("Starte Update-Prozess...")
-                try:
-                    updater = UpdateManager(BASE_DIR)
-                    updater.perform_update_and_restart()
-                except Exception as e:
-                    QMessageBox.critical(self, "Update Fehler", f"Update konnte nicht gestartet werden:\n{e}")
-
     def init_ui(self):
         self.setWindowTitle("LLM Cross-Compiler Framework")
         self.setMinimumSize(1200, 850)
@@ -679,8 +651,8 @@ class MainOrchestrator(QMainWindow):
         self.log_view.append(f"[{timestamp}] {message}")
 
 if __name__ == "__main__":
-    # Fallback Startup-Check
-    run_startup_git_pull()
+    # RUN AUTO-UPDATE BEFORE GUI STARTS
+    run_auto_update()
 
     app = QApplication(sys.argv)
     window = MainOrchestrator()

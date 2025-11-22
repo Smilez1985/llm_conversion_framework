@@ -1,9 +1,15 @@
-import os
+#!/usr/bin/env python3
+"""
+Update Manager for LLM Cross-Compiler Framework
+DIREKTIVE: Goldstandard, führt sichere Updates via Git und Batch-Restart durch.
+"""
+
 import sys
 import subprocess
 import logging
 from pathlib import Path
 import tempfile
+import time
 
 class UpdateManager:
     """
@@ -19,10 +25,13 @@ class UpdateManager:
         try:
             git_dir = self.app_root / ".git"
             if not git_dir.exists():
+                # Dies ist kein Fehler, sondern der Normalzustand bei einer frischen Installation
+                # bevor das erste Update-Repo gecloned wurde (falls wir .git im Installer ausschließen würden)
+                # Da wir .git jetzt inkludieren, sollte es da sein.
                 self.logger.warning(f"Kein Git-Repo gefunden in {self.app_root}. Auto-Update deaktiviert.")
                 return False
 
-            # Fetch origin
+            # Fetch origin (ohne Konsole unter Windows)
             subprocess.run(
                 ["git", "fetch"], 
                 cwd=self.app_root, 
@@ -51,28 +60,39 @@ class UpdateManager:
         """Erstellt ein Batch-Skript, das die App schließt, git pull ausführt und neu startet."""
         try:
             # Wir nehmen an, die EXE heißt 'LLM-Builder.exe'
-            exe_name = "LLM-Builder.exe"
-            exe_path = self.app_root / exe_name
+            # Falls wir im Dev-Modus sind (python main.py), starten wir python neu
+            is_frozen = getattr(sys, 'frozen', False)
+            
+            if is_frozen:
+                exe_path = Path(sys.executable)
+                restart_cmd = f'start "" "{exe_path.name}"'
+            else:
+                # Dev Modus: Python Neustart
+                exe_path = Path(sys.executable)
+                script_path = Path(sys.argv[0])
+                restart_cmd = f'start "" "{exe_path}" "{script_path}"'
             
             # Temporäres Batch-Skript erstellen
             batch_file = Path(tempfile.gettempdir()) / "llm_updater.bat"
             
-            # Batch-Logik:
-            # 1. Warte 2 Sekunden (damit sich die GUI schließen kann)
-            # 2. Gehe ins App-Verzeichnis
-            # 3. Führe git pull aus (überschreibt auch die EXE, da sie dann nicht mehr läuft!)
-            # 4. Starte die EXE neu
-            # 5. Lösche das Batch-Skript
-            
             batch_content = f"""
 @echo off
-timeout /t 2 /nobreak > NUL
+title LLM-Builder Updater
+echo Warte auf Beendigung der Anwendung...
+timeout /t 3 /nobreak > NUL
 cd /d "{self.app_root}"
-echo Updating Repository...
+echo.
+echo ------------------------------------------------
+echo Fuehre Update durch (git pull)...
+echo ------------------------------------------------
 git pull
-echo Starting Application...
-start "" "{exe_name}"
+echo.
+echo ------------------------------------------------
+echo Starte Anwendung neu...
+echo ------------------------------------------------
+{restart_cmd}
 del "%~f0"
+exit
             """
             
             with open(batch_file, "w") as f:
@@ -84,6 +104,7 @@ del "%~f0"
             subprocess.Popen(
                 [str(batch_file)], 
                 shell=True, 
+                cwd=self.app_root,
                 creationflags=subprocess.CREATE_NEW_CONSOLE
             )
             

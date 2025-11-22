@@ -26,8 +26,7 @@ class UpdateManager:
             git_dir = self.app_root / ".git"
             if not git_dir.exists():
                 # Dies ist kein Fehler, sondern der Normalzustand bei einer frischen Installation
-                # bevor das erste Update-Repo gecloned wurde (falls wir .git im Installer ausschließen würden)
-                # Da wir .git jetzt inkludieren, sollte es da sein.
+                # bevor das erste Update-Repo gecloned wurde.
                 self.logger.warning(f"Kein Git-Repo gefunden in {self.app_root}. Auto-Update deaktiviert.")
                 return False
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows Installer (Smart Update & User Preservation)
+LLM Cross-Compiler Framework - Windows Installer (Differential Sync)
 DIREKTIVE: Goldstandard.
-           1. MSVC: Nur installieren wenn nötig (Registry-Check), Download cachen.
-           2. Update: Core-Files überschreiben, aber USER-MODULE in 'targets/' erhalten.
-           3. Git: .git Ordner wird mitkopiert für Auto-Updates.
+           1. MSVC: Registry-Check.
+           2. Update: Hash-basierter Sync (Nur geänderte Dateien kopieren).
+           3. User-Schutz: Custom Targets bleiben unangetastet.
 """
 
 import os
@@ -15,15 +15,15 @@ import time
 import socket
 import threading
 import tempfile
+import hashlib
 from pathlib import Path
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Set
 import requests 
 
 # Windows Registry Zugriff für MSVC Check
 try:
     import winreg
 except ImportError:
-    # Fallback für Nicht-Windows Umgebungen (z.B. beim Testen), obwohl das Script setup_windows heißt
     winreg = None
 
 try:
@@ -42,18 +42,12 @@ DEFAULT_INSTALL_DIR_SUFFIX = "LLM-Framework"
 MSVC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 MSVC_REDIST_FILENAME = "vc_redist.x64.exe"
 
-# .git ist NICHT im Ignore, damit Updates funktionieren
-IGNORE_PATTERNS = shutil.ignore_patterns(
-    ".gitignore", ".gitattributes",
-    ".venv", "venv", "env",
-    "__pycache__", "*.pyc", "*.pyd",
-    "dist", "build", "*.spec",
-    "tmp", "temp"
-)
-
-# Ordner, die das Framework als "seine eigenen" betrachtet und bei Updates überschreiben darf.
-# Alles andere in 'targets/' wird als User-Modul betrachtet und geschützt.
-FRAMEWORK_CORE_FOLDERS = ["orchestrator", "scripts", "configs", "docker"]
+# Dateien/Ordner die vom Sync komplett ausgeschlossen sind
+IGNORED_NAMES = {
+    ".gitignore", ".gitattributes", ".venv", "venv", "env",
+    "__pycache__", "dist", "build", ".spec", "tmp", "temp"
+}
+IGNORED_EXTENSIONS = {".pyc", ".pyd", ".spec"}
 
 # ============================================================================
 # LOGIK: MSVC PRÜFUNG
@@ -63,9 +57,6 @@ def _is_msvc_installed() -> bool:
     """Prüft via Registry, ob VC++ 2015-2022 (x64) Runtime installiert ist."""
     if not winreg: return False
     try:
-        # GUID für VC++ 2022 Redist x64 (kann variieren, wir prüfen den generischen Key)
-        # Ein zuverlässigerer Weg ist die Prüfung auf den Uninstall-Key oder Dependencies
-        # Hier prüfen wir einen bekannten Key für VS 2015-2022
         path = r"SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
         key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path, 0, winreg.KEY_READ)
         installed, _ = winreg.QueryValueEx(key, "Installed")
@@ -75,7 +66,91 @@ def _is_msvc_installed() -> bool:
         return False
 
 # ============================================================================
-# LOGIK: DATEI-OPERATIONEN
+# LOGIK: HASH-BASIERTER SYNC (DIFFERENTIAL COPY)
+# ============================================================================
+
+def _calculate_file_hash(filepath: Path) -> str:
+    """Berechnet SHA256 Hash einer Datei für Vergleich."""
+    hasher = hashlib.sha256()
+    try:
+        with open(filepath, 'rb') as f:
+            # Lese in Chunks um Speicher zu schonen (wichtig bei großen Modellen)
+            while chunk := f.read(8192):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    except Exception:
+        return ""
+
+def _should_copy(src: Path, dst: Path) -> bool:
+    """Entscheidet, ob kopiert werden muss."""
+    # 1. Existiert nicht? -> Kopieren
+    if not dst.exists():
+        return True
+    
+    # 2. Größe unterschiedlich? -> Kopieren (Schneller Check)
+    if src.stat().st_size != dst.stat().st_size:
+        return True
+        
+    # 3. Hash unterschiedlich? -> Kopieren (Sicherer Check)
+    # Dies fängt inhaltliche Änderungen bei gleicher Größe ab
+    return _calculate_file_hash(src) != _calculate_file_hash(dst)
+
+def _is_ignored(path: Path) -> bool:
+    """Prüft gegen globale Ignore-Listen."""
+    if path.name in IGNORED_NAMES: return True
+    if path.suffix in IGNORED_EXTENSIONS: return True
+    return False
+
+def _sync_recursive(src_dir: Path, dst_dir: Path, log_callback: Callable, counter: list):
+    """Rekursiver Sync mit Hash-Check."""
+    dst_dir.mkdir(parents=True, exist_ok=True)
+
+    for item in src_dir.iterdir():
+        if _is_ignored(item): continue
+
+        src_path = item
+        dst_path = dst_dir / item.name
+
+        # Spezialbehandlung 'targets': User-Ordner schützen
+        # Wir sind im 'targets' Ordner des Repos.
+        # Wenn im Ziel-Ordner 'targets' Ordner sind, die HIER NICHT existieren,
+        # sind es User-Module -> Finger weg!
+        # Wir müssen hier also nur das kopieren, was wir haben.
+        
+        if src_path.is_dir():
+            _sync_recursive(src_path, dst_path, log_callback, counter)
+        else:
+            if _should_copy(src_path, dst_path):
+                try:
+                    shutil.copy2(src_path, dst_path)
+                    counter[0] += 1 # Zähler für aktualisierte Dateien
+                except Exception as e:
+                    log_callback(f"Fehler beim Kopieren von {src_path.name}: {e}", "error")
+
+def _perform_differential_update(src_root: Path, dst_root: Path, log_callback: Callable):
+    """Startet den intelligenten Update-Prozess."""
+    updated_files_count = [0]
+    
+    log_callback(f"Prüfe Änderungen (Hash-Vergleich)...", "info")
+    
+    # 1. Rekursiver Sync aller Framework-Dateien
+    _sync_recursive(src_root, dst_root, log_callback, updated_files_count)
+    
+    # 2. Bereinigung (Optional/Vorsichtig): 
+    # Wir löschen KEINE Dateien im Ziel, die im Source fehlen, 
+    # um Configs und User-Daten zu schützen. 
+    # Ausnahme: Veraltete Core-Skripte könnten hier explizit gelöscht werden, 
+    # wenn man eine 'deprecated_files' Liste pflegen würde.
+    # Aktuell: Nur additives/aktualisierendes Update -> Sicherster Weg.
+
+    if updated_files_count[0] == 0:
+        log_callback("System ist aktuell. Keine Dateien geändert.", "success")
+    else:
+        log_callback(f"{updated_files_count[0]} Dateien aktualisiert.", "success")
+
+
+# ============================================================================
+# INSTALLER LOGIK
 # ============================================================================
 
 def _find_repo_root_at_runtime() -> Optional[Path]:
@@ -92,62 +167,6 @@ def _find_repo_root_at_runtime() -> Optional[Path]:
         if parent == current_path: break
         current_path = parent
     return None
-
-def _smart_copy_tree(src: Path, dst: Path, log_callback: Callable):
-    """
-    Kopiert Dateien intelligent:
-    1. Core-Ordner im Ziel werden bereinigt und neu kopiert (sauberes Update).
-    2. 'targets/': Nur Framework-Standard-Targets werden überschrieben. User-Ordner bleiben!
-    3. .git: Wird komplett synchronisiert.
-    """
-    
-    # 1. Erstelle Zielordner falls nicht existent
-    dst.mkdir(parents=True, exist_ok=True)
-
-    # Helper für Ignore
-    def _get_ignored(path, names):
-        return IGNORE_PATTERNS(path, names)
-
-    # Iteriere über Root-Elemente im Quell-Repo
-    for item in src.iterdir():
-        if item.name in _get_ignored(src, [item.name]):
-            continue
-
-        dst_item = dst / item.name
-
-        # SPEZIALFALL: TARGETS ORDNER (User Modules schützen!)
-        if item.name == "targets" and item.is_dir():
-            log_callback(f"Synchronisiere Targets (User-Module bleiben erhalten)...", "info")
-            dst_item.mkdir(exist_ok=True)
-            
-            # Iteriere durch die Targets im QUELL-Repo
-            for target_src in item.iterdir():
-                if not target_src.is_dir(): continue
-                target_dst = dst_item / target_src.name
-                
-                # Wenn es ein Framework-Target ist -> Überschreiben (Update erzwingen)
-                # Wir gehen davon aus: Alles was im Source-Repo ist, ist Framework-Standard.
-                if target_dst.exists():
-                    shutil.rmtree(target_dst) # Lösche alte Version im Ziel
-                
-                shutil.copytree(target_src, target_dst, ignore=IGNORE_PATTERNS)
-            
-            # WICHTIG: Wir löschen NICHTS in dst/targets, was nicht in src/targets ist!
-            # Das schützt "targets/my_custom_npu".
-            continue
-
-        # STANDARD: Core Ordner/Dateien (orchestrator, scripts, etc.)
-        # Alte Version im Ziel löschen, neue kopieren
-        if dst_item.exists():
-            if dst_item.is_dir():
-                shutil.rmtree(dst_item)
-            else:
-                dst_item.unlink()
-        
-        if item.is_dir():
-            shutil.copytree(item, dst_item, ignore=IGNORE_PATTERNS)
-        else:
-            shutil.copy2(item, dst_item)
 
 def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: Optional[Path] = None) -> bool:
     desktop = os.path.join(os.environ['USERPROFILE'], 'Desktop')
@@ -179,16 +198,18 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
     if not repo_root: raise Exception("CRITICAL: Repository-Root nicht gefunden.")
     
     log_callback(f"Quelle: {repo_root}", "info")
-    log_callback(f"Ziel: {destination_path}", "info")
     
-    progress_callback(10, "Starte Smart-Update...")
+    # Zielordner erstellen
+    destination_path.mkdir(parents=True, exist_ok=True)
     
-    # Smart Copy (Schützt User-Targets)
-    _smart_copy_tree(repo_root, destination_path, log_callback)
+    progress_callback(10, "Synchronisiere Dateien...")
     
-    progress_callback(40, "Kopiere Launcher...")
+    # START DES NEUEN HASH-BASIERTEN SYNCS
+    _perform_differential_update(repo_root, destination_path, log_callback)
     
-    # Launcher kopieren
+    progress_callback(80, "Prüfe Launcher...")
+    
+    # Launcher kopieren (ebenfalls mit Check)
     installer_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else repo_root / "dist"
     launcher_src = installer_dir / f"{INSTALL_APP_NAME}.exe" 
     
@@ -197,22 +218,31 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
 
     if launcher_src.exists():
         launcher_dst = destination_path / f"{INSTALL_APP_NAME}.exe"
-        shutil.copy2(launcher_src, launcher_dst)
+        if _should_copy(launcher_src, launcher_dst):
+            try:
+                shutil.copy2(launcher_src, launcher_dst)
+                log_callback("Launcher aktualisiert.", "info")
+            except Exception as e:
+                # Das kann passieren, wenn die App läuft. 
+                # In einem echten Update-Szenario würde der Updater-Prozess (batch) das übernehmen.
+                log_callback(f"Launcher konnte nicht kopiert werden (läuft evtl?): {e}", "warning")
     else:
         log_callback("WARNUNG: Launcher EXE nicht gefunden.", "warning")
 
-    # Configs & Assets
+    # Configs & Assets (Icon immer kopieren wenn da)
     icon_src = repo_root / f"{INSTALL_APP_NAME}.ico"
     if icon_src.exists(): shutil.copy2(icon_src, destination_path / f"{INSTALL_APP_NAME}.ico")
+    
+    # Leere Ordner sicherstellen
     for d in ["output", "cache", "logs"]: (destination_path / d).mkdir(exist_ok=True)
     
-    progress_callback(50, "Konfiguration fertig.")
+    progress_callback(90, "Finalisierung...")
 
     if desktop_shortcut and launcher_src.exists():
-        log_callback("Erstelle Desktop-Verknüpfung...", "info")
+        # Shortcut nur erstellen wenn nicht da oder erzwungen, hier einfach immer (ist billig)
         _create_shortcut(destination_path / f"{INSTALL_APP_NAME}.exe", destination_path, destination_path / f"{INSTALL_APP_NAME}.ico")
     
-    log_callback("Installation erfolgreich abgeschlossen.", "success")
+    log_callback("Vorgang abgeschlossen.", "success")
 
 
 # ============================================================================
@@ -235,45 +265,31 @@ class InstallationWorker(threading.Thread):
 
     def _handle_msvc(self):
         """Intelligente MSVC Installation."""
-        # 1. Check Registry
         if _is_msvc_installed():
-            self.log("MSVC Runtime bereits installiert (Registry Check OK).", "success")
+            self.log("MSVC Runtime: OK (Bereits installiert).", "success")
             return
 
-        # 2. Check Temp File
         temp_dir = Path(tempfile.gettempdir())
         msvc_path = temp_dir / MSVC_REDIST_FILENAME
         
-        if msvc_path.exists():
-             # Optional: Check file size to ensure it's valid (>10MB usually)
-             if msvc_path.stat().st_size > 10000000:
-                 self.log("MSVC Installer im Cache gefunden. Überspringe Download.", "info")
-             else:
-                 self.log("Cache-Datei ungültig. Lösche...", "warning")
-                 msvc_path.unlink()
-
-        # 3. Download (nur wenn nicht vorhanden)
-        if not msvc_path.exists():
+        if msvc_path.exists() and msvc_path.stat().st_size > 1000000:
+             self.log("MSVC Installer im Cache gefunden.", "info")
+        else:
             self.log(f"Lade MSVC Redistributable herunter...", "warning")
             if not self._check_internet_status():
-                self.log("Kein Internet für MSVC Download. Überspringe...", "error")
-                return
-                
+                self.log("Kein Internet für MSVC. Überspringe...", "error"); return
             try:
                 response = requests.get(MSVC_REDIST_URL, stream=True, timeout=60)
                 with open(msvc_path, 'wb') as f: f.write(response.content)
-                self.log("Download fertig.", "success")
             except Exception as e: 
                 self.log(f"FEHLER MSVC Download: {e}", "error"); return
 
-        # 4. Installieren
         self.log("Installiere MSVC Runtime...", "info")
         try:
-            # /install /quiet /norestart
             subprocess.run([str(msvc_path), "/install", "/quiet", "/norestart"], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            self.log("MSVC installiert.", "success")
+            self.log("MSVC erfolgreich installiert.", "success")
         except Exception as e: 
-            self.log(f"MSVC Installation fehlgeschlagen (Code {e}). Evtl. manuell prüfen.", "error")
+            self.log(f"MSVC Installation fehlgeschlagen (Code {e}).", "error")
 
     def _pre_pull_docker(self):
         images = ["debian:bookworm-slim"]
@@ -287,13 +303,11 @@ class InstallationWorker(threading.Thread):
         try:
             self.progress_update(0, "Systemprüfung...")
             self._handle_msvc()
-            
             install_application(self.target_dir, self.desktop_shortcut, self.log, self.progress_update)
-            
             self._pre_pull_docker()
             self.progress_update(100, "Fertig.")
             self.success = True
-            self.message = "Installation erfolgreich."
+            self.message = "Operation erfolgreich."
         except Exception as e:
             self.success = False
             self.message = str(e)
@@ -317,7 +331,7 @@ class InstallerWindow(tk.Tk):
     def _init_ui(self):
         self.style = ttk.Style(self); self.style.theme_use('clam')
         main = ttk.Frame(self, padding=10); main.pack(fill='both', expand=True)
-        ttk.Label(main, text="Setup (Smart Update)", font=('Arial', 16)).pack(pady=10)
+        ttk.Label(main, text="Setup (Differential Update)", font=('Arial', 16)).pack(pady=10)
         
         self.path_ent = ttk.Entry(main); self.path_ent.pack(fill='x', pady=5)
         default_path = Path(os.getenv('LOCALAPPDATA')) / "Programs" / DEFAULT_INSTALL_DIR_SUFFIX
@@ -328,17 +342,15 @@ class InstallerWindow(tk.Tk):
         
         self.log = ScrolledText(main, height=10); self.log.pack(fill='both', expand=True, pady=10)
         self.prog = ttk.Progressbar(main, variable=self.progress_var); self.prog.pack(fill='x', pady=5)
-        self.btn = ttk.Button(main, text="Install / Update", command=self._start); self.btn.pack(pady=5)
+        self.btn = ttk.Button(main, text="Start", command=self._start); self.btn.pack(pady=5)
 
     def update_log(self, msg, color="normal"):
         self.after(0, lambda: self.log.insert('end', f"{msg}\n", self.log.tag_config(color, foreground=self.COLOR_MAPPING.get(color, "black")) or color))
 
     def _run_checks(self):
-        self.update_log("Prüfe Umgebung...", "info")
+        self.update_log("Initialisiere...", "info")
         if _is_msvc_installed():
-            self.update_log("MSVC Runtime: OK (Gefunden)", "success")
-        else:
-            self.update_log("MSVC Runtime: Fehlt (wird installiert)", "warning")
+            self.update_log("MSVC Runtime: OK", "success")
 
     def _start(self):
         self.btn.config(state='disabled')
@@ -355,10 +367,10 @@ class InstallerWindow(tk.Tk):
         if self.current_install_thread.is_alive(): self.after(500, self._monitor)
         else: 
             if self.current_install_thread.success:
-                messagebox.showinfo("Done", self.current_install_thread.message)
+                messagebox.showinfo("Fertig", self.current_install_thread.message)
                 self.destroy()
             else:
-                messagebox.showerror("Error", self.current_install_thread.message)
+                messagebox.showerror("Fehler", self.current_install_thread.message)
                 self.btn.config(state='normal')
 
 if __name__ == '__main__': 

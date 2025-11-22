@@ -29,6 +29,10 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     "--windowed",
     "--name", APP_NAME,
     
+    # WICHTIG: Explicit paths für PyInstaller in komplexen VENVs
+    # Das externe Programm kann hier eigene --paths hinzufügen.
+    # Beispiel: *([f"--paths={SITE_PACKAGES_PATH}"] if SITE_PACKAGES_PATH else []),
+
     # FIX: Hidden Import für yaml/PyYAML. Dies zwingt PyInstaller, alle C-Komponenten zu bündeln.
     "--hidden-import", "yaml", 
     "--hidden-import", "shutil", 
@@ -48,9 +52,8 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     # Optional: Icon-Datei
     f"--icon={ICON_FILE}",
     
-    # Der Entry Point (orchestrator/main.py) wird von Ihrem externen Programm
-    # als letztes Argument HINZUGEFÜGT.
-    # MAIN_SCRIPT
+    # Main Script (Wird vom externen Programm als letztes Argument HINZUGEFÜGT)
+    MAIN_SCRIPT
 ]
 
 # --- Build Metadaten (für die Logik des externen Programms) ---

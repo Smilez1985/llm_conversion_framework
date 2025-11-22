@@ -3,7 +3,8 @@
 LLM Cross-Compiler Framework - Main Window GUI
 DIREKTIVE: Goldstandard, MVC-Pattern, Separation of Concerns.
 
-Beinhaltet die Haupt-GUI-Logik, Worker-Threads und Dialoge.
+Beinhaltet die Haupt-GUI-Logik und Worker-Threads. 
+Dialoge und Wizards sind modular ausgelagert.
 """
 
 import sys
@@ -20,8 +21,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QLabel, QPushButton, QTextEdit, QProgressBar,
     QGroupBox, QFormLayout, QLineEdit, QComboBox, 
     QMessageBox, QTableWidget, QTableWidgetItem,
-    QDialog, QHeaderView, QWizard, QWizardPage, QRadioButton, QButtonGroup,
-    QInputDialog
+    QDialog, QInputDialog
 )
 from PySide6.QtCore import Qt, QThread, pyqtSignal, QTimer, QProcess
 from PySide6.QtGui import QAction
@@ -29,10 +29,13 @@ from PySide6.QtGui import QAction
 # Core & Utils Imports
 from orchestrator.Core.docker_manager import DockerManager
 from orchestrator.Core.framework import FrameworkConfig, FrameworkManager
-from orchestrator.Core.module_generator import ModuleGenerator
 from orchestrator.utils.updater import UpdateManager
 from orchestrator.utils.logging import get_logger
+
+# GUI Module Imports
 from orchestrator.gui.community_hub import CommunityHubWindow
+from orchestrator.gui.dialogs import AddSourceDialog
+from orchestrator.gui.wizards import ModuleCreationWizard
 
 
 # ============================================================================
@@ -78,197 +81,6 @@ class UpdateWorker(QThread):
 
     def stop(self):
         self._is_running = False
-
-
-# ============================================================================
-# DIALOGS & WIZARDS
-# ============================================================================
-
-class AddSourceDialog(QDialog):
-    """Dialog to add a new source repository"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add New Source Repository")
-        self.setMinimumWidth(500)
-        
-        layout = QVBoxLayout(self)
-        
-        form = QFormLayout()
-        self.section_edit = QComboBox()
-        self.section_edit.addItems(["core", "rockchip_npu", "voice_tts", "models", "custom"])
-        self.section_edit.setEditable(True)
-        form.addRow("Category (Section):", self.section_edit)
-        
-        self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("e.g., my_special_tool")
-        form.addRow("Name (Key):", self.name_edit)
-        
-        self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("https://github.com/...")
-        form.addRow("Git URL:", self.url_edit)
-        
-        layout.addLayout(form)
-        
-        self.status_label = QLabel("")
-        layout.addWidget(self.status_label)
-        
-        btns = QHBoxLayout()
-        self.test_btn = QPushButton("Test URL")
-        self.test_btn.clicked.connect(self.test_url)
-        btns.addWidget(self.test_btn)
-        
-        self.save_btn = QPushButton("Add Source")
-        self.save_btn.clicked.connect(self.accept)
-        self.save_btn.setEnabled(False)
-        btns.addWidget(self.save_btn)
-        
-        layout.addLayout(btns)
-        
-    def test_url(self):
-        import requests
-        url = self.url_edit.text().strip()
-        if not url:
-            self.status_label.setText("Please enter a URL.")
-            return
-            
-        self.status_label.setText("Testing connection...")
-        
-        try:
-            test_url = url
-            if url.endswith('.git'): test_url = url[:-4]
-            response = requests.head(test_url, timeout=5, allow_redirects=True)
-            if response.status_code < 400:
-                self.status_label.setText("✅ URL is valid and reachable.")
-                self.status_label.setStyleSheet("color: green")
-                self.save_btn.setEnabled(True)
-            else:
-                self.status_label.setText(f"❌ URL returned status: {response.status_code}")
-                self.status_label.setStyleSheet("color: red")
-        except Exception as e:
-            self.status_label.setText(f"❌ Connection failed: {str(e)}")
-            self.status_label.setStyleSheet("color: red")
-
-    def get_data(self):
-        return {
-            "section": self.section_edit.currentText(),
-            "name": self.name_edit.text(),
-            "url": self.url_edit.text()
-        }
-
-
-class ModuleCreationWizard(QWizard):
-    """5-Step Module Creation Wizard"""
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Module Creation Wizard")
-        self.setWizardStyle(QWizard.ModernStyle)
-        self.setMinimumSize(800, 600)
-        self.module_data = {}
-        
-        self.addPage(self.create_intro_page())
-        self.addPage(self.create_hardware_page())
-        self.addPage(self.create_docker_page())
-        self.addPage(self.create_flags_page())
-        self.addPage(self.create_summary_page())
-
-    def create_intro_page(self):
-        page = QWizardPage()
-        page.setTitle("Welcome")
-        page.setSubTitle("Create a new Hardware Target Module")
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel("This wizard will guide you through creating a new hardware target."))
-        page.setLayout(layout)
-        return page
-
-    def create_hardware_page(self):
-        page = QWizardPage()
-        page.setTitle("Hardware Information")
-        layout = QFormLayout()
-        self.name_edit = QLineEdit()
-        layout.addRow("Module Name:", self.name_edit)
-        self.arch_combo = QComboBox()
-        self.arch_combo.addItems(["aarch64", "x86_64", "armv7l", "riscv64"])
-        layout.addRow("Architecture:", self.arch_combo)
-        self.sdk_edit = QLineEdit()
-        layout.addRow("SDK / Backend:", self.sdk_edit)
-        page.setLayout(layout)
-        page.registerField("name*", self.name_edit) 
-        return page
-
-    def create_docker_page(self):
-        page = QWizardPage()
-        page.setTitle("Docker Environment")
-        layout = QVBoxLayout()
-        self.os_group = QButtonGroup(page)
-        self.rad_debian = QRadioButton("Debian 12 (Bookworm)")
-        self.rad_ubuntu = QRadioButton("Ubuntu 22.04 LTS")
-        self.rad_debian.setChecked(True)
-        self.os_group.addButton(self.rad_debian)
-        self.os_group.addButton(self.rad_ubuntu)
-        layout.addWidget(QLabel("Base OS:"))
-        layout.addWidget(self.rad_debian)
-        layout.addWidget(self.rad_ubuntu)
-        layout.addWidget(QLabel("Packages:"))
-        self.packages_edit = QLineEdit("build-essential cmake git")
-        layout.addWidget(self.packages_edit)
-        page.setLayout(layout)
-        return page
-
-    def create_flags_page(self):
-        page = QWizardPage()
-        page.setTitle("Compiler Flags")
-        layout = QFormLayout()
-        self.cpu_flags = QLineEdit()
-        layout.addRow("CPU Flags:", self.cpu_flags)
-        self.cmake_flags = QLineEdit()
-        layout.addRow("CMake Flags:", self.cmake_flags)
-        page.setLayout(layout)
-        return page
-
-    def create_summary_page(self):
-        page = QWizardPage()
-        page.setTitle("Summary")
-        layout = QVBoxLayout()
-        self.summary_text = QTextEdit()
-        self.summary_text.setReadOnly(True)
-        layout.addWidget(self.summary_text)
-        page.setLayout(layout)
-        return page
-
-    def initializePage(self, page_id):
-        if page_id == 4: self.update_summary()
-
-    def update_summary(self):
-        base_os = "debian:bookworm-slim" if self.rad_debian.isChecked() else "ubuntu:22.04"
-        summary = f"Name: {self.name_edit.text()}\nArch: {self.arch_combo.currentText()}\nOS: {base_os}"
-        self.summary_text.setText(summary)
-
-    def accept(self):
-        self.module_data = {
-            "module_name": self.name_edit.text(),
-            "architecture": self.arch_combo.currentText(),
-            "sdk": self.sdk_edit.text(),
-            "base_os": "debian:bookworm-slim" if self.rad_debian.isChecked() else "ubuntu:22.04",
-            "packages": self.packages_edit.text().split(),
-            "cpu_flags": self.cpu_flags.text(),
-            "cmake_flags": self.cmake_flags.text(),
-        }
-        # Signal or processing via parent would happen here, but simplified for now:
-        # In a real MVC, this would emit a signal, but here we call the generator directly
-        # We need access to base_dir, which we get via parent or we assume a standard location relative to cwd
-        # For better design, MainOrchestrator handles the logic, Wizard just collects data.
-        # But to keep it working as before:
-        try:
-            # Assuming CWD is correct or we pass base_dir
-            # For safety, let's just set the data and let the caller handle it, 
-            # BUT MainOrchestrator logic was embedded here.
-            # Let's rely on the caller (MainOrchestrator) to have passed the right context if needed.
-            # Actually, the original code generated files inside the wizard.
-            # We'll adapt to use the passed-in base_dir if available, or raise error.
-            pass
-        except Exception:
-            pass
-        super().accept()
 
 
 # ============================================================================
@@ -497,21 +309,10 @@ class MainOrchestrator(QMainWindow):
             QMessageBox.critical(self, "Save Error", f"Could not write YAML: {e}")
 
     def open_module_wizard(self):
-        wizard = ModuleCreationWizard(self)
-        # Fix: The wizard needs to know where to generate files. 
-        # We handle the generation here or pass the targets_dir to the wizard.
-        # For now, we'll execute generation here after accept if we moved logic out of wizard.
-        if wizard.exec():
-            # Logic copied from old wizard.accept to ensure it runs with correct paths
-            data = wizard.module_data
-            targets_dir = self.app_root / "targets"
-            try:
-                targets_dir.mkdir(exist_ok=True)
-                generator = ModuleGenerator(targets_dir)
-                output_path = generator.generate_module(data)
-                QMessageBox.information(self, "Generated", f"Module created at:\n{output_path}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Generation failed: {e}")
+        # Use the dedicated Wizard class
+        targets_dir = self.app_root / "targets"
+        wizard = ModuleCreationWizard(targets_dir, self)
+        wizard.exec()
 
     def run_image_audit(self):
         image_tag, ok = QInputDialog.getText(self, "Audit", "Image Tag:", QLineEdit.Normal, "llm-framework/rockchip:latest")

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Core Framework Manager
-DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+DIRECTIVE: Goldstandard, complete, professionally written.
 """
 
 import os
@@ -72,15 +72,10 @@ class FrameworkConfig:
 class FrameworkManager:
     def __init__(self, config: Optional[Union[Dict[str, Any], FrameworkConfig]] = None):
         self.logger = get_logger(__name__)
+        self.config = config or FrameworkConfig()
         self._lock = threading.Lock()
         self._initialized = False
         self._shutdown_event = threading.Event()
-        if isinstance(config, dict):
-            known = FrameworkConfig.__annotations__.keys()
-            self.config = FrameworkConfig(**{k:v for k,v in config.items() if k in known})
-        elif isinstance(config, FrameworkConfig): self.config = config
-        else: self.config = FrameworkConfig()
-        
         self.info = FrameworkInfo("1.0.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
         self._components = {}; self._event_queue = queue.Queue(); self._build_counter = 0; self._active_builds = {}
         self.logger.info("Framework Manager initialized")
@@ -153,7 +148,6 @@ class FrameworkManager:
         with self._lock:
             if bid in self._active_builds:
                 j = self._active_builds[bid]
-                # Handle both dict and object access
                 if hasattr(j, 'status'): j.status = stat; j.progress = prog or j.progress
                 else: j['status'] = stat; j['progress'] = prog or j['progress']
 

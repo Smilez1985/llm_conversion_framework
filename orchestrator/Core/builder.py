@@ -70,7 +70,7 @@ class BuildConfiguration:
     build_id: str
     timestamp: str
     model_source: str
-    target_arch: str  # MODULAR: String based
+    target_arch: str  # String-basiert (kein Enum mehr)
     target_format: ModelFormat
     output_dir: str
     model_branch: Optional[str] = "main"
@@ -169,6 +169,7 @@ class BuildEngine:
                         targets.append({
                             "id": tp.name,
                             "target_arch": meta.get("metadata", {}).get("architecture_family", tp.name),
+                            "name": meta.get("metadata", {}).get("name", tp.name),
                             "available": True,
                             "path": str(tp)
                         })
@@ -228,13 +229,15 @@ class BuildEngine:
             # Resolve target path from string
             target_path = self.targets_dir / config.target_arch
             if not target_path.exists():
-                # Search
+                # Search case-insensitive
+                found = False
                 for p in self.targets_dir.iterdir():
                     if p.name.lower() == config.target_arch.lower():
                         target_path = p
+                        found = True
                         break
-                if not target_path.exists():
-                    raise FileNotFoundError(f"Target {config.target_arch} not found")
+                if not found:
+                    raise FileNotFoundError(f"Target {config.target_arch} not found in {self.targets_dir}")
 
             self._prepare_build_environment(config, prog, target_path)
             df_path = self._generate_dockerfile(config, prog, target_path)
@@ -290,7 +293,8 @@ class BuildEngine:
     def _build_docker_image(self, config: BuildConfiguration, progress: BuildProgress, path: Path) -> Image:
         progress.current_stage = "Building Image"
         progress.progress_percent = 40
-        tag = f"llm-framework/{config.target_arch}:{config.build_id}"
+        # Use lower case tag to avoid docker errors
+        tag = f"llm-framework/{config.target_arch.lower()}:{config.build_id.lower()}"
         context = self.base_dir
         rel_df = path.relative_to(context)
         
@@ -306,7 +310,7 @@ class BuildEngine:
         except Exception as e:
             raise RuntimeError(f"Image build failed: {e}")
 
-    def _execute_build_modules(self, config, progress, image, target_path):
+    def _execute_build_modules(self, config: BuildConfiguration, progress: BuildProgress, image: Image, target_path: Path):
         progress.current_stage = "Running modules"
         progress.progress_percent = 60
         build_temp = self.cache_dir / "builds" / config.build_id
@@ -347,7 +351,7 @@ class BuildEngine:
 
     def _extract_artifacts(self, config, progress):
         progress.current_stage = "Extracting"
-        progress.progress_percent = 90
+        progress.progress_percent = 80
         src = self.cache_dir / "builds" / config.build_id / "output" / "packages"
         dst = Path(config.output_dir)
         if src.exists():

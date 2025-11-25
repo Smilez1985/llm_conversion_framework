@@ -140,6 +140,7 @@ def _create_shortcut(target_exe_path: Path, working_directory: Path, icon_path: 
         """
         vbs_file = Path(tempfile.gettempdir()) / "create_shortcut.vbs"
         with open(vbs_file, "w") as f: f.write(vbs_script)
+        # SECURITY FIX: No shell=True needed for subprocess.run
         subprocess.run(["cscript", "//Nologo", str(vbs_file)], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
         vbs_file.unlink()
         return True
@@ -369,10 +370,14 @@ class InstallerWindow(tk.Tk):
         else: 
             if self.current_install_thread.success:
                 self.update_log("FERTIG! Starte Anwendung...", "success")
-                # Auto-Launch nach Update
+                
+                # SECURITY FIX: Auto-Launch ohne shell=True
                 exe_path = Path(self.path_ent.get()) / f"{INSTALL_APP_NAME}.exe"
                 if exe_path.exists():
-                    subprocess.Popen(str(exe_path), shell=True)
+                    if sys.platform == "win32":
+                         os.startfile(exe_path)
+                    else:
+                         subprocess.Popen([str(exe_path)])
                 
                 if self.auto_start:
                     self.after(2000, self.destroy)

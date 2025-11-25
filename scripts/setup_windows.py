@@ -5,6 +5,7 @@ DIREKTIVE: Goldstandard.
            1. CLI-Support (--update) für automatisierten Start.
            2. ETA (Time Remaining) Berechnung im UI.
            3. Auto-Launch der Hauptanwendung nach Update.
+           4. QEMU binfmt Support Installation.
 """
 
 import os
@@ -16,7 +17,7 @@ import socket
 import threading
 import tempfile
 import hashlib
-import argparse # NEU: Für CLI Argumente
+import argparse 
 from pathlib import Path
 from typing import Optional, List, Callable, Set
 import requests 
@@ -51,7 +52,7 @@ IGNORED_EXTENSIONS = {".pyc", ".pyd", ".spec"}
 FRAMEWORK_CORE_FOLDERS = ["orchestrator", "scripts", "configs", "docker"]
 
 # ============================================================================
-# UTILITY FUNCTIONS (MSVC, HASHING) - Identisch zur Vorversion
+# UTILITY FUNCTIONS (MSVC, HASHING)
 # ============================================================================
 
 def _is_msvc_installed() -> bool:
@@ -175,7 +176,7 @@ def install_application(destination_path: Path, desktop_shortcut: bool, log_call
 
 
 # ============================================================================
-# WORKER THREAD (MIT ETA LOGIK)
+# WORKER THREAD (MIT ETA & QEMU LOGIK)
 # ============================================================================
 
 class InstallationWorker(threading.Thread):
@@ -197,7 +198,6 @@ class InstallationWorker(threading.Thread):
         eta_str = ""
         
         if percent > 0 and percent < 100:
-            # Simple lineare Extrapolation
             total_estimated = elapsed / (percent / 100.0)
             remaining = total_estimated - elapsed
             if remaining < 60:
@@ -233,6 +233,27 @@ class InstallationWorker(threading.Thread):
             self.log("MSVC installiert.", "success")
         except: pass
 
+    def _install_qemu_support(self):
+        """Installiert QEMU binfmt Support für Cross-Architecture Docker Builds."""
+        if not self._check_internet_status():
+            self.log("Kein Internet für QEMU-Setup. Überspringe...", "warning")
+            return
+
+        self.log("Installiere QEMU Cross-Architektur Support (Docker)...", "info")
+        try:
+            # Nutze das offizielle tonistiigi/binfmt Image, um Support für ARM64 auf x86 zu installieren
+            subprocess.run(
+                ["docker", "run", "--rm", "--privileged", "tonistiigi/binfmt", "--install", "all"],
+                check=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                capture_output=True
+            )
+            self.log("QEMU binfmt erfolgreich registriert.", "success")
+        except subprocess.CalledProcessError as e:
+            self.log(f"WARNUNG: QEMU Setup fehlgeschlagen: {e}. Builds könnten scheitern.", "error")
+        except Exception as e:
+            self.log(f"Fehler bei QEMU Setup: {e}", "error")
+
     def _pre_pull_docker(self):
         # Nur wenn Internet da ist und Docker läuft
         if not self._check_internet_status(): return
@@ -246,14 +267,25 @@ class InstallationWorker(threading.Thread):
         try:
             self.start_time = time.time()
             self._smart_progress(5, "Prüfe Voraussetzungen...")
+            
+            # 1. MSVC
             self._handle_msvc()
             
+            # 2. QEMU (NEU!)
+            self._smart_progress(15, "Konfiguriere Docker QEMU...")
+            self._install_qemu_support()
+            
+            # 3. Install Files
+            self._smart_progress(20, "Installiere Dateien...")
             install_application(self.target_dir, self.desktop_shortcut, self.log, self._smart_progress)
             
+            # 4. Pre-Pull
+            self._smart_progress(80, "Lade Docker Base Image...")
             self._pre_pull_docker()
+            
             self._smart_progress(100, "Fertig.")
             self.success = True
-            self.message = "Update erfolgreich."
+            self.message = "Installation erfolgreich."
         except Exception as e:
             self.success = False
             self.message = str(e)

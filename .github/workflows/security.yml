@@ -1,0 +1,49 @@
+name: Security & Quality Audit
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  schedule:
+    - cron: '0 0 * * 0' # Wöchentlicher Scan
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Audit Tools
+        run: pip install bandit safety
+
+      - name: Security Scan (Bandit)
+        # Prüft Python-Code auf bekannte Sicherheitslücken (z.B. hardcoded passwords, unsichere execs)
+        # Wir schließen Tests aus (-x tests) und ignorieren Assert-Warnungen (-s B101)
+        run: bandit -r orchestrator/ scripts/ -x tests -s B101
+
+      - name: Dependency Vulnerability Scan (Safety)
+        # Prüft requirements auf bekannte CVEs
+        # Wir exportieren erst die dependencies via poetry (falls vorhanden) oder nutzen pip freeze
+        run: |
+          pip install poetry
+          poetry export -f requirements.txt --output requirements.txt --without-hashes
+          safety check -r requirements.txt
+
+  docker-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run Trivy Vulnerability Scanner (Repo)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          ignore-unfixed: true
+          format: 'table'
+          exit-code: '0' # Auf 1 setzen, um Build bei High-Crit Fehlern zu stoppen
+          severity: 'CRITICAL,HIGH'

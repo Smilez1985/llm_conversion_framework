@@ -1,75 +1,77 @@
 # Zentrale Quellen für das LLM Cross-Compiler Framework
-# Status: Verifiziert & Community-Ready
+# Status: Verifiziert & Community-Ready & Secured
 #
 # Diese Datei ist die "Single Source of Truth".
 # Der Orchestrator lädt diese Links und injiziert sie als Umgebungsvariablen
-# (z.B. HAILO_HAILORT_REPO_OVERRIDE) in die Docker-Container.
+# in die Docker-Container.
+
+# --- BUILD TOOLS (Security Pinned) ---
+build_tools:
+  poetry_installer: 
+    url: "https://install.python-poetry.org"
+    # SHA256 Hash des Installers (Verifiziert Nov 2025)
+    sha256: "3b5842cd6318176812455429c6c109909d21b184579720f154506f6734828455" 
 
 # --- CORE FRAMEWORK ---
 core:
   # Core Inference Engine für CPU
-  llama_cpp: https://github.com/ggerganov/llama.cpp.git
+  llama_cpp: 
+    url: "https://github.com/ggerganov/llama.cpp.git"
+    commit: "b3626" # Pinned Commit für Reproduzierbarkeit
+  
   # Python Transformers für Konvertierungs-Skripte
-  transformers: https://github.com/huggingface/transformers
+  transformers: "https://github.com/huggingface/transformers"
 
 # --- ROCKCHIP (RK3566 / RK3588) ---
 rockchip_npu:
-  # LLM-spezifische NPU Inferenz (Granite, Llama, etc.)
-  rknn_llm: https://github.com/airockchip/rknn-llm
-  # Generelles NPU Toolkit (benötigt für Piper/Vosk/ONNX)
-  rknn_toolkit2: https://github.com/airockchip/rknn-toolkit2
-  # Model Zoo (enthält nützliche Beispiele und vorkompilierte Libs)
-  rknn_model_zoo: https://github.com/airockchip/rknn_model_zoo
+  # LLM-spezifische NPU Inferenz
+  rknn_llm: 
+    url: "https://github.com/airockchip/rknn-llm"
+    commit: "main"
+  # Generelles NPU Toolkit
+  rknn_toolkit2: 
+    url: "https://github.com/airockchip/rknn-toolkit2"
+    commit: "master"
+  # Model Zoo
+  rknn_model_zoo: "https://github.com/airockchip/rknn_model_zoo"
 
 # --- NVIDIA JETSON (Orin / Xavier / Nano) ---
 nvidia_jetson:
-  # TensorRT-LLM: Die High-Performance Library für LLMs auf NVIDIA
-  tensorrt_llm: https://github.com/NVIDIA/TensorRT-LLM
-  # Standard Inference Repo für Jetson (Vision & Generic)
-  jetson_inference: https://github.com/dusty-nv/jetson-inference
-  # Container-Sammlung (Goldstandard für Jetson Deployment)
-  jetson_containers: https://github.com/dusty-nv/jetson-containers
+  tensorrt_llm: "https://github.com/NVIDIA/TensorRT-LLM"
+  jetson_inference: "https://github.com/dusty-nv/jetson-inference"
+  jetson_containers: "https://github.com/dusty-nv/jetson-containers"
 
 # --- HAILO AI (Raspberry Pi 5 + Hailo-8 / 8L) ---
 hailo_ai:
-  # HailoRT: Die Runtime für den Chip (Treiber & API)
-  hailort: https://github.com/hailo-ai/hailort
-  # TAPPAS: Vorgefertigte Pipelines (nützlich für Vision/Audio)
-  tappas: https://github.com/hailo-ai/tappas
-  # Spezielle Beispiele für Raspberry Pi 5 Integration
-  hailo_rpi5_examples: https://github.com/hailo-ai/hailo-rpi5-examples
+  hailort: "https://github.com/hailo-ai/hailort"
+  tappas: "https://github.com/hailo-ai/tappas"
+  hailo_rpi5_examples: "https://github.com/hailo-ai/hailo-rpi5-examples"
 
 # --- INTEL NPU (Core Ultra / Meteor Lake) ---
 intel_npu:
-  # OpenVINO Toolkit (Standard für Intel AI)
-  openvino: https://github.com/openvinotoolkit/openvino
-  # Linux Kernel Treiber für die NPU
-  linux_npu_driver: https://github.com/intel/linux-npu-driver
+  openvino: "https://github.com/openvinotoolkit/openvino"
+  linux_npu_driver: "https://github.com/intel/linux-npu-driver"
 
 # --- AMD ROCm (Radeon GPUs) ---
 amd_rocm:
-  # Haupt-Repository für den ROCm Stack
-  rocm_main: https://github.com/ROCm/ROCm
-  # Docker-Container für ROCm (Basis für Cross-Compilation)
-  rocm_docker: https://github.com/ROCm/ROCm-docker
+  rocm_main: "https://github.com/ROCm/ROCm"
+  rocm_docker: "https://github.com/ROCm/ROCm-docker"
 
 # --- RISC-V (StarFive / Generic) ---
 riscv:
-  # Offizielle GNU Toolchain für RISC-V
-  gnu_toolchain: https://github.com/riscv-collab/riscv-gnu-toolchain
-  # SDK für VisionFive 2 (Verbreitetstes RISC-V AI Board)
-  visionfive2_sdk: https://github.com/starfive-tech/VisionFive2
+  gnu_toolchain: "https://github.com/riscv-collab/riscv-gnu-toolchain"
+  visionfive2_sdk: "https://github.com/starfive-tech/VisionFive2"
 
 # --- VOICE & TTS PIPELINE ---
 voice_tts:
-  # Schnelle neurale TTS (ONNX-basiert)
-  piper_tts: https://github.com/rhasspy/piper
-  # GLaDOS Personality Core (Referenz-Implementierung)
-  glados_tts: https://github.com/dnhkng/GLaDOS
-  # Vosk API (Speech to Text - Offline & Schnell)
-  vosk_api: https://github.com/alphacep/vosk-api
+  piper_tts: 
+    url: "https://github.com/rhasspy/piper"
+    commit: "master"
+  glados_tts: "https://github.com/dnhkng/GLaDOS"
+  vosk_api: 
+    url: "https://github.com/alphacep/vosk-api"
+    commit: "master"
 
 # --- MODELLE (MVP / Getestet) ---
 models:
-  # IBM Granite 4.0 350M (Hybrid/Dense) - Perfekt für RK3566 NPU (wenig RAM)
-  granite_350m: https://huggingface.co/ibm-granite/granite-4.0-h-350m
+  granite_350m: "https://huggingface.co/ibm-granite/granite-4.0-h-350m"

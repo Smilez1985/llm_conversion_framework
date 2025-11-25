@@ -29,7 +29,7 @@ from rich import print as rprint
 # Import Core Components
 from orchestrator.Core.framework import FrameworkManager, FrameworkConfig
 from orchestrator.Core.orchestrator import LLMOrchestrator, BuildRequest, WorkflowType, PriorityLevel
-from orchestrator.Core.builder import BuildEngine, TargetArch, ModelFormat, OptimizationLevel
+from orchestrator.Core.builder import BuildEngine, ModelFormat, OptimizationLevel
 from orchestrator.Core.module_generator import ModuleGenerator
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError
@@ -165,33 +165,17 @@ def format_target_table(targets: List[TargetConfig]) -> Table:
     table.add_column("Name", style="cyan", no_wrap=True)
     table.add_column("Architecture", style="green")
     table.add_column("Status", style="yellow")
-    table.add_column("Boards", style="magenta")
+    table.add_column("Path", style="magenta")
     
     for target in targets:
         status = "✅ Ready" if target.status == "available" else "❌ Not Ready"
-        boards = ", ".join(target.supported_boards[:2]) if target.supported_boards else "None"
-        if target.supported_boards and len(target.supported_boards) > 2:
-            boards += f" (+{len(target.supported_boards) - 2} more)"
-            
-        table.add_row(target.name, target.architecture, status, boards)
+        table.add_row(target.name, target.architecture, status, target.description)
     
     return table
 
 
-def target_arch_from_string(arch_str: str) -> TargetArch:
-    """Convert string to TargetArch enum"""
-    try:
-        return TargetArch[arch_str.upper()]
-    except KeyError:
-        try:
-            return TargetArch(arch_str.lower())
-        except ValueError:
-            # Fallback or error
-            return TargetArch.ARM64
-
-
 def model_format_from_string(format_str: str) -> ModelFormat:
-    """Convert string to ModelFormat enum"""
+    """Convert string to ModelFormat enum (for now, still Enum in builder)"""
     try:
         return ModelFormat[format_str.upper()]
     except KeyError:
@@ -259,18 +243,19 @@ def list_targets(ctx: FrameworkContext, format: str):
             console.print("[red]Build engine not available[/red]")
             sys.exit(1)
         
+        # Get raw list of targets (dicts) from BuildEngine
         available_targets = ctx.build_engine.list_available_targets()
         
         targets_config_objects = []
         for target_info in available_targets:
             target_config = TargetConfig(
-                name=target_info.get("target_arch", "unknown"),
+                name=target_info.get("name", "unknown"),
                 architecture=target_info.get("target_arch", "unknown"),
-                status="available" if target_info.get("available", False) else "unavailable",
+                status="available",
                 version="1.0.0",
-                maintainer="Framework Team",
-                description=f"Target for {target_info.get('target_arch', 'unknown')} architecture",
-                supported_boards=target_info.get("modules", []),
+                maintainer="Community",
+                description=str(target_info.get("path", "")),
+                supported_boards=[],
                 docker_image="llm-framework/builder"
             )
             targets_config_objects.append(target_config)
@@ -384,7 +369,7 @@ def build():
 
 @build.command('start')
 @click.option('--model', '-m', required=True, help='Model name (HuggingFace) or local path')
-@click.option('--target', '-t', required=True, help='Target hardware architecture')
+@click.option('--target', '-t', required=True, help='Target hardware architecture (folder name)')
 @click.option('--format', '-f', default='gguf', help='Target format (gguf, onnx, tflite)')
 @click.option('--quantization', '-q', help='Quantization method (q4_0, q8_0, etc.)')
 @click.option('--output-dir', '-o', help='Custom output directory')
@@ -403,8 +388,9 @@ def start_build(ctx: FrameworkContext, model: str, target: str, format: str,
     """Start a new build job"""
     
     try:
-        target_arch = target_arch_from_string(target)
-        target_format = model_format_from_string(format)
+        # Target is now just a string!
+        target_arch_str = target
+        target_format_enum = model_format_from_string(format)
         
         opt_mapping = {
             'fast': OptimizationLevel.FAST,
@@ -432,8 +418,8 @@ def start_build(ctx: FrameworkContext, model: str, target: str, format: str,
             workflow_type=WorkflowType.SIMPLE_CONVERSION,
             priority=priority_level,
             models=[model],
-            targets=[target_arch],
-            target_formats=[target_format],
+            targets=[target_arch_str], # Passed as list of strings
+            target_formats=[target_format_enum],
             optimization_level=optimization_level,
             quantization_options=[quantization] if quantization else [],
             parallel_builds=parallel,

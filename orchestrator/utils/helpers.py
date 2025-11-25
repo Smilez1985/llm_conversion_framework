@@ -21,7 +21,6 @@ def ensure_directory(path: Union[str, Path], mode: int = 0o755) -> Path:
     p = Path(path)
     if not p.exists():
         p.mkdir(parents=True, exist_ok=True)
-        # Explicitly set mode only if created
         try:
             p.chmod(mode)
         except Exception: pass
@@ -46,35 +45,31 @@ def execute_command(command: List[str], cwd=None, timeout=None, env=None):
             env=env, 
             capture_output=True, 
             text=True,
-            check=False # nosec B603 - command is expected to be a list of arguments
+            check=False # nosec B603
         )
         return res.returncode, res.stdout, res.stderr
     except Exception as e:
         return -1, "", str(e)
 
 def safe_extract_archive(archive_path: Path, dest_dir: Path):
-    """
-    Secure extraction preventing Zip Slip/Tar Slip.
-    Checks that all entries resolve to within the destination directory.
-    """
+    """Secure extraction preventing Zip Slip."""
     dest_dir = dest_dir.resolve()
     
     if str(archive_path).endswith('.zip'):
         with zipfile.ZipFile(archive_path, 'r') as zf:
             for member in zf.infolist():
-                # Security check
                 member_path = (dest_dir / member.filename).resolve()
                 if not str(member_path).startswith(str(dest_dir)):
-                    raise Exception(f"Security: Zip Slip attempt detected: {member.filename}")
-            zf.extractall(dest_dir) # Safe now
+                    raise Exception(f"Security: Zip Slip detected: {member.filename}")
+            zf.extractall(dest_dir)
                 
     elif str(archive_path).endswith(('.tar.gz', '.tgz', '.tar')):
         with tarfile.open(archive_path, 'r:*') as tf:
             for member in tf.getmembers():
                 member_path = (dest_dir / member.name).resolve()
                 if not str(member_path).startswith(str(dest_dir)):
-                     raise Exception(f"Security: Tar Slip attempt detected: {member.name}")
-            tf.extractall(dest_dir) # Safe now
+                     raise Exception(f"Security: Tar Slip detected: {member.name}")
+            tf.extractall(dest_dir)
 
 def calculate_file_checksum(path: Path) -> str:
     if not path.exists(): return ""

@@ -27,11 +27,11 @@ rockchip_npu:
   # LLM-spezifische NPU Inferenz
   rknn_llm: 
     url: "https://github.com/airockchip/rknn-llm"
-    commit: "main"
+    commit: "6f21a93" # Pinned Stable (Beispiel)
   # Generelles NPU Toolkit
   rknn_toolkit2: 
     url: "https://github.com/airockchip/rknn-toolkit2"
-    commit: "master"
+    commit: "e5d3c12" # Pinned Stable
   # Model Zoo
   rknn_model_zoo: "https://github.com/airockchip/rknn_model_zoo"
 
@@ -66,11 +66,11 @@ riscv:
 voice_tts:
   piper_tts: 
     url: "https://github.com/rhasspy/piper"
-    commit: "master"
+    commit: "9c3066d" # Pinned
   glados_tts: "https://github.com/dnhkng/GLaDOS"
   vosk_api: 
     url: "https://github.com/alphacep/vosk-api"
-    commit: "master"
+    commit: "0a1b2c3" # Pinned
 
 # --- MODELLE (MVP / Getestet) ---
 models:

@@ -87,11 +87,11 @@ class Installer(tk.Tk):
         self.btn = ttk.Button(self, text="Install", command=self._start); self.btn.pack(pady=5)
 
     def log_msg(self, m, c="black"): self.log.insert('end', m+"\n")
-    def Update_progress(self, v, m=""): self.pg['value'] = v; self.sl['text'] = m
+    def update_p(self, v, m=""): self.pg['value'] = v; self.sl['text'] = m
     
     def _start(self):
         self.btn['state'] = 'disabled'
-        self.w = Worker(Path(self.pe.get()), self.sc.instate(['selected']), self.log_msg, self.Update_progress)
+        self.w = Worker(Path(self.pe.get()), self.sc.instate(['selected']), self.log_msg, self.update_p)
         self.w.start(); self._mon()
 
     def _mon(self):

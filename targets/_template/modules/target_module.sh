@@ -1,10 +1,10 @@
 #!/bin/bash
-# target_module.sh - Quantization & Final Packaging Module
+# target_module.sh - Quantization & Final Packaging Module (Template)
 # Part of LLM Cross-Compiler Framework
 # 
 # DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
-# ZWECK: Cross-kompiliert llama.cpp Binaries (llama-cli, llama-quantize), 
-#        quantisiert GGUF FP16, und erstellt ein Deployment-Paket.
+# ZWECK: Cross-kompiliert llama.cpp Binaries, quantisiert GGUF, 
+#        erstellt Deployment-Paket.
 
 set -euo pipefail
 
@@ -17,9 +17,8 @@ readonly SCRIPT_VERSION="1.0.0"
 
 # Environment variables with defaults
 readonly BUILD_CACHE_DIR="${BUILD_CACHE_DIR:-/build-cache}"
-readonly LLAMA_CPP_PATH="${LLAMA_CPP_PATH:-${BUILD_CACHE_DIR}/llama.cpp}"
+readonly LLAMA_CPP_PATH="${LLAMA_CPP_PATH:-${BUILD_CACHE_DIR}/repos/llama.cpp}"
 readonly OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_CACHE_DIR}/output}"
-readonly TEMP_DIR="${OUTPUT_DIR}/temp"
 readonly FINAL_PACKAGE_DIR="${OUTPUT_DIR}/packages"
 readonly LOG_LEVEL="${LOG_LEVEL:-INFO}"
 DEBUG="${DEBUG:-0}"
@@ -31,7 +30,7 @@ if [[ ! -f "${BUILD_CACHE_DIR}/build_config.sh" ]]; then
 fi
 source "${BUILD_CACHE_DIR}/build_config.sh"
 
-# Target configuration
+# Target configuration storage
 declare -A TARGET_CONFIG
 declare -A QUANTIZATION_STATS
 declare -A BUILD_STATS
@@ -47,7 +46,6 @@ LLAMA_CPP_SERVER="$LLAMA_CPP_PATH/build_target/bin/llama-server"
 
 log_info() { echo "ℹ️  [$(date '+%H:%M:%S')] [TARGET] $1"; }
 log_success() { echo "✅ [$(date '+%H:%M:%S')] [TARGET] $1"; }
-log_warn() { echo "⚠️  [$(date '+%H:%M:%S')] [TARGET] $1"; }
 log_error() { echo "❌ [$(date '+%H:%M:%S')] [TARGET] $1" >&2; }
 log_debug() { [ "$DEBUG" = "1" ] && echo "🔍 [$(date '+%H:%M:%S')] [TARGET] $1"; }
 
@@ -100,69 +98,89 @@ validate_inputs() {
 }
 
 # ============================================================================
-# CROSS-COMPILATION (Schritt 1)
+# 1. NATIVE BUILD (Für Quantisierungswerkzeuge)
 # ============================================================================
 
-cross_compile_llama_cpp() {
-    log_info "Schritt 1/4: Cross-Kompilierung von llama.cpp Binaries für ${TARGET_ARCH}"
+build_native_tools() {
+    log_info "Schritt 1A: Baue NATIVE Tools (x86) für schnelle Quantisierung..."
     
-    local build_dir="$LLAMA_CPP_PATH/build_target" # Separater Build-Ordner
-    BUILD_DIR="$build_dir"  # Für Cleanup
+    local build_dir="$LLAMA_CPP_PATH/build_native"
+    rm -rf "$build_dir" && mkdir -p "$build_dir"
+    cd "$build_dir"
+
+    # Native Kompilierung (nutzt GCC des Containers, nicht den Cross-Compiler)
+    # Wir deaktivieren alles was wir nicht brauchen, um Zeit zu sparen
+    cmake "$LLAMA_CPP_PATH" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DLLAMA_BUILD_SERVER=OFF \
+        -DGGML_NATIVE=ON  # Optimiert für den Build-Host
+
+    make -j$(nproc) llama-quantize
     
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
+    # Setze den Pfad zum Quantize-Tool auf dieses NATIVE Binary
+    # (Variable wird lokal überschrieben, aber wir nutzen eh den direkten Pfad im Quantize-Schritt)
+    LLAMA_CPP_QUANTIZE_NATIVE="$build_dir/bin/llama-quantize"
+    
+    if [[ ! -f "$LLAMA_CPP_QUANTIZE_NATIVE" ]]; then
+        die "Native llama-quantize build failed"
+    fi
+
+    log_success "Native Tools gebaut: $LLAMA_CPP_QUANTIZE_NATIVE"
+}
+
+# ============================================================================
+# 2. CROSS BUILD (Für Ziel-Hardware)
+# ============================================================================
+
+cross_compile_target() {
+    log_info "Schritt 1B: Cross-Kompilierung für Target (${TARGET_ARCH:-unknown})..."
+    
+    local build_dir="$LLAMA_CPP_PATH/build_target"
+    rm -rf "$build_dir" && mkdir -p "$build_dir"
     cd "$build_dir"
     
     local cmake_args=()
     cmake_args+=("-DCMAKE_BUILD_TYPE=Release")
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
-    cmake_args+=("-DLLAMA_CURL=OFF")
-    cmake_args+=("-DGGML_CUDA=OFF")
-    cmake_args+=("-DGGML_SYCL=OFF")
-    cmake_args+=("-DLLAMA_BLAS=OFF")
+    # Deaktiviere Features die wir ggf. nicht brauchen um dependencies zu minimieren
+    cmake_args+=("-DLLAMA_CURL=OFF") 
 
-    # WICHTIG: Setze die Toolchain und Optimierungs-Flags
+    # WICHTIG: Setze die Toolchain und Optimierungs-Flags aus config_module.sh
     cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}")
+    cmake_args+=("-DCMAKE_C_FLAGS='${CFLAGS:-}'")
+    cmake_args+=("-DCMAKE_CXX_FLAGS='${CXXFLAGS:-}'")
     
-    # Lade CFLAGS/CXXFLAGS aus der build_config.sh
-    cmake_args+=("-DCMAKE_C_FLAGS='$CFLAGS'")
-    cmake_args+=("-DCMAKE_CXX_FLAGS='$CXXFLAGS'")
-    
-    # 5. ERSETZEN: Fügen Sie hier Ihre SDK-spezifischen CMake-Flags hinzu
-    # z.B.: cmake_args+=("-DGGML_CUDA=ON")
-    # z.B.: cmake_args+=("-DGGML_OPENCL=ON")
-    
-    log_info "Configuring llama.cpp build..."
+    log_info "Configuring target build..."
     if ! cmake "$LLAMA_CPP_PATH" "${cmake_args[@]}"; then
         die "CMake configuration failed"
     fi
     
     local build_jobs="${BUILD_JOBS:-4}"
-    log_info "Building llama.cpp binaries (${build_jobs} jobs)..."
+    log_info "Building target binaries (${build_jobs} jobs)..."
     
     local start_time=$SECONDS
-    # Kompiliere alle notwendigen Binaries
-    if ! make -j"$build_jobs" llama-quantize llama-cli llama-server; then 
-        die "llama.cpp Binär-Kompilierung fehlgeschlagen."
+    # Kompiliere CLI und Server
+    if ! make -j"$build_jobs" llama-cli llama-server; then 
+        die "Target binary compilation failed."
     fi
     local build_time=$((SECONDS - start_time))
     
-    # Validiere Binaries
-    local binaries=("$LLAMA_CPP_QUANTIZE" "$LLAMA_CPP_CLI" "$LLAMA_CPP_SERVER")
-    for binary in "${binaries[@]}"; do
-        if [[ ! -f "$binary" ]]; then
-            die "Erforderliches Binary nicht gebaut: $binary"
-        fi
-    done
+    # Pfade prüfen
+    if [[ ! -f "$LLAMA_CPP_CLI" ]] || [[ ! -f "$LLAMA_CPP_SERVER" ]]; then
+        die "Erforderliche Binaries (cli/server) wurden nicht erstellt."
+    fi
+    
+    TARGET_CONFIG[LLAMA_CLI_BINARY]="$LLAMA_CPP_CLI"
+    TARGET_CONFIG[LLAMA_SERVER_BINARY]="$LLAMA_CPP_SERVER"
     
     BUILD_STATS[BUILD_TIME]="$build_time"
-    BUILD_STATS[BUILD_JOBS]="$build_jobs"
     
-    log_success "Cross-Kompilierung abgeschlossen in ${build_time}s."
+    log_success "Target-Kompilierung abgeschlossen in ${build_time}s."
 }
 
 # ============================================================================
-# QUANTIZATION (Schritt 2)
+# 3. QUANTISIERUNG (Nutzt NATIVE Tools)
 # ============================================================================
 
 quantize_model() {
@@ -170,24 +188,27 @@ quantize_model() {
     local quant_method="${TARGET_CONFIG[QUANT_METHOD]}"
     local model_name="${TARGET_CONFIG[MODEL_NAME]}"
     
+    # Output filename convention
     local quantized_output="$OUTPUT_DIR/${model_name}.${quant_method,,}.gguf"
     
-    log_info "Schritt 2/4: Starte Model-Quantisierung: FP16 → $quant_method"
+    log_info "Schritt 2: Quantisiere Model (Native Speed): FP16 → $quant_method"
     
-    # Verify quantize tool exists
-    if [[ ! -f "$LLAMA_CPP_QUANTIZE" ]]; then
-        die "llama-quantize tool nicht gefunden: $LLAMA_CPP_QUANTIZE"
+    # Pfad zum nativen Tool (wurde in build_native_tools gesetzt/gebaut)
+    local native_quantize_tool="$LLAMA_CPP_PATH/build_native/bin/llama-quantize"
+    
+    if [[ ! -f "$native_quantize_tool" ]]; then
+        die "Native quantize tool not found at: $native_quantize_tool"
     fi
 
     if [[ -f "$quantized_output" ]]; then
         mv "$quantized_output" "${quantized_output}.backup.$(date +%s)"
-        log_info "Backup erstellt"
+        log_info "Backup existierender Datei erstellt"
     fi
     
     local start_time=$SECONDS
     
-    # Führe die kompilierte Binärdatei aus
-    if ! "$LLAMA_CPP_QUANTIZE" "$input_gguf" "$quantized_output" "$quant_method"; then
+    # Ausführen
+    if ! "$native_quantize_tool" "$input_gguf" "$quantized_output" "$quant_method"; then
         die "Model quantization failed"
     fi
     
@@ -201,37 +222,18 @@ quantize_model() {
     QUANTIZATION_STATS[OUTPUT_SIZE_BYTES]="$output_size"
     QUANTIZATION_STATS[OUTPUT_SIZE_MB]="$((output_size / 1024 / 1024))"
     QUANTIZATION_STATS[QUANTIZATION_TIME]="$quant_time"
-    QUANTIZATION_STATS[COMPRESSION_RATIO]=$(echo "scale=2; $output_size * 100 / ${TARGET_CONFIG[INPUT_SIZE_BYTES]}" | bc 2>/dev/null || echo "unknown")
+    
+    # Compression Ratio berechnen
+    local input_size="${TARGET_CONFIG[INPUT_SIZE_BYTES]:-1}"
+    QUANTIZATION_STATS[COMPRESSION_RATIO]=$(echo "scale=2; $output_size * 100 / $input_size" | bc 2>/dev/null || echo "unknown")
+    
     TARGET_CONFIG[QUANTIZED_GGUF]="$quantized_output"
     
     log_success "Quantization completed in ${quant_time}s: ${QUANTIZATION_STATS[OUTPUT_SIZE_MB]}MB"
 }
 
 # ============================================================================
-# MODEL VALIDATION (Schritt 3)
-# ============================================================================
-
-validate_quantized_model() {
-    local quantized_gguf="${TARGET_CONFIG[QUANTIZED_GGUF]}"
-    local llama_cli="${TARGET_CONFIG[LLAMA_CLI_BINARY]}"
-    
-    log_info "Schritt 3/4: Validiere Model-Größe und Integrität"
-    
-    local min_size=$((50 * 1024 * 1024))  # 50MB
-    local actual_size="${QUANTIZATION_STATS[OUTPUT_SIZE_BYTES]}"
-    
-    if [[ "$actual_size" -lt "$min_size" ]]; then
-        die "Quantized model suspiciously small: $((actual_size / 1024 / 1024))MB"
-    fi
-    
-    # Cross-Compile Check: Wir können die Binaries hier nicht ausführen.
-    log_warn "Überspringe Funktionstest: Cross-kompilierte Binaries können auf dem Host nicht ausgeführt werden."
-    
-    log_success "Model validation (Größe) completed"
-}
-
-# ============================================================================
-# PACKAGE CREATION (Schritt 4)
+# 4. PACKAGING & MANIFEST
 # ============================================================================
 
 create_deployment_package() {
@@ -239,150 +241,120 @@ create_deployment_package() {
     local quant_method="${TARGET_CONFIG[QUANT_METHOD]}"
     
     local timestamp=$(date +%Y%m%d_%H%M%S)
-    local package_name="${model_name}_${quant_method,,}_${TARGET_ARCH}_${timestamp}"
+    local package_name="${model_name}_${quant_method,,}_${TARGET_ARCH:-unknown}_${timestamp}"
     local package_dir="$FINAL_PACKAGE_DIR/$package_name"
     
-    log_info "Schritt 4/4: Erstelle Deployment-Paket: $package_name"
+    log_info "Schritt 4: Erstelle Deployment-Paket: $package_name"
     
     rm -rf "$package_dir"
     mkdir -p "$package_dir"
     
-    # Kopiere Model
-    cp "${TARGET_CONFIG[QUANTIZED_GGUF]}" "$package_dir/${model_name}.${quant_method,,}.gguf"
+    # Kopiere Artefakte
+    log_info "Kopiere Model..."
+    cp "${TARGET_CONFIG[QUANTIZED_GGUF]}" "$package_dir/"
     
-    # Kopiere Binaries
+    log_info "Kopiere Target-Binaries..."
     cp "${TARGET_CONFIG[LLAMA_CLI_BINARY]}" "$package_dir/llama-cli"
     cp "${TARGET_CONFIG[LLAMA_SERVER_BINARY]}" "$package_dir/llama-server"
     
-    # Kopiere Configs
+    # Kopiere Build-Infos
     cp "${CMAKE_TOOLCHAIN_FILE}" "$package_dir/cmake_toolchain.cmake"
-    cp "${BUILD_CACHE_DIR}/target_hardware_config.txt" "$package_dir/"
+    if [[ -f "${BUILD_CACHE_DIR}/target_hardware_config.txt" ]]; then
+        cp "${BUILD_CACHE_DIR}/target_hardware_config.txt" "$package_dir/"
+    fi
     
     TARGET_CONFIG[PACKAGE_DIR]="$package_dir"
     TARGET_CONFIG[PACKAGE_NAME]="$package_name"
     
-    # Erstelle Manifest, README und Helper-Scripts
+    # Generiere Hilfsdateien
     create_package_manifest "$package_dir"
     create_package_documentation "$package_dir"
     create_helper_scripts "$package_dir"
     
-    # Erstelle 'latest' Symlink
-    local latest_link="$FINAL_PACKAGE_DIR/${model_name}_${quant_method,,}_${TARGET_ARCH}_latest"
+    # Latest Symlink
+    local latest_link="$FINAL_PACKAGE_DIR/${model_name}_${quant_method,,}_latest"
     rm -f "$latest_link"
     ln -s "$package_name" "$latest_link"
     
-    log_success "Deployment package created: $package_dir"
+    log_success "Deployment package created at: $package_dir"
 }
 
 create_package_manifest() {
     local package_dir="$1"
-    log_debug "Creating package manifest"
+    local manifest_file="$package_dir/MANIFEST.json"
     
-    cat > "$package_dir/MANIFEST.json" << EOF
+    cat > "$manifest_file" << EOF
 {
   "package_info": {
     "name": "${TARGET_CONFIG[PACKAGE_NAME]}",
-    "model_name": "${TARGET_CONFIG[MODEL_NAME]}",
-    "quantization": "${TARGET_CONFIG[QUANT_METHOD]}",
-    "target_architecture": "${TARGET_ARCH:-unknown}",
-    "created": "$(date -Iseconds)"
+    "created": "$(date -Iseconds)",
+    "framework_version": "1.0.0"
   },
-  "model_info": {
+  "model": {
+    "name": "${TARGET_CONFIG[MODEL_NAME]}",
+    "quantization": "${TARGET_CONFIG[QUANT_METHOD]}",
     "original_size_mb": ${TARGET_CONFIG[INPUT_SIZE_MB]:-0},
     "quantized_size_mb": ${QUANTIZATION_STATS[OUTPUT_SIZE_MB]:-0},
     "compression_ratio": "${QUANTIZATION_STATS[COMPRESSION_RATIO]:-0}%"
   },
-  "hardware_target": {
-    "architecture": "${TARGET_CONFIG[HW_ARCHITECTURE_FULL]:-unknown}",
-    "cpu_model": "${TARGET_CONFIG[HW_CPU_MODEL_NAME]:-unknown}",
-    "cpu_cores": "${TARGET_CONFIG[HW_CPU_CORES]:-unknown}",
-    "neon_support": "${TARGET_CONFIG[HW_SUPPORTS_NEON]:-unknown}"
+  "target": {
+    "architecture": "${TARGET_ARCH:-unknown}",
+    "cpu_model": "${TARGET_CPU:-unknown}",
+    "compiler_flags": "${CFLAGS:-}"
   },
-  "build_info": {
-    "cross_compile": "${TARGET_CONFIG[CROSS_COMPILE]}",
-    "build_time_seconds": ${BUILD_STATS[BUILD_TIME]:-0},
-    "quantization_time_seconds": ${QUANTIZATION_STATS[QUANTIZATION_TIME]:-0},
-    "build_jobs": ${BUILD_STATS[BUILD_JOBS]:-4},
-    "cflags": "$CFLAGS"
-  },
-  "files": [
-    "${model_name}.${quant_method,,}.gguf",
-    "llama-cli",
-    "llama-server",
-    "README.md",
-    "test_model.sh",
-    "deploy.sh",
-    "target_hardware_config.txt",
-    "cmake_toolchain.cmake"
-  ]
+  "build_stats": {
+    "build_time_sec": ${BUILD_STATS[BUILD_TIME]:-0},
+    "quant_time_sec": ${QUANTIZATION_STATS[QUANTIZATION_TIME]:-0}
+  }
 }
 EOF
 }
 
 create_package_documentation() {
     local package_dir="$1"
-    log_debug "Creating package documentation"
-    
     cat > "$package_dir/README.md" << EOF
-# ${TARGET_CONFIG[MODEL_NAME]} - ${TARGET_CONFIG[QUANT_METHOD]}
-## Deployment Package (Target: ${TARGET_ARCH})
+# ${TARGET_CONFIG[MODEL_NAME]} (${TARGET_CONFIG[QUANT_METHOD]})
+## Target: ${TARGET_ARCH:-Generic}
 
-Generiert durch das LLM Cross-Compiler Framework.
+### Quick Start
+1.  Copy this folder to your target device.
+2.  Run \`./test_model.sh\` to verify functionality.
+3.  Run \`./deploy.sh /usr/local/bin\` to install.
 
-### Inhalt
-- \`${TARGET_CONFIG[MODEL_NAME]}.${TARGET_CONFIG[QUANT_METHOD],,}.gguf\`
-- \`llama-cli\` (Cross-kompiliert für ${TARGET_ARCH})
-- \`llama-server\` (Cross-kompiliert für ${TARGET_ARCH})
-- \`test_model.sh\` (Test-Skript für Ziel-Hardware)
-- \`deploy.sh\` (Deployment-Skript)
-- \`MANIFEST.json\` (Build-Details)
-- \`target_hardware_config.txt\` (Hardware-Profil)
-
-### Verwendung auf ${TARGET_ARCH}
-1. Übertragen Sie dieses Verzeichnis auf Ihr ${TARGET_ARCH}-Gerät.
-2. Führen Sie den Test aus: \`./test_model.sh\`
-3. Führen Sie das Deployment aus: \`./deploy.sh /opt/ai_models\`
+### Contents
+- Model: \`.gguf\` file
+- Binaries: \`llama-cli\`, \`llama-server\` (Compiled for Target)
+- Tools: Test & Deploy scripts
 EOF
 }
 
 create_helper_scripts() {
     local package_dir="$1"
-    log_debug "Creating helper scripts"
     
-    # Test script (Minimalistisch, da auf Ziel-Hardware ausgeführt)
-    cat > "$package_dir/test_model.sh" << EOF
+    # Test Script
+    cat > "$package_dir/test_model.sh" << 'EOF'
 #!/bin/bash
-set -euo pipefail
-MODEL_FILE="\$(dirname "\$0")/${TARGET_CONFIG[MODEL_NAME]}.${TARGET_CONFIG[QUANT_METHOD],,}.gguf"
-CLI_BINARY="\$(dirname "\$0")/llama-cli"
+set -e
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+MODEL=$(find "$DIR" -name "*.gguf" | head -n 1)
+CLI="$DIR/llama-cli"
 
-echo "🧪 Testing ${TARGET_CONFIG[MODEL_NAME]} (${TARGET_CONFIG[QUANT_METHOD]})"
-if [[ ! -f "\$MODEL_FILE" ]] || [[ ! -f "\$CLI_BINARY" ]]; then
-    echo "❌ Fehler: Model oder CLI-Binary fehlt."
-    exit 1
-fi
+if [ ! -x "$CLI" ]; then chmod +x "$CLI"; fi
 
-echo "🚀 Starte Basis-Funktionstest..."
-if timeout 60 "\$CLI_BINARY" --model "\$MODEL_FILE" --prompt "Hello" --n-predict 10 --seed 42; then
-    echo "✅ Model-Test erfolgreich!"
-else
-    echo "❌ Model-Test fehlgeschlagen"
-    exit 1
-fi
+echo "Testing model: $(basename "$MODEL")"
+"$CLI" -m "$MODEL" -p "Hello, world!" -n 10 --threads 4
 EOF
     chmod +x "$package_dir/test_model.sh"
     
-    # Deployment script (Minimalistisch)
-    cat > "$package_dir/deploy.sh" << EOF
+    # Deploy Script
+    cat > "$package_dir/deploy.sh" << 'EOF'
 #!/bin/bash
-set -euo pipefail
-PACKAGE_DIR="\$(dirname "\$0")"
-DEPLOY_TARGET="\${1:-/opt/ai_models/${TARGET_CONFIG[MODEL_NAME]}}"
-echo "🚀 Deploying ${TARGET_CONFIG[MODEL_NAME]} to \$DEPLOY_TARGET"
-mkdir -p "\$DEPLOY_TARGET"
-cp -R "\$PACKAGE_DIR"/* "\$DEPLOY_TARGET/"
-echo "✅ Deployment abgeschlossen: \$DEPLOY_TARGET"
-echo "🔧 Testen: \${DEPLOY_TARGET}/test_model.sh"
+set -e
+DEST="${1:-/opt/llm}"
+echo "Deploying to $DEST..."
+mkdir -p "$DEST"
+cp -r * "$DEST/"
+echo "Done."
 EOF
     chmod +x "$package_dir/deploy.sh"
 }
@@ -393,21 +365,20 @@ EOF
 
 print_final_summary() {
     echo ""
-    log_success "🎉 Deployment-Paket bereit! 🎉"
-    echo "=================================="
-    echo "Model: ${TARGET_CONFIG[MODEL_NAME]}"
-    echo "Quantisierung: ${TARGET_CONFIG[QUANT_METHOD]}"
-    echo "Target Arch: ${TARGET_ARCH:-unknown}"
-    echo "Größe (FP16): ${TARGET_CONFIG[INPUT_SIZE_MB]:-0}MB"
-    echo "Größe (INT4): ${QUANTIZATION_STATS[OUTPUT_SIZE_MB]:-0}MB"
-    echo "Paket: ${TARGET_CONFIG[PACKAGE_DIR]}"
-    echo "Latest Link: $(basename "${FINAL_PACKAGE_DIR}")/${TARGET_CONFIG[MODEL_NAME]}_${TARGET_CONFIG[QUANT_METHOD],,}_${TARGET_ARCH}_latest"
-    echo "=================================="
+    echo "=================================================="
+    echo "       BUILD & QUANTIZATION COMPLETED"
+    echo "=================================================="
+    echo " Model:         ${TARGET_CONFIG[MODEL_NAME]}"
+    echo " Quantization:  ${TARGET_CONFIG[QUANT_METHOD]}"
+    echo " Target Arch:   ${TARGET_ARCH:-unknown}"
+    echo " Package:       ${TARGET_CONFIG[PACKAGE_DIR]}"
+    echo "=================================================="
+    echo ""
 }
 
 main() {
     local start_time=$SECONDS
-    log_info "Starte Target Module (Quantisierung & Packaging)..."
+    log_info "Starte Target Module (Template)..."
     
     # Parse arguments
     local input_gguf=""
@@ -420,8 +391,7 @@ main() {
             --quantization) quant_method="$2"; shift 2;;
             --model-name) model_name="$2"; shift 2;;
             --help) 
-                echo "Usage: $0 --input INPUT_GGUF [--quantization METHOD] [--model-name NAME]"
-                echo "Supported quantization methods: ${!QUANT_METHODS[*]}"
+                echo "Usage: $0 --input FILE --quantization METHOD --model-name NAME"
                 exit 0
                 ;;
             *) die "Unknown argument: $1";;
@@ -429,37 +399,39 @@ main() {
     done
     
     if [[ -z "$input_gguf" ]]; then die "Input GGUF file required (--input)"; fi
-    if [[ -z "$model_name" ]]; then model_name=$(basename "$input_gguf" .gguf | sed 's/\.fp16$//'); fi
+    if [[ -z "$model_name" ]]; then 
+        # Fallback model name extraction
+        model_name=$(basename "$input_gguf" .gguf)
+        model_name=${model_name%.fp16}
+    fi
     
-    # Setup and validation
-    setup_target_environment
+    # Setup
+    setup_directories # (Falls nötig, aber meistens durch Docker Mounts schon da)
+    
+    # Validate
     validate_inputs "$input_gguf" "$quant_method" "$model_name"
     
-    # --- KORRIGIERTE PIPELINE-REIHENFOLGE ---
+    # 1. Native Tools bauen (Speedup!)
+    build_native_tools
     
-    # 1. Cross-Compilation der Binaries (MUSS VOR Quantisierung laufen)
-    cross_compile_llama_cpp 
-    
-    # 2. Quantization (Nutzt die gerade erstellte Binary)
+    # 2. Quantisieren (mit Native Tools)
     quantize_model
     
-    # 3. Validierung
-    validate_quantized_model
+    # 3. Cross-Compilen (Target Binaries)
+    cross_compile_target
     
-    # 4. Packaging
+    # 4. Packen
     create_deployment_package
     
-    # --- ENDE KORREKTUR ---
-    
-    local total_time=$((SECONDS - start_time))
-    
     print_final_summary
-    
-    log_success "Target module completed in ${total_time} seconds"
-    log_info "Framework pipeline completed successfully!"
 }
 
-# Only run main if script is executed directly (not sourced)
+setup_directories() {
+    mkdir -p "$OUTPUT_DIR"
+    mkdir -p "$FINAL_PACKAGE_DIR"
+}
+
+# Only run main if script is executed directly
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
 fi

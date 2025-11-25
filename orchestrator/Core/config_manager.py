@@ -22,33 +22,27 @@ import re
 import yaml
 
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.validation import ValidationError
+from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, safe_json_load
-
 
 # ============================================================================
 # ENUMS AND CONSTANTS
 # ============================================================================
 
 class ConfigFormat(Enum):
-    """Configuration file formats"""
     YAML = "yaml"
     JSON = "json"
     ENV = "env"
     TOML = "toml"
 
-
 class ConfigScope(Enum):
-    """Configuration scope levels"""
     GLOBAL = "global"
     USER = "user"
     PROJECT = "project"
     ENVIRONMENT = "environment"
     RUNTIME = "runtime"
 
-
 class AdvancedFeature(Enum):
-    """Optional advanced features"""
     SECRETS_MANAGEMENT = "secrets_management"
     DYNAMIC_UPDATES = "dynamic_updates"
     TEMPLATES = "templates"
@@ -56,14 +50,12 @@ class AdvancedFeature(Enum):
     ENVIRONMENTS = "environments"
     COMPLIANCE = "compliance"
 
-
 # ============================================================================
 # DATA MODELS
 # ============================================================================
 
 @dataclass
 class ConfigSchema:
-    """Configuration schema definition"""
     field_name: str
     field_type: type
     required: bool = False
@@ -110,14 +102,12 @@ class ConfigSchema:
             return False
         return True
 
-
 @dataclass
 class ConfigSource:
     source_type: str
     source_path: Optional[str] = None
     loaded_at: Optional[datetime] = None
     priority: int = 0
-
 
 @dataclass
 class ConfigValue:
@@ -141,7 +131,6 @@ class ConfigValue:
         _, errors = self.schema.validate_value(self.value)
         return errors
 
-
 @dataclass
 class AdvancedModeConfig:
     enabled: bool = False
@@ -159,7 +148,6 @@ class AdvancedModeConfig:
     def enable_feature(self, feature: AdvancedFeature):
         if self.enabled:
             self.enabled_features.add(feature)
-
 
 # ============================================================================
 # CONFIGURATION MANAGER CLASS
@@ -241,7 +229,7 @@ class ConfigManager:
             ConfigSchema("gui_refresh_interval", int, False, 30, "GUI refresh interval"),
             ConfigSchema("api_enabled", bool, False, False, "Enable API server"),
             ConfigSchema("api_port", int, False, 8000, "API server port"),
-            # Security Fix: Localhost only
+            # SECURITY FIX: Default to localhost
             ConfigSchema("api_host", str, False, "127.0.0.1", "API server host")
         ]
         
@@ -403,6 +391,7 @@ class ConfigManager:
                 self.logger.warning(f"Listener error: {e}")
 
     def add_change_listener(self, listener: Callable[[str, Any], None]):
+        """Add configuration change listener"""
         if self.advanced_mode.is_feature_enabled(AdvancedFeature.DYNAMIC_UPDATES):
             self.change_listeners.append(listener)
     

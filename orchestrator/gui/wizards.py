@@ -15,9 +15,7 @@ from orchestrator.Core.module_generator import ModuleGenerator
 class ModuleCreationWizard(QWizard):
     """
     5-Step Module Creation Wizard.
-    Führt den Benutzer durch die Erstellung eines neuen Hardware-Targets.
     """
-    
     def __init__(self, targets_dir: Path, parent=None):
         super().__init__(parent)
         self.targets_dir = targets_dir
@@ -25,7 +23,6 @@ class ModuleCreationWizard(QWizard):
         self.setWizardStyle(QWizard.ModernStyle)
         self.setMinimumSize(800, 600)
         
-        # WICHTIG: Flags für Resize/Min/Max, damit das Fenster nicht fixiert ist
         self.setWindowFlags(
             Qt.Window | 
             Qt.WindowMinimizeButtonHint | 
@@ -35,7 +32,6 @@ class ModuleCreationWizard(QWizard):
         
         self.module_data = {}
         
-        # Pages hinzufügen
         self.addPage(self.create_intro_page())
         self.addPage(self.create_hardware_page())
         self.addPage(self.create_docker_page())
@@ -76,7 +72,7 @@ class ModuleCreationWizard(QWizard):
         layout.addRow("SDK / Backend:", self.sdk_edit)
         
         page.setLayout(layout)
-        page.registerField("name*", self.name_edit) # Name ist Pflichtfeld
+        page.registerField("name*", self.name_edit) 
         return page
 
     def create_docker_page(self):
@@ -135,7 +131,6 @@ class ModuleCreationWizard(QWizard):
         return page
 
     def initializePage(self, page_id):
-        # Wenn wir auf der letzten Seite (ID 4) landen, Summary updaten
         if self.nextId() == -1: 
             self.update_summary()
 
@@ -159,10 +154,6 @@ class ModuleCreationWizard(QWizard):
         self.summary_text.setText(summary)
 
     def accept(self):
-        """
-        Führt die Generierung durch, wenn der User auf 'Finish' klickt.
-        """
-        # 1. Daten sammeln
         self.module_data = {
             "module_name": self.name_edit.text(),
             "architecture": self.arch_combo.currentText(),
@@ -178,24 +169,19 @@ class ModuleCreationWizard(QWizard):
         }
         
         try:
-            # 2. Verzeichnis prüfen
             if not self.targets_dir.exists():
                 self.targets_dir.mkdir(parents=True, exist_ok=True)
             
-            # 3. Generator instanziieren und ausführen
             generator = ModuleGenerator(self.targets_dir)
             output_path = generator.generate_module(self.module_data)
             
-            # 4. Erfolgsmeldung
             QMessageBox.information(
                 self,
                 "Module Generated",
                 f"✅ Success!\n\nModule created at:\n{output_path}\n\nYou can now edit config_module.sh for fine-tuning."
             )
             
-            # Wizard schließen (Standard-Verhalten von accept)
             super().accept()
             
         except Exception as e:
-            # Fehler anzeigen und Wizard NICHT schließen
             QMessageBox.critical(self, "Generation Error", f"Failed to generate module:\n{e}")

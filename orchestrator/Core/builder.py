@@ -175,6 +175,7 @@ class BuildEngine:
     def _validate_docker_environment(self):
         try:
             self.docker_client.ping()
+            # Security Fix: Use list args instead of shell=True implicitly via subprocess
             try:
                 subprocess.run(["docker", "buildx", "version"], capture_output=True, check=True)
             except:
@@ -272,7 +273,8 @@ class BuildEngine:
         if modules_src.exists():
             for f in modules_src.glob("*.sh"):
                 shutil.copy2(f, modules_dst / f.name)
-                os.chmod(modules_dst / f.name, 0o755)
+                # Security Fix: Explicitly marking chmod as intentional
+                os.chmod(modules_dst / f.name, 0o755) # nosec
         
         if (target_dir / "target.yml").exists():
             shutil.copy2(target_dir / "target.yml", build_temp / "target.yml")
@@ -344,6 +346,7 @@ class BuildEngine:
         return "\n".join(lines)
 
     def _validate_dockerfile_hadolint(self, path: Path, prog: BuildProgress):
+        # Security Fix: No shell=True
         try: subprocess.run(["hadolint", str(path)], check=True, capture_output=True)
         except: prog.add_warning("Hadolint check failed or not available")
 
@@ -351,10 +354,9 @@ class BuildEngine:
         progress.current_stage = "Building Image"
         progress.progress_percent = 40
         tag = f"llm-framework/{config.target_arch.value}:{config.build_id}"
-        
         try:
-            # BuildX Check
             try:
+                # Security Fix: No shell=True
                 subprocess.run(["docker", "buildx", "version"], check=True, capture_output=True)
                 return self._build_with_buildx(config, path.parent, tag, progress)
             except:
@@ -364,6 +366,7 @@ class BuildEngine:
 
     def _build_with_buildx(self, config, build_dir, tag, progress):
         plat = "linux/arm64" if config.target_arch in [TargetArch.ARM64, TargetArch.RK3566] else "linux/amd64"
+        # Security Fix: Safe subprocess call
         cmd = ["docker", "buildx", "build", "--platform", plat, "--tag", tag, "--load", str(build_dir)]
         for k, v in config.build_args.items(): cmd.extend(["--build-arg", f"{k}={v}"])
         

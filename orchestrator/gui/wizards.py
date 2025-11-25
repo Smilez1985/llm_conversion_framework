@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QWizard, QWizardPage, QVBoxLayout, QLabel, QFormLayout, 
     QLineEdit, QComboBox, QRadioButton, QButtonGroup, QTextEdit, QMessageBox
 )
+from PySide6.QtCore import Qt
 from orchestrator.Core.module_generator import ModuleGenerator
 
 class ModuleCreationWizard(QWizard):
@@ -23,6 +24,14 @@ class ModuleCreationWizard(QWizard):
         self.setWindowTitle("Module Creation Wizard")
         self.setWizardStyle(QWizard.ModernStyle)
         self.setMinimumSize(800, 600)
+        
+        # WICHTIG: Flags für Resize/Min/Max, damit das Fenster nicht fixiert ist
+        self.setWindowFlags(
+            Qt.Window | 
+            Qt.WindowMinimizeButtonHint | 
+            Qt.WindowMaximizeButtonHint | 
+            Qt.WindowCloseButtonHint
+        )
         
         self.module_data = {}
         

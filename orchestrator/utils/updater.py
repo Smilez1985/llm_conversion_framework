@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-Update Manager - Secure Process Launch
-"""
+"""Update Manager - Secure Process Launch"""
 import sys
 import subprocess
 import logging
@@ -18,8 +16,7 @@ class UpdateManager:
         try:
             git_dir = self.app_root / ".git"
             if not git_dir.exists(): return False
-            
-            # Security Fix: shell=False, list args
+            # Security Fix: shell=False
             subprocess.run(["git", "fetch"], cwd=self.app_root, check=True, capture_output=True)
             res = subprocess.run(["git", "status", "-uno"], cwd=self.app_root, capture_output=True, text=True)
             return "Your branch is behind" in res.stdout
@@ -41,10 +38,10 @@ class UpdateManager:
             batch_file = Path(tempfile.gettempdir()) / "llm_updater.bat"
             
             if major:
-                self.logger.info("Major Update erkannt -> Starte Installer")
+                self.logger.info("Major Update -> Installer")
                 next_step_cmd = f'start "" "{setup_name}" --update'
             else:
-                self.logger.info("Minor Update erkannt -> Restart")
+                self.logger.info("Minor Update -> Restart")
                 if is_frozen:
                     next_step_cmd = f'start "" "{exe_name}"'
                 else:
@@ -54,13 +51,12 @@ class UpdateManager:
             with open(batch_file, "w") as f:
                 f.write(f'@echo off\ncd /d "{self.app_root}"\ngit pull\n{next_step_cmd}\ndel "%~f0"\nexit\n')
             
-            self.logger.info(f"Update-Skript erstellt: {batch_file}")
+            self.logger.info(f"Update-Skript: {batch_file}")
             
             # SECURITY FIX: Secure launch without shell=True
             if sys.platform == "win32":
                 subprocess.Popen(["cmd.exe", "/c", str(batch_file)], creationflags=subprocess.CREATE_NEW_CONSOLE)
             else:
-                # Linux fallback
                 subprocess.Popen(["/bin/bash", "-c", f"cd {self.app_root} && git pull && ./llm-builder"])
                 
             sys.exit(0)

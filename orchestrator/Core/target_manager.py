@@ -239,7 +239,7 @@ class TargetManager:
 
 def create_target_manager(framework_manager) -> TargetManager:
     tm = TargetManager(framework_manager)
-    if not tm.initialize(): raise TargetManagerError("Init failed")
+    if not tm.initialize(): raise Exception("Init failed")
     return tm
 
 def validate_target_requirements() -> Dict[str, Any]:

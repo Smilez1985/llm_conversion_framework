@@ -34,28 +34,22 @@ from orchestrator.utils.validation import ValidationError
 from orchestrator.utils.helpers import ensure_directory
 
 # ============================================================================
-# ENUMS AND CONSTANTS
+# ENUMS & CONSTANTS (Nur für internen Prozess-Status)
 # ============================================================================
 
 class BuildStatus(Enum):
+    """Internal build status"""
     QUEUED = "queued"
     PREPARING = "preparing"
     BUILDING = "building"
     CONVERTING = "converting"
-    OPTIMIZING = "optimizing"
     PACKAGING = "packaging"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
     CLEANING = "cleaning"
 
-class ModelFormat(Enum):
-    HUGGINGFACE = "hf"
-    GGUF = "gguf"
-    ONNX = "onnx"
-    TENSORFLOW_LITE = "tflite"
-    PYTORCH_MOBILE = "pytorch_mobile"
-
+# OptimizationLevel bleibt als Richtlinie, kann aber auch String sein
 class OptimizationLevel(Enum):
     FAST = "fast"
     BALANCED = "balanced"
@@ -69,22 +63,28 @@ class OptimizationLevel(Enum):
 
 @dataclass
 class BuildConfiguration:
-    """Complete build configuration"""
+    """
+    Complete build configuration.
+    FULLY DYNAMIC: No hardcoded Enums for targets or formats.
+    """
     build_id: str
     timestamp: str
     model_source: str
-    target_arch: str  # String-basiert für maximale Modularität
-    target_format: ModelFormat
+    target_arch: str  # String: "rk3566", "jetson_orin", "custom_x"
+    target_format: str # String: "gguf", "rknn", "tflite"
     output_dir: str
+    
+    # Optional parameters
     model_branch: Optional[str] = "main"
-    source_format: ModelFormat = ModelFormat.HUGGINGFACE
+    source_format: str = "huggingface"
     target_board: Optional[str] = None
     optimization_level: OptimizationLevel = OptimizationLevel.BALANCED
     quantization: Optional[str] = None
     custom_flags: List[str] = field(default_factory=list)
     output_name: Optional[str] = None
     include_metadata: bool = True
-    # Docker settings (Defaults, override via target.yml)
+    
+    # Docker settings (Defaults, overrideable by target.yml)
     base_image: str = "debian:bookworm-slim"
     build_args: Dict[str, str] = field(default_factory=dict)
     parallel_jobs: int = 4
@@ -95,6 +95,7 @@ class BuildConfiguration:
 
 @dataclass
 class BuildProgress:
+    """Build progress tracking"""
     build_id: str
     status: BuildStatus
     current_stage: str
@@ -159,12 +160,42 @@ class BuildEngine:
         try:
             self.docker_client.ping()
             try:
-                # SECURITY: List args
+                # SECURITY: List args instead of shell=True
                 subprocess.run(["docker", "buildx", "version"], capture_output=True, check=True)
             except:
                 self.logger.warning("Docker BuildX not available")
         except Exception as e:
             raise RuntimeError(f"Docker environment failed: {e}")
+
+    def list_available_targets(self) -> List[Dict[str, Any]]:
+        """
+        Scan 'targets/' directory and return available targets dynamically.
+        Replaces the hardcoded Enum logic.
+        """
+        targets = []
+        if not self.targets_dir.exists():
+            return targets
+
+        for target_path in self.targets_dir.iterdir():
+            if target_path.is_dir() and not target_path.name.startswith("_"):
+                # Check if valid module (has config)
+                if (target_path / "target.yml").exists():
+                    try:
+                        with open(target_path / "target.yml", "r") as f:
+                            meta = yaml.safe_load(f)
+                            # Fallback to directory name if metadata missing
+                            name = meta.get("metadata", {}).get("name", target_path.name)
+                            arch = meta.get("metadata", {}).get("architecture_family", "unknown")
+                            targets.append({
+                                "id": target_path.name,
+                                "name": name,
+                                "target_arch": arch, # The hardware architecture (arm64, x86)
+                                "path": str(target_path),
+                                "available": True
+                            })
+                    except:
+                        self.logger.warning(f"Failed to parse target.yml for {target_path.name}")
+        return targets
 
     def build_model(self, config: BuildConfiguration) -> str:
         self._validate_build_config(config)
@@ -212,29 +243,22 @@ class BuildEngine:
             if build_temp.exists(): shutil.rmtree(build_temp)
             return True
         except: return False
-
+    
     def _execute_build(self, config: BuildConfiguration):
         bid = config.build_id
         prog = self._builds[bid]
         try:
             prog.status = BuildStatus.PREPARING
             
-            # 1. Target Path bestimmen
+            # 1. Determine Target Path (Dynamic!)
+            # config.target_arch contains the folder name (e.g. "Rockchip", "NVIDIA-Jetson")
             target_path = self.targets_dir / config.target_arch
             if not target_path.exists():
-                # Fallback: Case-insensitive Suche
-                found = False
-                for p in self.targets_dir.iterdir():
-                    if p.name.lower() == config.target_arch.lower():
-                        target_path = p
-                        found = True
-                        break
-                if not found:
-                    raise FileNotFoundError(f"Target '{config.target_arch}' not found in {self.targets_dir}")
+                raise FileNotFoundError(f"Target module '{config.target_arch}' not found in {self.targets_dir}")
 
             self._prepare_build_environment(config, prog, target_path)
             
-            # 2. Build Image (Nutzung des existierenden Dockerfiles aus dem Target)
+            # 2. Build Image (Using the target's Dockerfile)
             image = self._build_docker_image(config, prog, target_path)
             
             # 3. Run Pipeline
@@ -266,47 +290,38 @@ class BuildEngine:
         ensure_directory(build_temp)
         for d in ["output", "logs"]: ensure_directory(build_temp / d)
         
-        # Wir kopieren keine Module mehr, wir nutzen sie direkt vom Target-Pfad (Volume Mount)
-        
-        # Build Config speichern (für Debugging)
+        # Save build config for debugging
         with open(build_temp / "build_config.json", 'w') as f:
             json.dump(asdict(config), f, indent=2, default=str)
 
     def _build_docker_image(self, config: BuildConfiguration, progress: BuildProgress, target_path: Path) -> Image:
-        """
-        Builds the Docker image defined by the target's own Dockerfile.
-        """
         progress.current_stage = f"Building Image ({config.target_arch})"
         progress.progress_percent = 30
         
         dockerfile = target_path / "Dockerfile"
         if not dockerfile.exists():
-             # Fallback lowercase
-             dockerfile = target_path / "dockerfile"
+             dockerfile = target_path / "dockerfile" # Case insensitive fallback
              if not dockerfile.exists():
                  raise FileNotFoundError(f"No Dockerfile found in {target_path}")
 
-        # Eindeutiger Tag für dieses Target/Build
-        # Wir nutzen den Namen des Ordners als Architektur-Namen
-        tag_name = target_path.name.lower().replace(" ", "-")
+        # Clean tag name
+        tag_name = config.target_arch.lower().replace(" ", "-")
         tag = f"llm-framework/{tag_name}:latest" 
         
-        # Context ist das Framework Root, damit wir auf alles zugreifen können
+        # Context is Framework Root
         context_path = self.base_dir
         
         try:
-            # Relativer Pfad zum Dockerfile für den Build Context
             rel_dockerfile = dockerfile.relative_to(context_path)
-            
             cmd = ["docker", "build", "-f", str(rel_dockerfile), "-t", tag, str(context_path)]
             
-            # Add build args from config & target.yml
-            # (Hier könnte man target.yml parsen, um Default-Args zu holen)
+            # Pass build args
             for k, v in config.build_args.items():
                 cmd.extend(["--build-arg", f"{k}={v}"])
             
-            progress.add_log(f"Executing Docker Build: {' '.join(cmd)}")
+            progress.add_log(f"Docker Build: {' '.join(cmd)}")
             
+            # Security: Safe subprocess
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -328,42 +343,38 @@ class BuildEngine:
         except Exception as e:
             raise RuntimeError(f"Image build failed: {e}")
 
-    def _execute_build_modules(self, config: BuildConfiguration, progress: BuildProgress, image: Image, target_path: Path):
+    def _execute_build_modules(self, config, progress, image, target_path):
         progress.current_stage = "Running Pipeline"
         progress.progress_percent = 60
         
         build_temp = self.cache_dir / "builds" / config.build_id
         
         vols = {
-            # Output & Cache
             str(build_temp / "output"): {"bind": "/build-cache/output", "mode": "rw"},
             str(self.cache_dir / "models"): {"bind": "/build-cache/models", "mode": "rw"},
-            # IMPORTANT: Map the target's modules directly!
             str(target_path / "modules"): {"bind": "/app/modules", "mode": "ro"}
         }
         
-        # Environment Variables
+        # Passes everything as strings/env vars
         env = {
             "BUILD_ID": config.build_id,
             "MODEL_SOURCE": config.model_source,
-            "TARGET_ARCH": config.target_arch, # String pass-through
+            "TARGET_ARCH": config.target_arch,
+            "TARGET_FORMAT": config.target_format,
             "OPTIMIZATION_LEVEL": config.optimization_level.value,
             "QUANTIZATION": config.quantization or "",
             "LLAMA_CPP_COMMIT": config.build_args.get("LLAMA_CPP_COMMIT", "b3626")
         }
         
-        # Inject Sources
+        # Source injection
         if hasattr(self.framework_manager.config, 'source_repositories'):
             for k, v in self.framework_manager.config.source_repositories.items():
                 key_clean = k.split('.')[-1].upper() if '.' in k else k.upper()
-                # Handle dict vs string sources
                 url = v['url'] if isinstance(v, dict) else v
                 env[f"{key_clean}_REPO_OVERRIDE"] = url
-                if isinstance(v, dict) and 'commit' in v:
-                    env[f"{key_clean}_COMMIT"] = v['commit']
 
         try:
-            # Pipeline Entrypoint
+            # Generic Pipeline Entrypoint
             cmd_args = ["pipeline", "/build-cache/models", config.model_source, config.quantization or "Q4_K_M"]
             
             container = self.docker_client.containers.create(
@@ -384,7 +395,7 @@ class BuildEngine:
                 
             res = container.wait(timeout=config.build_timeout)
             if res['StatusCode'] != 0:
-                raise RuntimeError(f"Container pipeline failed (Exit Code: {res['StatusCode']})")
+                raise RuntimeError(f"Pipeline failed (Exit Code: {res['StatusCode']})")
 
         except Exception as e:
             raise RuntimeError(f"Pipeline execution failed: {e}")
@@ -396,7 +407,6 @@ class BuildEngine:
         dst = Path(config.output_dir)
         
         if src.exists():
-            count = 0
             for f in src.rglob("*"):
                 if f.is_file():
                     rel = f.relative_to(src)
@@ -404,7 +414,3 @@ class BuildEngine:
                     ensure_directory(target.parent)
                     shutil.copy2(f, target)
                     progress.artifacts.append(str(target))
-                    count += 1
-            progress.add_log(f"Extracted {count} artifacts to {dst}")
-        else:
-            progress.add_warning("No packages found in output directory")

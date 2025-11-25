@@ -1,135 +1,148 @@
-Hardware Probing Skript (Universell)
-
-------------------------
-
 #!/bin/bash
 # hardware_probe.sh
 # 
-# DIREKTIVE: Goldstandard, robust, professionell geschrieben.
-# Dieses Skript wird auf JEDEM Linux-Zielsystem ausgeführt, um alle
-# relevanten Hardware- und OS-Metadaten für die Cross-Compilation oder 
-# die native Kompilierung zu sammeln (vergleichbar mit CPU-Z/GPU-Z).
+# VERSION: 2.0 (Pi 5 + Hailo-8 Enhanced)
+# DIREKTIVE: Goldstandard, robust, modular.
+#
+# Dieses Skript analysiert das Host-System, um eine optimale Build-Strategie
+# für LLMs zu entwickeln. Es unterstützt x86, Rockchip und Raspberry Pi 5.
 
 # --- 1. Vorbereitung und Variablen ---
 PROBE_OUTPUT_FILE="target_hardware_config.txt"
 LOG_FILE="/tmp/hardware_probe_log.txt"
-# Bereinigen alter Läufe
+
+# Bereinigen
 > "$PROBE_OUTPUT_FILE"
 > "$LOG_FILE"
 
-echo "Hardware-Probing gestartet. Ergebnisse werden in '$PROBE_OUTPUT_FILE' gespeichert."
+echo "Hardware-Probing gestartet..."
+echo "Ziel-Datei: $PROBE_OUTPUT_FILE"
 
-# Funktion zur Protokollierung von Fehlern
-log_error() {
-    echo "[FEHLER] $1" | tee -a "$LOG_FILE"
-}
-
-# Funktion zum Ausführen eines Befehls und Speichern des Ergebnisses
+# Hilfsfunktion: Führt Befehl aus, schreibt in Datei, fängt Fehler ab.
 run_probe() {
     local key="$1"
     local command="$2"
     
-    # Sicherstellen, dass der Befehl existiert, bevor er ausgeführt wird
-    if ! command -v $(echo "$command" | awk '{print $1}') &> /dev/null && [[ "$key" != "CPU_MODEL_NAME" ]]; then
-        echo "${key}=TOOL_NOT_FOUND" >> "$PROBE_OUTPUT_FILE"
-        return
+    # Pre-Check: Existiert das Tool überhaupt? (Vermeidet hässliche 'command not found' logs)
+    local tool=$(echo "$command" | awk '{print $1}')
+    if ! command -v "$tool" &> /dev/null; then
+        # Ausnahme: Manche Infos kommen aus cat /proc/..., das ist kein "Tool"
+        if [[ "$tool" != "cat" && "$tool" != "grep" ]]; then
+            echo "${key}=TOOL_NOT_FOUND" >> "$PROBE_OUTPUT_FILE"
+            return
+        fi
     fi
 
-    # Führt den Befehl aus und speichert das Ergebnis im Key=Value-Format
-    local result=$($command 2>/dev/null)
+    # Ausführung
+    local result=$(eval "$command" 2>/dev/null)
 
     if [ $? -eq 0 ] && [ -n "$result" ]; then
-        # Ergebnis bereinigen (Leerzeichen am Anfang/Ende entfernen) und speichern
-        echo "${key}=$(echo $result | xargs)" >> "$PROBE_OUTPUT_FILE"
+        # Trim Whitespace
+        result=$(echo "$result" | xargs)
+        echo "${key}=${result}" >> "$PROBE_OUTPUT_FILE"
     else
-        log_error "Befehl für Schlüssel '$key' fehlgeschlagen oder leer. Befehl: '$command'"
         echo "${key}=UNKNOWN" >> "$PROBE_OUTPUT_FILE"
+        echo "[WARN] Probe failed for $key" >> "$LOG_FILE"
     fi
 }
 
-# --- 2. System- und OS-Informationen ---
-echo "# Allgemeine Systeminformationen" >> "$PROBE_OUTPUT_FILE"
-run_probe "OS_DISTRO" "cat /etc/os-release 2>/dev/null | grep ^NAME= | cut -d'=' -f2 | tr -d '\"'"
-run_probe "OS_VERSION_ID" "cat /etc/os-release 2>/dev/null | grep ^VERSION_ID= | cut -d'=' -f2 | tr -d '\"'"
+# --- 2. Basis-System & Board-Identifikation ---
+echo "# System Basics" >> "$PROBE_OUTPUT_FILE"
+run_probe "OS_DISTRO" "cat /etc/os-release | grep ^NAME= | cut -d'=' -f2 | tr -d '\"'"
 run_probe "KERNEL_VERSION" "uname -r"
 run_probe "ARCHITECTURE_FULL" "uname -m"
 
-# --- 3. CPU-Details und Optimierungs-Features ---
-echo "" >> "$PROBE_OUTPUT_FILE"
-echo "# CPU- und Compiler-Optimierungs-Details" >> "$PROBE_OUTPUT_FILE"
+# Spezifische Board-Erkennung (Wichtig für Pi 5 vs. Rockchip)
+# Versuche Device-Tree Model auszulesen (Standard auf ARM SBCs)
+run_probe "BOARD_MODEL" "cat /sys/firmware/devicetree/base/model 2>/dev/null | tr -d '\0'"
 
-# CPU-Modellname (häufig in /proc/cpuinfo oder lscpu)
-run_probe "CPU_MODEL_NAME" "lscpu 2>/dev/null | grep 'Model name' | awk -F: '{print \$2}' | xargs"
-if [ ! -s "$PROBE_OUTPUT_FILE" ] || ! grep -q "CPU_MODEL_NAME" "$PROBE_OUTPUT_FILE"; then
-    run_probe "CPU_MODEL_NAME" "cat /proc/cpuinfo 2>/dev/null | grep 'model name' | head -n 1 | awk -F: '{print \$2}' | xargs"
-fi
+# --- 3. RAM Analyse (Kritisch für Modell-Auswahl) ---
+echo "" >> "$PROBE_OUTPUT_FILE"
+echo "# Memory Status (Crucial for Quantization Level)" >> "$PROBE_OUTPUT_FILE"
+# RAM in MB
+run_probe "SYSTEM_RAM_MB" "free -m | grep Mem: | awk '{print \$2}'"
+# Verfügbarer RAM (wichtig falls System schon voll ist)
+run_probe "SYSTEM_RAM_AVAILABLE_MB" "free -m | grep Mem: | awk '{print \$7}'"
+
+# --- 4. CPU-Details (Architektur & Kerne) ---
+echo "" >> "$PROBE_OUTPUT_FILE"
+echo "# CPU Architecture" >> "$PROBE_OUTPUT_FILE"
 
 run_probe "CPU_CORES" "nproc"
-run_probe "CPU_L2_CACHE_KB" "lscpu 2>/dev/null | grep 'L2 cache' | awk '{print \$3}' | tr -d 'K'"
-run_probe "CPU_VENDOR_ID" "lscpu 2>/dev/null | grep 'Vendor ID' | awk '{print \$3}'"
+# Versuch, den genauen Core-Typ zu finden (Cortex-A76 vs A55)
+# Auf Pi 5 und Rockchip oft im dmesg oder kompatiblen Strings versteckt
+run_probe "CPU_IMPLEMENTER" "grep 'CPU implementer' /proc/cpuinfo | head -n 1 | awk -F: '{print \$2}'"
+run_probe "CPU_PART" "grep 'CPU part' /proc/cpuinfo | head -n 1 | awk -F: '{print \$2}'"
 
-# --- 4. Wichtige SIMD/Compiler-Features (Basis für llama.cpp Flags) ---
+# --- 5. Advanced SIMD / Compiler Flags (Performance!) ---
 echo "" >> "$PROBE_OUTPUT_FILE"
-echo "# SIMD / Vektorisierungs-Features (Wichtig für llama.cpp / GGML)" >> "$PROBE_OUTPUT_FILE"
-CPU_FLAGS=$(cat /proc/cpuinfo 2>/dev/null | grep flags | head -n 1)
-CPU_FEATURES=$(cat /proc/cpuinfo 2>/dev/null | grep Features | head -n 1)
+echo "# SIMD Capabilities (LLM Inference Speedup)" >> "$PROBE_OUTPUT_FILE"
 
-# ARM-Features (aarch64)
-if echo "$CPU_FEATURES" | grep -q neon; then
-    run_probe "SUPPORTS_NEON" "ON"
-else
-    run_probe "SUPPORTS_NEON" "OFF"
+CPU_INFO=$(cat /proc/cpuinfo 2>/dev/null)
+
+# -- ARM (Aarch64) Spezifische Checks --
+if echo "$CPU_INFO" | grep -q "asimd"; then run_probe "HAS_ASIMD" "ON"; else run_probe "HAS_ASIMD" "OFF"; fi
+if echo "$CPU_INFO" | grep -q "neon"; then run_probe "HAS_NEON" "ON"; else run_probe "HAS_NEON" "OFF"; fi
+if echo "$CPU_INFO" | grep -q "fp16"; then run_probe "HAS_FP16" "ON"; else run_probe "HAS_FP16" "OFF"; fi
+# WICHTIG für Pi 5 (Dot Product Instructions beschleunigen Q4/Q8 Inferenz massiv)
+if echo "$CPU_INFO" | grep -q "atomics"; then run_probe "HAS_ATOMICS" "ON"; else run_probe "HAS_ATOMICS" "OFF"; fi
+if echo "$CPU_INFO" | grep -q "crc32"; then run_probe "HAS_CRC32" "ON"; else run_probe "HAS_CRC32" "OFF"; fi
+# Check für DotProduct (manchmal 'asimddp' oder 'dotprod')
+if echo "$CPU_INFO" | grep -E -q "asimddp|dotprod"; then 
+    run_probe "HAS_DOTPROD" "ON" 
+else 
+    run_probe "HAS_DOTPROD" "OFF" 
 fi
 
-# X86-Features (x86_64)
-# Die Flags werden gesammelt, um die besten Kompilierungs-Optionen zu wählen (z.B. AVX2, AVX512)
-if echo "$CPU_FLAGS" | grep -q avx512f; then
-    run_probe "SUPPORTS_AVX512" "ON"
-elif echo "$CPU_FLAGS" | grep -q avx2; then
-    run_probe "SUPPORTS_AVX2" "ON"
-elif echo "$CPU_FLAGS" | grep -q avx; then
-    run_probe "SUPPORTS_AVX" "ON"
-else
-    run_probe "SUPPORTS_X86_SIMD" "NONE"
-fi
+# -- x86 Spezifische Checks (Fallback) --
+if echo "$CPU_INFO" | grep -q "avx512"; then run_probe "HAS_AVX512" "ON"; fi
+if echo "$CPU_INFO" | grep -q "avx2"; then run_probe "HAS_AVX2" "ON"; fi
 
-# --- 5. GPU- und Beschleuniger-Erkennung (TensorRT/Vulkan/etc.) ---
+# --- 6. NPU & AI Beschleuniger (Hailo / Rockchip) ---
 echo "" >> "$PROBE_OUTPUT_FILE"
-echo "# Beschleuniger-Erkennung (NVIDIA/AMD/Vulkan/OpenCL)" >> "$PROBE_OUTPUT_FILE"
+echo "# AI Accelerator Detection" >> "$PROBE_OUTPUT_FILE"
 
-# Prüfe auf NVIDIA CUDA (RTX/Tensor-Fähigkeit)
-if command -v nvidia-smi &> /dev/null; then
-    run_probe "GPU_DRIVER_VERSION" "nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n 1"
-    run_probe "GPU_MODEL" "nvidia-smi --query-gpu=gpu_name --format=csv,noheader | head -n 1 | sed 's/ /_/g'"
-    # Prüfung auf CUDA Toolkit (wichtig für TensorRT/Entwickler-Builds)
-    if command -v nvcc &> /dev/null; then
-        run_probe "CUDA_TOOLKIT_VERSION" "nvcc --version | grep 'release' | awk '{print \$6}' | cut -d',' -f1"
+# A. PCI Scan (Findet Hailo am PCIe Bus)
+if command -v lspci &> /dev/null; then
+    # Hailo Technologies Vendor ID ist 1e60
+    HAILO_PCI=$(lspci -d 1e60: 2>/dev/null)
+    if [ -n "$HAILO_PCI" ]; then
+        echo "NPU_TYPE=HAILO_8" >> "$PROBE_OUTPUT_FILE"
+        echo "NPU_CONNECTION=PCIE" >> "$PROBE_OUTPUT_FILE"
     else
-        run_probe "CUDA_TOOLKIT_VERSION" "NOT_INSTALLED"
+        echo "NPU_PCIE_CARD=NONE" >> "$PROBE_OUTPUT_FILE"
     fi
 else
-    run_probe "GPU_NVIDIA" "NOT_FOUND"
+    echo "LSPCI_TOOL=MISSING" >> "$PROBE_OUTPUT_FILE"
 fi
 
-# Prüfe auf Vulkan-Support (DX12-Äquivalent für Linux)
-if command -v vulkaninfo &> /dev/null; then
-    # Versuche, die höchste unterstützte Vulkan-Version zu erfassen
-    run_probe "VULKAN_SUPPORT" "vulkaninfo --summary | grep 'Vulkan Instance Version' | awk '{print \$4}'"
+# B. Hailo Software Stack Check
+if command -v hailort-cli &> /dev/null; then
+    run_probe "HAILO_RT_VERSION" "hailort-cli --version"
+    # Prüfen ob Chip aktiv antwortet
+    run_probe "HAILO_DEVICE_STATUS" "hailort-cli fw-control identify 2>&1 | grep 'Device Identity' | head -n 1"
 else
-    run_probe "VULKAN_SUPPORT" "TOOL_NOT_INSTALLED"
+    run_probe "HAILO_SOFTWARE" "NOT_INSTALLED"
 fi
 
-# Prüfe auf OpenCL (generische Beschleuniger, z.B. Mali, Rockchip NPU/GPU)
-if command -v clinfo &> /dev/null; then
-    run_probe "OPENCL_PLATFORM" "clinfo | grep 'Platform Name' | head -n 1 | awk -F: '{print \$2}' | xargs"
-else
-    run_probe "OPENCL_PLATFORM" "TOOL_NOT_INSTALLED"
+# C. Rockchip NPU (Fallback/Alternative)
+if [ -e "/dev/rknpu" ] || [ -e "/proc/device-tree/rknpu" ]; then
+    echo "NPU_TYPE=ROCKCHIP_NPU" >> "$PROBE_OUTPUT_FILE"
 fi
 
-# --- 6. Abschluss ---
+# --- 7. GPU (Standard) ---
 echo "" >> "$PROBE_OUTPUT_FILE"
-echo "# Probing abgeschlossen am $(date +%Y-%m-%d_%H:%M:%S)" >> "$PROBE_OUTPUT_FILE"
+echo "# GPU Status" >> "$PROBE_OUTPUT_FILE"
+if command -v nvidia-smi &> /dev/null; then
+    run_probe "GPU_TYPE" "NVIDIA"
+elif [ -e "/dev/mali0" ]; then
+    run_probe "GPU_TYPE" "ARM_MALI"
+else
+    run_probe "GPU_TYPE" "GENERIC_OR_NONE"
+fi
 
-echo "Probing erfolgreich. Konfigurationsdatei wurde erstellt: $PROBE_OUTPUT_FILE"
-echo "Bitte laden Sie diese Datei in den Orchestrator hoch."
-
+echo "------------------------------------------------"
+echo "Probing Complete."
+echo "Detected Board Model: $(grep BOARD_MODEL $PROBE_OUTPUT_FILE | cut -d'=' -f2)"
+echo "Detected NPU:         $(grep NPU_TYPE $PROBE_OUTPUT_FILE | cut -d'=' -f2)"
+echo "------------------------------------------------"

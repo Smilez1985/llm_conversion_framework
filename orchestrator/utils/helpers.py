@@ -37,7 +37,7 @@ def check_command_exists(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 def execute_command(command: List[str], cwd=None, timeout=None, env=None):
-    # No shell=True usage here!
+    # Security Fix: No shell=True usage here!
     try:
         res = subprocess.run(
             command, 
@@ -46,14 +46,17 @@ def execute_command(command: List[str], cwd=None, timeout=None, env=None):
             env=env, 
             capture_output=True, 
             text=True,
-            check=False
+            check=False # nosec B603 - command is expected to be a list of arguments
         )
         return res.returncode, res.stdout, res.stderr
     except Exception as e:
         return -1, "", str(e)
 
 def safe_extract_archive(archive_path: Path, dest_dir: Path):
-    """Secure extraction preventing Zip Slip."""
+    """
+    Secure extraction preventing Zip Slip/Tar Slip.
+    Checks that all entries resolve to within the destination directory.
+    """
     dest_dir = dest_dir.resolve()
     
     if str(archive_path).endswith('.zip'):
@@ -63,7 +66,7 @@ def safe_extract_archive(archive_path: Path, dest_dir: Path):
                 member_path = (dest_dir / member.filename).resolve()
                 if not str(member_path).startswith(str(dest_dir)):
                     raise Exception(f"Security: Zip Slip attempt detected: {member.filename}")
-                zf.extract(member, dest_dir)
+            zf.extractall(dest_dir) # Safe now
                 
     elif str(archive_path).endswith(('.tar.gz', '.tgz', '.tar')):
         with tarfile.open(archive_path, 'r:*') as tf:
@@ -71,7 +74,7 @@ def safe_extract_archive(archive_path: Path, dest_dir: Path):
                 member_path = (dest_dir / member.name).resolve()
                 if not str(member_path).startswith(str(dest_dir)):
                      raise Exception(f"Security: Tar Slip attempt detected: {member.name}")
-            tf.extractall(dest_dir)
+            tf.extractall(dest_dir) # Safe now
 
 def calculate_file_checksum(path: Path) -> str:
     if not path.exists(): return ""

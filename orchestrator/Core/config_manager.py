@@ -22,7 +22,7 @@ import re
 import yaml
 
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.validation import ValidationError, validate_path, validate_config
+from orchestrator.utils.validation import ValidationError
 from orchestrator.utils.helpers import ensure_directory, safe_json_load
 
 
@@ -37,6 +37,7 @@ class ConfigFormat(Enum):
     ENV = "env"
     TOML = "toml"
 
+
 class ConfigScope(Enum):
     """Configuration scope levels"""
     GLOBAL = "global"
@@ -44,6 +45,7 @@ class ConfigScope(Enum):
     PROJECT = "project"
     ENVIRONMENT = "environment"
     RUNTIME = "runtime"
+
 
 class AdvancedFeature(Enum):
     """Optional advanced features"""
@@ -108,12 +110,14 @@ class ConfigSchema:
             return False
         return True
 
+
 @dataclass
 class ConfigSource:
     source_type: str
     source_path: Optional[str] = None
     loaded_at: Optional[datetime] = None
     priority: int = 0
+
 
 @dataclass
 class ConfigValue:
@@ -136,6 +140,7 @@ class ConfigValue:
             return []
         _, errors = self.schema.validate_value(self.value)
         return errors
+
 
 @dataclass
 class AdvancedModeConfig:
@@ -236,6 +241,7 @@ class ConfigManager:
             ConfigSchema("gui_refresh_interval", int, False, 30, "GUI refresh interval"),
             ConfigSchema("api_enabled", bool, False, False, "Enable API server"),
             ConfigSchema("api_port", int, False, 8000, "API server port"),
+            # Security Fix: Localhost only
             ConfigSchema("api_host", str, False, "127.0.0.1", "API server host")
         ]
         
@@ -341,7 +347,7 @@ class ConfigManager:
         if not schema: return env_value
         try:
             if schema.field_type == bool:
-                return env_value.lower() in ('true', '1', 'yes')
+                return env_value.lower() in ('true', '1', 'yes', 'on')
             elif schema.field_type == int:
                 return int(env_value)
             elif schema.field_type == float:

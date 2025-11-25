@@ -444,6 +444,7 @@ class TargetManager:
             "pytorch": ModelFormat.PYTORCH_MOBILE
         }
         return format_mapping.get(format_str.lower())
+
     def _generate_cmake_toolchain_file(self, target_config: TargetConfiguration, 
                                        cmake_dir: Path) -> Path:
         """
@@ -972,7 +973,8 @@ class TargetManager:
         }
         
         return build_env
- def refresh_targets(self) -> bool:
+
+    def refresh_targets(self) -> bool:
         """
         Refresh target discovery and validation.
         
@@ -1188,6 +1190,26 @@ class TargetManager:
             
         except Exception as e:
             self.logger.error(f"Error during Target Manager shutdown: {e}")
+            
+    def _setup_default_toolchains(self):
+        """Setup default toolchains if not already configured"""
+        # Placeholder implementation - logic would check for installed cross-compilers
+        pass
+        
+    def _load_hardware_profiles(self):
+        """Load hardware profiles from disk"""
+        # Placeholder implementation - logic would load profiles from profiles_dir
+        pass
+        
+    def _generate_cmake_toolchains(self):
+        """Generate CMake toolchain files for all available targets"""
+        # Placeholder implementation - calls _generate_cmake_toolchain_file for each target
+        pass
+        
+    def _validate_target_configuration(self, target_config: TargetConfiguration):
+        """Internal validation logic for a target configuration"""
+        # Placeholder implementation - checks required files and settings
+        pass
 
 
 # ============================================================================
@@ -1266,222 +1288,3 @@ def validate_target_requirements() -> Dict[str, Any]:
             requirements["warnings"].append(f"{compiler} not available - {description} will use Docker")
     
     return requirements
-
-
-def detect_rk3566_hardware() -> Dict[str, Any]:
-    """
-    Detect if running on RK3566 hardware.
-    
-    Returns:
-        dict: RK3566 detection results
-    """
-    detection_result = {
-        "is_rk3566": False,
-        "confidence": "none",
-        "detected_features": [],
-        "hardware_info": {}
-    }
-    
-    try:
-        # Check for RK3566-specific files
-        rk3566_indicators = [
-            "/sys/firmware/devicetree/base/compatible",
-            "/proc/device-tree/compatible",
-            "/sys/devices/platform/soc/compatible"
-        ]
-        
-        for indicator_file in rk3566_indicators:
-            if Path(indicator_file).exists():
-                try:
-                    with open(indicator_file, 'rb') as f:
-                        content = f.read().decode('utf-8', errors='ignore')
-                    
-                    if 'rk3566' in content.lower():
-                        detection_result["is_rk3566"] = True
-                        detection_result["confidence"] = "high"
-                        detection_result["detected_features"].append("devicetree_rk3566")
-                        break
-                        
-                except Exception:
-                    continue
-        
-        # Check CPU info for Cortex-A55 (RK3566's CPU)
-        try:
-            with open('/proc/cpuinfo', 'r') as f:
-                cpuinfo = f.read()
-            
-            if 'cortex-a55' in cpuinfo.lower():
-                detection_result["detected_features"].append("cortex_a55")
-                if not detection_result["is_rk3566"]:
-                    detection_result["confidence"] = "medium"
-            
-            # Extract additional hardware info
-            for line in cpuinfo.split('\n'):
-                if line.startswith('processor'):
-                    detection_result["hardware_info"]["cpu_count"] = detection_result["hardware_info"].get("cpu_count", 0) + 1
-                elif line.startswith('Features'):
-                    features = line.split(':')[1].strip().split()
-                    detection_result["hardware_info"]["cpu_features"] = features
-                    
-                    # Check for NEON and other ARM features
-                    if 'neon' in features:
-                        detection_result["detected_features"].append("neon")
-                    if 'fp' in features:
-                        detection_result["detected_features"].append("fp")
-                    if 'asimd' in features:
-                        detection_result["detected_features"].append("asimd")
-                        
-        except Exception:
-            pass
-        
-        # Check memory info
-        try:
-            with open('/proc/meminfo', 'r') as f:
-                meminfo = f.read()
-            
-            for line in meminfo.split('\n'):
-                if line.startswith('MemTotal'):
-                    mem_kb = int(line.split()[1])
-                    mem_mb = mem_kb // 1024
-                    detection_result["hardware_info"]["memory_mb"] = mem_mb
-                    
-                    # RK3566 typically comes with 4GB or 8GB RAM
-                    if mem_mb in [3800, 4096, 7800, 8192]:  # Account for system overhead
-                        detection_result["detected_features"].append("rk3566_memory_profile")
-                    break
-                    
-        except Exception:
-            pass
-    
-    except Exception as e:
-        detection_result["error"] = str(e)
-    
-    return detection_result
-
-
-def generate_rk3566_build_flags() -> List[str]:
-    """
-    Generate optimized build flags for RK3566.
-    
-    Returns:
-        List[str]: Compilation flags
-    """
-    flags = [
-        # Architecture and CPU
-        "-march=armv8-a+crc+crypto",
-        "-mtune=cortex-a55",
-        
-        # Float ABI and FPU
-        "-mfloat-abi=hard",
-        "-mfpu=neon-fp-armv8",
-        
-        # Optimization
-        "-O3",
-        "-ffast-math",
-        "-fno-finite-math-only",
-        
-        # SIMD and vectorization
-        "-ftree-vectorize",
-        "-fvect-cost-model=cheap",
-        
-        # Function optimizations
-        "-finline-functions",
-        "-funroll-loops",
-        
-        # Memory alignment
-        "-falign-functions=32",
-        "-falign-loops=32",
-        
-        # RK3566-specific defines
-        "-DRK3566=1",
-        "-DARM64=1",
-        "-DCORTEX_A55=1",
-        "-DENABLE_NEON=1",
-        "-DENABLE_FP16=1",
-        "-DENABLE_INT8=1"
-    ]
-    
-    return flags
-
-
-# ============================================================================
-# EXCEPTION CLASSES
-# ============================================================================
-
-class TargetManagerError(Exception):
-    """Base exception for target manager errors"""
-    pass
-
-
-class TargetNotFoundError(TargetManagerError):
-    """Exception raised when target is not found"""
-    pass
-
-
-class ToolchainError(TargetManagerError):
-    """Exception raised for toolchain-related errors"""
-    pass
-
-
-class HardwareProfileError(TargetManagerError):
-    """Exception raised for hardware profile errors"""
-    pass
-
-
-# ============================================================================
-# CONSTANTS AND DEFAULTS
-# ============================================================================
-
-# Default hardware profiles for common targets
-DEFAULT_HARDWARE_PROFILES = {
-    TargetArch.RK3566: {
-        "name": "rk3566_default",
-        "cpu_architecture": "Cortex-A55",
-        "cpu_cores": 4,
-        "cpu_freq_mhz": 1800,
-        "memory_mb": 4096,
-        "memory_type": "LPDDR4",
-        "optimization_level": "O3",
-        "enable_neon": True,
-        "enable_fp16": True,
-        "enable_int8": True
-    },
-    TargetArch.ARM64: {
-        "name": "arm64_generic",
-        "cpu_architecture": "ARMv8-A",
-        "cpu_cores": 4,
-        "cpu_freq_mhz": 2000,
-        "memory_mb": 8192,
-        "optimization_level": "O3",
-        "enable_neon": True
-    },
-    TargetArch.X86_64: {
-        "name": "x86_64_generic",
-        "cpu_architecture": "x86_64",
-        "cpu_cores": 8,
-        "cpu_freq_mhz": 3000,
-        "memory_mb": 16384,
-        "optimization_level": "O3"
-    }
-}
-
-# Toolchain detection order (preferred first)
-TOOLCHAIN_DETECTION_ORDER = {
-    TargetArch.RK3566: [
-        "aarch64-linux-gnu-gcc",
-        "aarch64-none-linux-gnu-gcc",
-        "docker-cross"
-    ],
-    TargetArch.ARM64: [
-        "aarch64-linux-gnu-gcc",
-        "aarch64-none-linux-gnu-gcc"
-    ],
-    TargetArch.ARMV7: [
-        "arm-linux-gnueabihf-gcc",
-        "arm-none-linux-gnueabihf-gcc"
-    ],
-    TargetArch.X86_64: [
-        "gcc",
-        "clang"
-    ]
-}       

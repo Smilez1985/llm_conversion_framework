@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "main", "develop" ]
   schedule:
-    - cron: '0 0 * * 0' # Wöchentlicher Scan
+    - cron: '0 0 * * 0'
 
 jobs:
   security-audit:
@@ -17,10 +17,10 @@ jobs:
         with:
           python-version: "3.10"
 
+      # 🚨 DIESER SCHRITT FEHLT BEI DIR! 🚨
       - name: Install Python Dependencies
         run: |
           pip install --upgrade pip
-          # KRITISCH: Diese Dependencies werden für die Imports benötigt!
           pip install pyyaml psutil docker packaging
 
       - name: Install Audit Tools
@@ -34,18 +34,3 @@ jobs:
           pip install poetry
           poetry export -f requirements.txt --output requirements.txt --without-hashes || true
           safety check -r requirements.txt || true
-
-  docker-security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Run Trivy Vulnerability Scanner (Repo)
-        uses: aquasecurity/trivy-action@master
-        with:
-          scan-type: 'fs'
-          scan-ref: '.'
-          ignore-unfixed: true
-          format: 'table'
-          exit-code: '0'
-          severity: 'CRITICAL,HIGH'

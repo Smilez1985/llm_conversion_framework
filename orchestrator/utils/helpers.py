@@ -21,8 +21,7 @@ def ensure_directory(path: Union[str, Path], mode: int = 0o755) -> Path:
     p = Path(path)
     if not p.exists():
         p.mkdir(parents=True, exist_ok=True)
-        try:
-            p.chmod(mode)
+        try: p.chmod(mode)
         except Exception: pass
     return p
 
@@ -36,39 +35,24 @@ def check_command_exists(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
 def execute_command(command: List[str], cwd=None, timeout=None, env=None):
-    # Security Fix: No shell=True usage here!
     try:
-        res = subprocess.run(
-            command, 
-            cwd=cwd, 
-            timeout=timeout, 
-            env=env, 
-            capture_output=True, 
-            text=True,
-            check=False # nosec B603
-        )
+        res = subprocess.run(command, cwd=cwd, timeout=timeout, env=env, capture_output=True, text=True, check=False)
         return res.returncode, res.stdout, res.stderr
-    except Exception as e:
-        return -1, "", str(e)
+    except Exception as e: return -1, "", str(e)
 
 def safe_extract_archive(archive_path: Path, dest_dir: Path):
-    """Secure extraction preventing Zip Slip."""
     dest_dir = dest_dir.resolve()
-    
     if str(archive_path).endswith('.zip'):
         with zipfile.ZipFile(archive_path, 'r') as zf:
             for member in zf.infolist():
                 member_path = (dest_dir / member.filename).resolve()
-                if not str(member_path).startswith(str(dest_dir)):
-                    raise Exception(f"Security: Zip Slip detected: {member.filename}")
+                if not str(member_path).startswith(str(dest_dir)): raise Exception(f"Zip Slip: {member.filename}")
             zf.extractall(dest_dir)
-                
     elif str(archive_path).endswith(('.tar.gz', '.tgz', '.tar')):
         with tarfile.open(archive_path, 'r:*') as tf:
             for member in tf.getmembers():
                 member_path = (dest_dir / member.name).resolve()
-                if not str(member_path).startswith(str(dest_dir)):
-                     raise Exception(f"Security: Tar Slip detected: {member.name}")
+                if not str(member_path).startswith(str(dest_dir)): raise Exception(f"Tar Slip: {member.name}")
             tf.extractall(dest_dir)
 
 def calculate_file_checksum(path: Path) -> str:

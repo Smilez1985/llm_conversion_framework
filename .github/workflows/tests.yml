@@ -1,0 +1,67 @@
+name: Framework CI/CD
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  quality-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          
+      - name: Install Poetry
+        run: |
+          curl -sSL https://install.python-poetry.org | python3 -
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          
+      - name: Install Dependencies
+        run: poetry install --no-interaction
+        
+      - name: Linting (Ruff/Black)
+        run: |
+          # Hier würden Linter laufen, falls konfiguriert
+          # poetry run ruff check .
+          echo "Linting skipped for MVP"
+
+  docker-build-test:
+    needs: quality-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Build Docker Image (Rockchip)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: targets/Rockchip/dockerfile
+          push: false
+          tags: llm-framework/rockchip:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          
+      - name: Run System Tests inside Container
+        run: |
+          # Wir nutzen den Entrypoint "test" Befehl
+          docker run --rm llm-framework/rockchip:test test
+
+  integration-tests:
+    needs: quality-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Hier würden echte Integrationstests laufen (z.B. Dummy-Modell konvertieren)
+      # Das ist ressourcenintensiv und wird für den MVP oft gemockt.

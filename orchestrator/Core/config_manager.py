@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 LLM Cross-Compiler Framework - Configuration Manager
-DIREKTIVE: Goldstandard, vollstaendig, professionell geschrieben.
+DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 """
 
 import os
@@ -26,24 +25,30 @@ from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, safe_json_load
 
+
 # ============================================================================
 # ENUMS AND CONSTANTS
 # ============================================================================
 
 class ConfigFormat(Enum):
+    """Configuration file formats"""
     YAML = "yaml"
     JSON = "json"
     ENV = "env"
     TOML = "toml"
 
+
 class ConfigScope(Enum):
+    """Configuration scope levels"""
     GLOBAL = "global"
     USER = "user"
     PROJECT = "project"
     ENVIRONMENT = "environment"
     RUNTIME = "runtime"
 
+
 class AdvancedFeature(Enum):
+    """Optional advanced features"""
     SECRETS_MANAGEMENT = "secrets_management"
     DYNAMIC_UPDATES = "dynamic_updates"
     TEMPLATES = "templates"
@@ -51,12 +56,14 @@ class AdvancedFeature(Enum):
     ENVIRONMENTS = "environments"
     COMPLIANCE = "compliance"
 
+
 # ============================================================================
 # DATA MODELS
 # ============================================================================
 
 @dataclass
 class ConfigSchema:
+    """Configuration schema definition"""
     field_name: str
     field_type: type
     required: bool = False
@@ -89,9 +96,11 @@ class ConfigSchema:
     def _apply_validation_rule(self, value: Any, rule: str) -> bool:
         try:
             if rule.startswith("min:"):
-                return value >= float(rule.split(":", 1)[1])
+                min_val = float(rule.split(":", 1)[1])
+                return value >= min_val
             elif rule.startswith("max:"):
-                return value <= float(rule.split(":", 1)[1])
+                max_val = float(rule.split(":", 1)[1])
+                return value <= max_val
             elif rule.startswith("regex:"):
                 pattern = rule.split(":", 1)[1]
                 return bool(re.match(pattern, str(value)))
@@ -103,12 +112,14 @@ class ConfigSchema:
             return False
         return True
 
+
 @dataclass
 class ConfigSource:
     source_type: str
     source_path: Optional[str] = None
     loaded_at: Optional[datetime] = None
     priority: int = 0
+
 
 @dataclass
 class ConfigValue:
@@ -132,6 +143,7 @@ class ConfigValue:
         _, errors = self.schema.validate_value(self.value)
         return errors
 
+
 @dataclass
 class AdvancedModeConfig:
     enabled: bool = False
@@ -149,6 +161,7 @@ class AdvancedModeConfig:
     def enable_feature(self, feature: AdvancedFeature):
         if self.enabled:
             self.enabled_features.add(feature)
+
 
 # ============================================================================
 # CONFIGURATION MANAGER CLASS
@@ -230,6 +243,7 @@ class ConfigManager:
             ConfigSchema("gui_refresh_interval", int, False, 30, "GUI refresh interval"),
             ConfigSchema("api_enabled", bool, False, False, "Enable API server"),
             ConfigSchema("api_port", int, False, 8000, "API server port"),
+            # SECURITY FIX: Default to localhost (Bandit B104)
             ConfigSchema("api_host", str, False, "127.0.0.1", "API server host")
         ]
         
@@ -288,8 +302,7 @@ class ConfigManager:
             else:
                 config_data = {}
         
-        if not config_data:
-            return
+        if not config_data: return
         
         file_source = ConfigSource("file", str(config_file), datetime.now(), 10)
         self._load_config_data(config_data, file_source)
@@ -333,8 +346,7 @@ class ConfigManager:
                     pass
 
     def _convert_env_value(self, env_value: str, schema: Optional[ConfigSchema]) -> Any:
-        if not schema:
-            return env_value
+        if not schema: return env_value
         try:
             if schema.field_type == bool:
                 return env_value.lower() in ('true', '1', 'yes', 'on')
@@ -363,8 +375,7 @@ class ConfigManager:
             
         if schema:
             valid, _ = schema.validate_value(value)
-            if not valid:
-                return False
+            if not valid: return False
             
         src = ConfigSource(source_type, loaded_at=datetime.now(), priority=30)
         val = ConfigValue(key, value, src, schema, last_modified=datetime.now())
@@ -408,5 +419,6 @@ class ConfigManager:
                     result[key] = val.value
         return result
 
+# Initialize module
 if __name__ == "__main__":
     print("ConfigManager module loaded")

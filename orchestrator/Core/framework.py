@@ -34,43 +34,6 @@ from orchestrator.utils.helpers import ensure_directory, check_command_exists, s
 # ============================================================================
 
 @dataclass
-class TargetConfig:
-    """
-    Konfiguration für ein Hardware-Target (aus target.yml geladen).
-    Wird von TargetDiscovery erstellt und vom FrameworkManager verwendet.
-    """
-    id: str
-    name: str
-    description: str
-    architecture: str
-    docker_image: str
-    maintainer: str
-    version: str
-    status: str = "available"
-    supported_boards: List[str] = field(default_factory=list)
-    module_paths: Dict[str, str] = field(default_factory=dict)
-    dockerfile_path: str = ""
-
-@dataclass
-class BuildJob:
-    """
-    Build-Auftragskonfiguration und Status.
-    Wird von DockerManager und FrameworkManager verwendet.
-    """
-    id: str
-    model_name: str
-    target: str
-    quantization: str
-    status: str  # queued, running, completed, failed
-    config: Dict[str, Any] = field(default_factory=dict)
-    progress: int = 0
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    output_path: Optional[str] = None
-    logs: List[str] = field(default_factory=list)
-    errors: List[str] = field(default_factory=list)
-
-@dataclass
 class FrameworkInfo:
     """Framework metadata and status information"""
     version: str
@@ -81,6 +44,7 @@ class FrameworkInfo:
     docker_available: bool = False
     targets_count: int = 0
     active_builds: int = 0
+
 
 @dataclass
 class SystemRequirements:
@@ -94,6 +58,7 @@ class SystemRequirements:
     def __post_init__(self):
         if self.required_commands is None:
             self.required_commands = ["docker", "docker-compose", "git"]
+
 
 @dataclass
 class FrameworkConfig:
@@ -111,10 +76,6 @@ class FrameworkConfig:
     max_concurrent_builds: int = 2
     build_timeout: int = 3600
     auto_cleanup: bool = True
-
-    # Source Repositories (from project_sources.yml)
-    # Stores flattened keys: "core.llama_cpp" -> "https://..."
-    source_repositories: Dict[str, str] = field(default_factory=dict)
     
     # Docker settings
     docker_registry: str = "ghcr.io"
@@ -129,7 +90,8 @@ class FrameworkConfig:
     # API settings
     api_enabled: bool = False
     api_port: int = 8000
-    api_host: str = "0.0.0.0"
+    # SECURITY FIX: Default to localhost to prevent accidental exposure
+    api_host: str = "127.0.0.1" 
     
     def __post_init__(self):
         if self.default_build_args is None:
@@ -169,10 +131,7 @@ class FrameworkManager:
         
         # Initialize configuration
         if isinstance(config, dict):
-            # Filtere unbekannte Schlüssel heraus
-            known_keys = FrameworkConfig.__annotations__.keys()
-            filtered_config = {k: v for k, v in config.items() if k in known_keys}
-            self.config = FrameworkConfig(**filtered_config)
+            self.config = FrameworkConfig(**config)
         elif isinstance(config, FrameworkConfig):
             self.config = config
         else:
@@ -191,7 +150,7 @@ class FrameworkManager:
         
         # State tracking
         self._build_counter = 0
-        self._active_builds: Dict[str, BuildJob] = {}
+        self._active_builds: Dict[str, Dict[str, Any]] = {}
         
         self.logger.info(f"Framework Manager initialized (version {self.info.version})")
     
@@ -219,14 +178,14 @@ class FrameworkManager:
                 # Step 2: Setup directories
                 self._setup_directories()
                 
-                # Step 3: Load configuration (inkl. project_sources.yml)
+                # Step 3: Load configuration
                 self._load_extended_configuration()
                 
                 # Step 4: Initialize Docker
                 self._initialize_docker()
                 
-                # Step 5: Register core components (Wird von außen aufgerufen)
-                # self._register_core_components()
+                # Step 5: Register core components
+                self._register_core_components()
                 
                 # Step 6: Validate framework installation
                 self._validate_installation()
@@ -265,9 +224,7 @@ class FrameworkManager:
         # Update dynamic info
         self.info.docker_available = self._check_docker_availability()
         self.info.targets_count = self._count_available_targets()
-        self.info.active_builds = len([
-            j for j in self._active_builds.values() if j.status == "running"
-        ])
+        self.info.active_builds = len(self._active_builds)
         
         return self.info
     
@@ -278,18 +235,23 @@ class FrameworkManager:
     def update_config(self, updates: Dict[str, Any]) -> bool:
         """
         Update framework configuration.
+        
+        Args:
+            updates: Configuration updates to apply
+            
+        Returns:
+            bool: True if update successful
         """
         try:
             # Validate updates
             for key, value in updates.items():
                 if not hasattr(self.config, key):
-                    continue # Ignore unknown keys instead of error
+                    raise ValidationError(f"Unknown configuration key: {key}")
             
             # Apply updates
             for key, value in updates.items():
-                if hasattr(self.config, key):
-                    setattr(self.config, key, value)
-                    self.logger.debug(f"Config updated: {key}")
+                setattr(self.config, key, value)
+                self.logger.debug(f"Config updated: {key} = {value}")
             
             # Persist configuration if needed
             self._persist_configuration()
@@ -313,6 +275,12 @@ class FrameworkManager:
     def validate_target(self, target_name: str) -> Dict[str, Any]:
         """
         Validate a hardware target configuration.
+        
+        Args:
+            target_name: Name of the target to validate
+            
+        Returns:
+            dict: Validation result with 'valid' bool and 'errors' list
         """
         try:
             target_path = Path(self.config.targets_dir) / target_name
@@ -340,14 +308,7 @@ class FrameworkManager:
                 if not file_path.exists():
                     errors.append(f"Missing required file: {required_file}")
                 elif required_file.endswith('.sh') and not os.access(file_path, os.X_OK):
-                    # Versuche, ausführbar zu machen (kann in Docker-Volumes fehlschlagen)
-                    try:
-                        file_path.chmod(file_path.stat().st_mode | 0o111)
-                        if not os.access(file_path, os.X_OK):
-                             errors.append(f"Script not executable: {required_file}")
-                    except Exception as e:
-                         errors.append(f"Script not executable: {required_file} (Fehler: {e})")
-
+                    errors.append(f"Script not executable: {required_file}")
             
             # Validate target.yml
             target_yml = target_path / "target.yml"
@@ -372,8 +333,11 @@ class FrameworkManager:
                     with open(dockerfile, 'r') as f:
                         dockerfile_content = f.read()
                     
+                    # Basic Dockerfile validation
                     if not dockerfile_content.strip().startswith('FROM'):
                         errors.append("Dockerfile must start with FROM instruction")
+                    
+                    # Check for multi-stage build (our standard)
                     if ' AS ' not in dockerfile_content.upper():
                         errors.append("Dockerfile should use multi-stage build pattern")
                         
@@ -400,39 +364,36 @@ class FrameworkManager:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             return f"build_{timestamp}_{self._build_counter:04d}"
     
-    def register_build(self, build_id: str, build_job: BuildJob):
+    def register_build(self, build_id: str, build_config: Dict[str, Any]):
         """Register an active build"""
         with self._lock:
-            self._active_builds[build_id] = build_job
+            self._active_builds[build_id] = {
+                "id": build_id,
+                "config": build_config,
+                "status": "queued",
+                "start_time": datetime.now().isoformat(),
+                "progress": 0
+            }
             self.logger.info(f"Build registered: {build_id}")
     
     def update_build_status(self, build_id: str, status: str, progress: int = None):
         """Update build status"""
         with self._lock:
             if build_id in self._active_builds:
-                job = self._active_builds[build_id]
-                job.status = status
+                self._active_builds[build_id]["status"] = status
                 if progress is not None:
-                    job.progress = progress
+                    self._active_builds[build_id]["progress"] = progress
                 if status in ["completed", "failed"]:
-                    job.end_time = datetime.now()
+                    self._active_builds[build_id]["end_time"] = datetime.now().isoformat()
     
-    def get_build_status(self, build_id: str) -> Optional[BuildJob]:
+    def get_build_status(self, build_id: str) -> Optional[Dict[str, Any]]:
         """Get build status"""
         return self._active_builds.get(build_id)
-
-    def get_next_queued_build_status(self) -> Optional[Dict[str, Any]]:
-        """Finds the next build job marked as 'queued'."""
-        with self._lock:
-            for job in self._active_builds.values():
-                if job.status == "queued":
-                    return asdict(job)
-        return None
     
     def list_builds(self) -> List[Dict[str, Any]]:
         """List all builds"""
         with self._lock:
-            return [asdict(job) for job in self._active_builds.values()]
+            return list(self._active_builds.values())
     
     # ========================================================================
     # PRIVATE METHODS
@@ -442,12 +403,14 @@ class FrameworkManager:
         """Validate system meets framework requirements"""
         requirements = SystemRequirements()
         
+        # Check Python version
         current_python = f"{sys.version_info.major}.{sys.version_info.minor}"
         if version.parse(current_python) < version.parse(requirements.min_python_version):
             raise FrameworkError(
                 f"Python {requirements.min_python_version}+ required, found {current_python}"
             )
         
+        # Check required commands
         missing_commands = []
         for cmd in requirements.required_commands:
             if not check_command_exists(cmd):
@@ -457,6 +420,22 @@ class FrameworkManager:
             raise FrameworkError(
                 f"Required commands not found: {', '.join(missing_commands)}"
             )
+        
+        # Check Docker version
+        try:
+            result = subprocess.run(
+                ["docker", "--version"], 
+                capture_output=True, 
+                text=True, 
+                check=True
+            )
+            docker_version_str = result.stdout.split()[2].rstrip(',')
+            if version.parse(docker_version_str) < version.parse(requirements.min_docker_version):
+                raise FrameworkError(
+                    f"Docker {requirements.min_docker_version}+ required, found {docker_version_str}"
+                )
+        except subprocess.CalledProcessError:
+            raise FrameworkError("Docker is not available or not functional")
         
         self.logger.info("System requirements validation passed")
     
@@ -480,9 +459,8 @@ class FrameworkManager:
                 raise FrameworkError(f"Failed to create directory {path}: {e}")
     
     def _load_extended_configuration(self):
-        """Load extended configuration from files, including project_sources.yml"""
-        
-        # 1. Load standard configuration
+        """Load extended configuration from files"""
+        # Try to load from various config file locations
         config_candidates = [
             Path(".env"),
             Path("config.yml"),
@@ -499,52 +477,27 @@ class FrameworkManager:
                     break
                 except Exception as e:
                     self.logger.warning(f"Failed to load config from {config_file}: {e}")
-                    
-        # 2. Load Source Repositories (project_sources.yml)
-        # Dies ermöglicht die zentrale Verwaltung von Git-URLs
-        sources_file = Path(self.config.configs_dir) / "project_sources.yml"
-        if sources_file.exists():
-            try:
-                with open(sources_file, 'r') as f:
-                    sources_data = yaml.safe_load(f)
-                    if sources_data:
-                        # Flatten the structure: core.llama_cpp
-                        flat_sources = {}
-                        for section, items in sources_data.items():
-                            if isinstance(items, dict):
-                                for key, url in items.items():
-                                    flat_sources[f"{section}.{key}"] = url
-                            else:
-                                flat_sources[section] = items
-                        
-                        self.config.source_repositories = flat_sources
-                        self.logger.info(f"Loaded {len(flat_sources)} source repositories from project_sources.yml")
-            except Exception as e:
-                self.logger.warning(f"Failed to load project_sources.yml: {e}")
-        else:
-            self.logger.info("No project_sources.yml found - using internal defaults.")
     
     def _load_config_file(self, config_path: Path):
         """Load configuration from a specific file"""
-        config_data = {}
         if config_path.suffix in ['.yml', '.yaml']:
-            config_data = safe_json_load(config_path, {}) # Fallback
-            try:
-                with open(config_path, 'r') as f:
-                    config_data = yaml.safe_load(f)
-            except:
-                config_data = {}
-                
+            with open(config_path, 'r') as f:
+                config_data = yaml.safe_load(f)
         elif config_path.suffix == '.json':
-            config_data = safe_json_load(config_path, {})
+            config_data = safe_json_load(config_path)
         elif config_path.name == '.env':
+            # Simple .env parsing
+            config_data = {}
             with open(config_path, 'r') as f:
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith('#') and '=' in line:
                         key, value = line.split('=', 1)
                         config_data[key.lower()] = value
+        else:
+            raise ValueError(f"Unsupported config file format: {config_path}")
         
+        # Apply configuration updates
         if config_data:
             self.update_config(config_data)
     
@@ -559,12 +512,22 @@ class FrameworkManager:
         except Exception as e:
             self.logger.error(f"Docker initialization failed: {e}")
             self.info.docker_available = False
+            # Don't raise here - framework can work without Docker for some operations
     
     def _register_core_components(self):
+        """Register core framework components"""
+        # Components will be registered by their respective modules
+        # This method is a placeholder for future component registration
         pass
     
     def _validate_installation(self):
         """Validate framework installation completeness"""
+        # Check for required target templates
+        template_path = Path(self.config.targets_dir) / "_template"
+        if not template_path.exists():
+            self.logger.warning("Template target not found - community contributions may be limited")
+        
+        # Check for at least one working target
         targets_found = self._count_available_targets()
         if targets_found == 0:
             self.logger.warning("No valid targets found - framework functionality limited")
@@ -576,6 +539,7 @@ class FrameworkManager:
         docker_client = self.get_component("docker_client")
         if not docker_client:
             return False
+        
         try:
             docker_client.ping()
             return True
@@ -594,6 +558,7 @@ class FrameworkManager:
                 target_yml = target_dir / "target.yml"
                 if target_yml.exists():
                     count += 1
+        
         return count
     
     def _stop_all_builds(self):
@@ -601,8 +566,9 @@ class FrameworkManager:
         for build_id in list(self._active_builds.keys()):
             try:
                 self.update_build_status(build_id, "stopped")
-            except:
-                pass
+                self.logger.info(f"Build stopped: {build_id}")
+            except Exception as e:
+                self.logger.error(f"Failed to stop build {build_id}: {e}")
     
     def _shutdown_components(self):
         """Shutdown all registered components"""
@@ -612,29 +578,54 @@ class FrameworkManager:
                     component.close()
                 elif hasattr(component, 'shutdown'):
                     component.shutdown()
-            except:
-                pass
+                self.logger.debug(f"Component shutdown: {name}")
+            except Exception as e:
+                self.logger.error(f"Failed to shutdown component {name}: {e}")
     
     def _cleanup_resources(self):
         """Cleanup framework resources"""
+        # Clear component registry
         self._components.clear()
+        
+        # Clear active builds
         self._active_builds.clear()
+        
+        # Clear event queue
+        while not self._event_queue.empty():
+            try:
+                self._event_queue.get_nowait()
+            except queue.Empty:
+                break
     
     def _persist_configuration(self):
         """Persist current configuration to file"""
         config_file = Path(self.config.configs_dir) / "framework.yml"
         try:
             ensure_directory(config_file.parent)
-            # Wichtig: source_repositories werden NICHT in framework.yml gespeichert, 
-            # da sie in project_sources.yml gehören.
             with open(config_file, 'w') as f:
-                config_dict = asdict(self.config)
-                if 'source_repositories' in config_dict:
-                    del config_dict['source_repositories']
-                yaml.dump(config_dict, f, default_flow_style=False)
+                yaml.dump(asdict(self.config), f, default_flow_style=False)
             self.logger.debug(f"Configuration persisted to: {config_file}")
         except Exception as e:
             self.logger.error(f"Failed to persist configuration: {e}")
+
+
+# ============================================================================
+# EXCEPTIONS
+# ============================================================================
+
+class FrameworkError(Exception):
+    """Base exception for framework errors"""
+    pass
+
+
+class FrameworkInitializationError(FrameworkError):
+    """Exception raised during framework initialization"""
+    pass
+
+
+class FrameworkConfigurationError(FrameworkError):
+    """Exception raised for configuration errors"""
+    pass
 
 
 # ============================================================================
@@ -653,13 +644,21 @@ def get_framework_info() -> Dict[str, Any]:
         "docker_requirements": ">=20.10"
     }
 
+
 def create_default_config() -> FrameworkConfig:
     """Create a default framework configuration"""
     return FrameworkConfig()
 
+
 def validate_framework_installation(install_path: Optional[Path] = None) -> Dict[str, Any]:
     """
     Validate framework installation without full initialization.
+    
+    Args:
+        install_path: Path to framework installation (default: current directory)
+        
+    Returns:
+        dict: Validation result with status and details
     """
     if install_path is None:
         install_path = Path.cwd()
@@ -671,8 +670,10 @@ def validate_framework_installation(install_path: Optional[Path] = None) -> Dict
         "install_path": str(install_path)
     }
     
+    # Check required files
     required_files = [
         "pyproject.toml",
+        "orchestrator/__init__.py",
         "orchestrator/main.py",
         "orchestrator/cli.py"
     ]
@@ -682,5 +683,21 @@ def validate_framework_installation(install_path: Optional[Path] = None) -> Dict
         if not full_path.exists():
             result["errors"].append(f"Missing required file: {file_path}")
             result["valid"] = False
+    
+    # Check for targets directory
+    targets_dir = install_path / "targets"
+    if not targets_dir.exists():
+        result["warnings"].append("No targets directory found")
+    else:
+        # Count valid targets
+        target_count = 0
+        for target_dir in targets_dir.iterdir():
+            if target_dir.is_dir() and (target_dir / "target.yml").exists():
+                target_count += 1
+        
+        if target_count == 0:
+            result["warnings"].append("No valid targets found")
+        else:
+            result["target_count"] = target_count
     
     return result

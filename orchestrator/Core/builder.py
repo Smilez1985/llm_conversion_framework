@@ -70,7 +70,7 @@ class BuildConfiguration:
     build_id: str
     timestamp: str
     model_source: str
-    target_arch: str  # String-basiert für Modularität
+    target_arch: str  # MODULAR: String based
     target_format: ModelFormat
     output_dir: str
     model_branch: Optional[str] = "main"
@@ -151,7 +151,8 @@ class BuildEngine:
         try:
             self.docker_client.ping()
             try:
-                subprocess.run(["docker", "buildx", "version"], capture_output=True, check=True) # nosec
+                # SECURITY: List args instead of shell=True
+                subprocess.run(["docker", "buildx", "version"], capture_output=True, check=True)
             except:
                 self.logger.warning("Docker BuildX not available")
         except Exception as e:
@@ -346,8 +347,8 @@ class BuildEngine:
 
     def _extract_artifacts(self, config, progress):
         progress.current_stage = "Extracting"
-        progress.progress_percent = 80
-        src = self.cache_dir / "builds" / config.build_id / "output"
+        progress.progress_percent = 90
+        src = self.cache_dir / "builds" / config.build_id / "output" / "packages"
         dst = Path(config.output_dir)
         if src.exists():
             for f in src.rglob("*"):

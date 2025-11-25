@@ -2,8 +2,6 @@
 """
 LLM Cross-Compiler Framework - Target Manager
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
-
-Manages hardware targets using string-based architecture definitions.
 """
 
 import os
@@ -37,8 +35,20 @@ class ToolchainType(Enum):
     CUSTOM = "custom"
     NATIVE = "native"
 
-# BoardVariant ist optional und string-basiert in der YAML, kein Enum mehr nötig für Core
-# OptimizationProfile ist optional
+class OptimizationProfile(Enum):
+    GENERIC = "generic"
+    PERFORMANCE = "performance"
+    SIZE = "size"
+    POWER = "power"
+    CUSTOM = "custom"
+
+class BoardVariant(Enum):
+    RK3566_GENERIC = "rk3566_generic"
+    RK3566_QUARTZ64 = "rk3566_quartz64"
+    RK3566_PINETAB2 = "rk3566_pinetab2"
+    RK3588_ROCK5B = "rk3588_rock5b" 
+    RASPBERRY_PI4 = "raspberry_pi4"
+    RASPBERRY_PI5 = "raspberry_pi5"
 
 @dataclass
 class ToolchainInfo:
@@ -62,8 +72,8 @@ class ToolchainInfo:
 @dataclass
 class HardwareProfile:
     name: str
-    target_arch: str # String!
-    board_variant: Optional[str] = None
+    target_arch: str
+    board_variant: Optional[BoardVariant] = None
     cpu_architecture: str = ""
     cpu_features: List[str] = field(default_factory=list)
     cpu_cores: int = 4
@@ -82,13 +92,16 @@ class HardwareProfile:
     memory_limit_mb: int = 2048
     
     def __post_init__(self):
-        # Basic defaults if empty
-        pass
+        # Defaults for RK3566 string based match
+        if not self.cflags and "rk3566" in str(self.target_arch).lower():
+            self.cflags = ["-march=armv8-a+crc+crypto", "-mtune=cortex-a55", "-mfpu=neon-fp-armv8", "-mfloat-abi=hard"]
+            self.enable_neon = True
+            self.enable_fp16 = True
 
 @dataclass
 class TargetConfiguration:
     name: str
-    target_arch: str # String!
+    target_arch: str
     status: TargetStatus
     version: str = "1.0.0"
     maintainer: str = "Framework Team"
@@ -140,6 +153,9 @@ class TargetManager:
             self.logger.info("Initializing Target Manager...")
             self._discover_targets()
             self._validate_all_targets()
+            self._setup_default_toolchains()
+            self._load_hardware_profiles()
+            self._generate_cmake_toolchains()
             self._initialized = True
             return True
         except Exception as e:
@@ -166,20 +182,14 @@ class TargetManager:
         try:
             with open(yml, 'r') as f: data = yaml.safe_load(f)
             meta = data.get('metadata', {})
-            
             # Use raw string for architecture
-            arch_str = meta.get('architecture', target_dir.name)
+            arch = meta.get('architecture', target_dir.name)
             
             config = TargetConfiguration(
-                name=target_dir.name, 
-                target_arch=arch_str, 
-                status=TargetStatus.UNCONFIGURED,
-                version=meta.get('version', '1.0.0'), 
-                maintainer=meta.get('maintainer', 'Framework Team'),
-                description=meta.get('description', ''), 
-                target_dir=str(target_dir),
-                modules_dir=str(target_dir / "modules"), 
-                configs_dir=str(target_dir / "configs")
+                name=target_dir.name, target_arch=arch, status=TargetStatus.UNCONFIGURED,
+                version=meta.get('version', '1.0.0'), maintainer=meta.get('maintainer', 'Framework Team'),
+                description=meta.get('description', ''), target_dir=str(target_dir),
+                modules_dir=str(target_dir / "modules"), configs_dir=str(target_dir / "configs")
             )
             if Path(config.modules_dir).exists():
                 config.available_modules = [f.name for f in Path(config.modules_dir).glob("*.sh") if f.is_file()]
@@ -191,13 +201,6 @@ class TargetManager:
             feats = data.get('features', {})
             config.supported_formats = [self._string_to_model_format(f) for f in feats.get('formats', []) if self._string_to_model_format(f)]
             config.supported_quantizations = feats.get('quantizations', [])
-            
-            # Update status if all required modules present
-            missing = [m for m in config.required_modules if m not in config.available_modules]
-            if not missing:
-                config.status = TargetStatus.AVAILABLE
-            else:
-                config.validation_errors.append(f"Missing modules: {missing}")
             
             return config
         except Exception as e:
@@ -212,6 +215,11 @@ class TargetManager:
         for t in self.registry.targets.values():
             if t.status == TargetStatus.ERROR: continue
 
+    def _setup_default_toolchains(self): pass
+    def _load_hardware_profiles(self): pass
+    def _generate_cmake_toolchains(self): pass
+    def _validate_target_configuration(self, cfg): pass
+    
     def refresh_targets(self) -> bool:
         try:
             self.registry = TargetRegistry()
@@ -222,17 +230,6 @@ class TargetManager:
             self.logger.error(f"Refresh failed: {e}")
             return False
 
-    def list_available_targets(self) -> List[str]:
-        if not self._initialized: self.initialize()
-        # Return unique list of architectures/names
-        return list(self.registry.targets.keys())
-
-    def get_target_info(self, target_name: str) -> Dict[str, Any]:
-        t = self.registry.get_target(target_name)
-        if t: return asdict(t)
-        return {"error": "Target not found"}
-
-    # Utility Methods for Hardware Detection (Optional, Helper)
     def detect_rk3566_hardware(self) -> Dict[str, Any]:
         res = {"is_rk3566": False, "confidence": "none", "detected_features": []}
         try:
@@ -246,6 +243,9 @@ class TargetManager:
                             break
         except: pass
         return res
+
+    def generate_rk3566_build_flags(self) -> List[str]:
+        return ["-march=armv8-a+crc+crypto", "-mtune=cortex-a55", "-mfpu=neon-fp-armv8", "-mfloat-abi=hard", "-O3", "-DENABLE_NEON=1"]
 
 # ============================================================================
 # UTILITY FUNCTIONS

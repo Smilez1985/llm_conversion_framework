@@ -25,13 +25,12 @@ jobs:
       - name: Install Dependencies
         run: poetry install --no-interaction
         
-      - name: Linting (Ruff/Black)
+      - name: Static Analysis (Linting)
         run: |
-          # Hier würden Linter laufen, falls konfiguriert
-          # poetry run ruff check .
-          echo "Linting skipped for MVP"
+          # Wir prüfen zumindest auf Syntaxfehler
+          poetry run python -m compileall orchestrator/
 
-  docker-build-test:
+  docker-integration-test:
     needs: quality-check
     runs-on: ubuntu-latest
     steps:
@@ -50,18 +49,18 @@ jobs:
           file: targets/Rockchip/dockerfile
           push: false
           tags: llm-framework/rockchip:test
+          load: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
           
-      - name: Run System Tests inside Container
+      - name: Run System Diagnostics (Smoke Test)
         run: |
-          # Wir nutzen den Entrypoint "test" Befehl
+          # Führt die eingebauten Selbsttests im Container aus
           docker run --rm llm-framework/rockchip:test test
-
-  integration-tests:
-    needs: quality-check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # Hier würden echte Integrationstests laufen (z.B. Dummy-Modell konvertieren)
-      # Das ist ressourcenintensiv und wird für den MVP oft gemockt.
+          
+      - name: Verify Pipeline Components
+        run: |
+          # Prüft ob alle Module ausführbar sind und Hilfe ausgeben
+          docker run --rm llm-framework/rockchip:test config --help
+          docker run --rm llm-framework/rockchip:test convert --help
+          docker run --rm llm-framework/rockchip:test target --help

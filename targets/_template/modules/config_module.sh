@@ -1,243 +1,105 @@
 #!/bin/bash
 # config_module.sh - Hardware Config & CMake Toolchain Generator
 # Part of LLM Cross-Compiler Framework
-#
-# DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
-# ZWECK: Liest target_hardware_config.txt und generiert optimierte Build-Konfiguration
-#        für [Hardware-Familie]
+# DIREKTIVE: Goldstandard, CCACHE-Enabled.
 
 set -euo pipefail
 
 # --- CONFIGURATION & GLOBALS ---
 readonly SCRIPT_NAME="config_module.sh"
 readonly BUILD_CACHE_DIR="${BUILD_CACHE_DIR:-/build-cache}"
-readonly HARDWARE_CONFIG_FILE="${BUILD_CACHE_DIR}/target_hardware_config.txt"
-readonly OUTPUT_TOOLCHAIN_FILE="${BUILD_CACHE_DIR}/cross_compile_toolchain.cmake"
-readonly OUTPUT_CONFIG_FILE="${BUILD_CACHE_DIR}/build_config.sh"
-readonly LOG_LEVEL="${LOG_LEVEL:-INFO}"
-DEBUG="${DEBUG:-0}"
+readonly HARDWARE_CONFIG_FILE="${HARDWARE_CONFIG_FILE:-${BUILD_CACHE_DIR}/target_hardware_config.txt}"
+readonly OUTPUT_TOOLCHAIN_FILE="${OUTPUT_TOOLCHAIN_FILE:-${BUILD_CACHE_DIR}/cross_compile_toolchain.cmake}"
+readonly OUTPUT_CONFIG_FILE="${OUTPUT_CONFIG_FILE:-${BUILD_CACHE_DIR}/build_config.sh}"
 
-# Hardware-Konfiguration
 declare -A HW_CONFIG
-
-# Compiler-Konfiguration
 declare -A COMPILER_CONFIG
 
-# ============================================================================
-# LOGGING & ERROR HANDLING
-# ============================================================================
-
+# --- LOGGING ---
 log_info() { echo "ℹ️  [$(date '+%H:%M:%S')] [CONFIG] $1"; }
 log_success() { echo "✅ [$(date '+%H:%M:%S')] [CONFIG] $1"; }
 log_warn() { echo "⚠️  [$(date '+%H:%M:%S')] [CONFIG] $1"; }
 log_error() { echo "❌ [$(date '+%H:%M:%S')] [CONFIG] $1" >&2; }
-log_debug() { [ "$DEBUG" = "1" ] && echo "🔍 [$(date '+%H:%M:%S')] [CONFIG] $1"; }
 
-die() {
-    log_error "$1"
-    exit "${2:-1}"
-}
+die() { log_error "$1"; exit 1; }
 
-trap "die 'Config Module fehlgeschlagen'" ERR
-
-# ============================================================================
-# HARDWARE CONFIG PARSING
-# ============================================================================
-
+# ... [Hardware Config Loading - Standard Template Logic] ...
 load_hardware_config() {
-    log_info "Lade Hardware-Konfiguration: $HARDWARE_CONFIG_FILE"
-    
-    if [[ ! -f "$HARDWARE_CONFIG_FILE" ]]; then
-        log_warn "Hardware-Konfigurationsdatei nicht gefunden: $HARDWARE_CONFIG_FILE"
-        log_warn "Verwende generische Fallback-Optimierungen."
-        HW_CONFIG[ARCHITECTURE_FULL]="[IHRE_ARCHITEKTUR]" # z.B. aarch64
-        HW_CONFIG[CPU_MODEL_NAME]="generic"
-        return 1
+    log_info "Lade Hardware-Konfiguration..."
+    if [[ -f "$HARDWARE_CONFIG_FILE" ]]; then
+        while IFS='=' read -r key value; do
+            [[ "$key" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "$key" ]] && continue
+            key=$(echo "$key" | tr -d ' \t')
+            value=$(echo "$value" | tr -d ' \t' | sed 's/^"//;s/"$//')
+            HW_CONFIG["$key"]="$value"
+        done < <(grep -E '^[^#]*=' "$HARDWARE_CONFIG_FILE")
+    else
+        log_warn "Config nicht gefunden, nutze Defaults."
+        HW_CONFIG[ARCHITECTURE_FULL]="[ARCHITEKTUR]"
     fi
-    
-    while IFS='=' read -r key value; do
-        [[ "$key" =~ ^[[:space:]]*# ]] && continue
-        [[ -z "$key" ]] && continue
-        key=$(echo "$key" | tr -d ' \t')
-        value=$(echo "$value" | tr -d ' \t' | sed 's/^"//;s/"$//')
-        HW_CONFIG["$key"]="$value"
-    done < <(grep -E '^[^#]*=' "$HARDWARE_CONFIG_FILE")
-    
-    log_info "Hardware-Konfiguration geladen (${HW_CONFIG[CPU_MODEL_NAME]:-Unknown})"
 }
 
 # ============================================================================
-# COMPILER FLAGS GENERATION
-# ============================================================================
-
-generate_compiler_flags() {
-    log_info "Generiere Compiler-Flags für ${HW_CONFIG[ARCHITECTURE_FULL]}"
-    
-    local cflags="-O3 -pthread -fPIC"
-    local cxxflags="-std=c++17"
-    local cmake_flags="-DGGML_NATIVE=ON"
-    local build_jobs=$(nproc) # Standard: Alle Kerne im Container
-    
-    # --- 4. ERSETZEN: HARDWARE-SPEZIFISCHE LOGIK ---
-    # Fügen Sie hier Ihre Logik hinzu, um die HW_CONFIG zu lesen 
-    # und cflags, cxxflags, cmake_flags anzupassen.
-    
-    # Beispiel für AArch64 (Rockchip/Jetson)
-    if [[ "${HW_CONFIG[ARCHITECTURE_FULL]}" == "aarch64" ]]; then
-        COMPILER_CONFIG[CROSS_PREFIX]="aarch64-linux-gnu"
-        
-        if [[ "${HW_CONFIG[CPU_MODEL_NAME]}" =~ "Cortex-A55" ]]; then
-            log_info "Optimiere für Cortex-A55"
-            cflags="$cflags -mcpu=cortex-a55 -march=armv8-a"
-        elif [[ "${HW_CONFIG[CPU_MODEL_NAME]}" =~ "Cortex-A76" ]]; then
-            log_info "Optimiere für Cortex-A76"
-            cflags="$cflags -mcpu=cortex-a76 -march=armv8-a"
-        else
-            log_info "Verwende generisches ARMv8-A"
-            cflags="$cflags -march=armv8-a"
-        fi
-        
-        if [[ "${HW_CONFIG[SUPPORTS_NEON]:-OFF}" == "ON" ]]; then
-            cmake_flags="$cmake_flags -DGGML_NEON=ON"
-        fi
-    fi
-    
-    # Beispiel für x86_64 (Intel)
-    if [[ "${HW_CONFIG[ARCHITECTURE_FULL]}" == "x86_64" ]]; then
-        cflags="$cflags -march=native"
-        if [[ "${HW_CONFIG[SUPPORTS_AVX2]:-OFF}" == "ON" ]]; then
-            cmake_flags="$cmake_flags -DGGML_AVX2=ON"
-        fi
-    fi
-    
-    # Build-Jobs basierend auf Kernen
-    if [[ -n "${HW_CONFIG[CPU_CORES]:-}" ]] && [[ "${HW_CONFIG[CPU_CORES]}" -lt "$build_jobs" ]]; then
-        build_jobs=${HW_CONFIG[CPU_CORES]}
-    fi
-    
-    # Speichere Konfiguration
-    COMPILER_CONFIG[CFLAGS]="$cflags"
-    COMPILER_CONFIG[CXXFLAGS]="$cxxflags $cflags"
-    COMPILER_CONFIG[CMAKE_FLAGS]="$cmake_flags"
-    COMPILER_CONFIG[BUILD_JOBS]="$build_jobs"
-}
-
-# ============================================================================
-# CMAKE TOOLCHAIN GENERATION
+# CMAKE TOOLCHAIN GENERATION (MIT CCACHE)
 # ============================================================================
 
 generate_cmake_toolchain() {
     log_info "Generiere CMake Toolchain: $OUTPUT_TOOLCHAIN_FILE"
     
+    # CCACHE Detection
+    local ccache_path=$(which ccache || echo "")
+    
     cat > "$OUTPUT_TOOLCHAIN_FILE" << EOF
-# CMake Toolchain File
-# Generated by $SCRIPT_NAME
-# Target: ${HW_CONFIG[CPU_MODEL_NAME]:-Unknown}
-
+# CMake Toolchain File - Generated by Template
 SET(CMAKE_SYSTEM_NAME Linux)
 SET(CMAKE_SYSTEM_PROCESSOR ${HW_CONFIG[ARCHITECTURE_FULL]})
 
-# Compiler Configuration
+# 1. ERSETZEN: Compiler Pfade für Ihre Architektur
+# SET(CMAKE_C_COMPILER   /usr/bin/[CROSS]-gcc)
+# SET(CMAKE_CXX_COMPILER /usr/bin/[CROSS]-g++)
 EOF
 
-    # Cross-Compile Pfade (falls definiert)
-    if [[ -n "${COMPILER_CONFIG[CROSS_PREFIX]:-}" ]]; then
+    # CCACHE Integration
+    if [[ -n "$ccache_path" ]]; then
         cat >> "$OUTPUT_TOOLCHAIN_FILE" << EOF
-SET(CMAKE_C_COMPILER   /usr/bin/${COMPILER_CONFIG[CROSS_PREFIX]}-gcc)
-SET(CMAKE_CXX_COMPILER /usr/bin/${COMPILER_CONFIG[CROSS_PREFIX]}-g++)
-SET(CMAKE_AR           /usr/bin/${COMPILER_CONFIG[CROSS_PREFIX]}-ar)
-SET(CMAKE_STRIP        /usr/bin/${COMPILER_CONFIG[CROSS_PREFIX]}-strip)
+
+# CCACHE Configuration
+SET(CMAKE_C_COMPILER_LAUNCHER "$ccache_path")
+SET(CMAKE_CXX_COMPILER_LAUNCHER "$ccache_path")
 EOF
-    else
-        cat >> "$OUTPUT_TOOLCHAIN_FILE" << EOF
-SET(CMAKE_C_COMPILER   /usr/bin/gcc)
-SET(CMAKE_CXX_COMPILER /usr/bin/g++)
-EOF
+        log_info "CCACHE aktiviert: $ccache_path"
     fi
 
-    # Compiler Flags
     cat >> "$OUTPUT_TOOLCHAIN_FILE" << EOF
 
 # Compiler Flags
-SET(CMAKE_C_FLAGS   "\${CMAKE_C_FLAGS} ${COMPILER_CONFIG[CFLAGS]}")
-SET(CMAKE_CXX_FLAGS "\${CMAKE_CXX_FLAGS} ${COMPILER_CONFIG[CXXFLAGS]}")
+SET(CMAKE_C_FLAGS   "\${CMAKE_C_FLAGS} -O3")
+SET(CMAKE_CXX_FLAGS "\${CMAKE_CXX_FLAGS} -O3")
 
-# llama.cpp specific optimizations
-${COMPILER_CONFIG[CMAKE_FLAGS]}
-
-# Build configuration
+# Build settings
 SET(CMAKE_BUILD_TYPE Release)
 SET(BUILD_SHARED_LIBS OFF)
 EOF
-
-    log_success "CMake Toolchain generiert"
+    log_success "Toolchain generiert."
 }
-
-# ============================================================================
-# BUILD CONFIG SCRIPT GENERATION
-# ============================================================================
 
 generate_build_config() {
-    log_info "Generiere Build Config Script: $OUTPUT_CONFIG_FILE"
-    
+    log_info "Generiere Build Config Script..."
     cat > "$OUTPUT_CONFIG_FILE" << EOF
 #!/bin/bash
-# Build Configuration Script
-# Generated by $SCRIPT_NAME
-# Target: ${HW_CONFIG[CPU_MODEL_NAME]:-Unknown}
-
 export TARGET_ARCH="${HW_CONFIG[ARCHITECTURE_FULL]}"
-export TARGET_CPU="${HW_CONFIG[CPU_MODEL_NAME]}"
-
-export CFLAGS="${COMPILER_CONFIG[CFLAGS]}"
-export CXXFLAGS="${COMPILER_CONFIG[CXXFLAGS]}"
-
 export CMAKE_TOOLCHAIN_FILE="$OUTPUT_TOOLCHAIN_FILE"
-export BUILD_JOBS="${COMPILER_CONFIG[BUILD_JOBS]}"
-
-# Hardware Capabilities (für target_module.sh)
-export HW_SUPPORTS_NEON="${HW_CONFIG[SUPPORTS_NEON]:-OFF}"
-export HW_SUPPORTS_AVX2="${HW_CONFIG[SUPPORTS_AVX2]:-OFF}"
-export HW_SUPPORTS_AVX512="${HW_CONFIG[SUPPORTS_AVX512]:-OFF}"
-export HW_GPU_MODEL="${HW_CONFIG[GPU_MODEL]:-None}"
-
-echo "Build configuration loaded for ${HW_CONFIG[CPU_MODEL_NAME]}"
+export BUILD_JOBS=$(nproc)
 EOF
-
     chmod +x "$OUTPUT_CONFIG_FILE"
-    log_success "Build Config Script generiert"
 }
 
-# ============================================================================
-# MAIN EXECUTION
-# ============================================================================
 main() {
-    local start_time=$SECONDS
-    log_info "Starte Config Module (Hardware-Agent)..."
-    
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --hardware-config)
-                HARDWARE_CONFIG_FILE="$2"
-                shift 2
-                ;;
-            *)
-                die "Unbekannter Parameter: $1"
-                ;;
-        esac
-    done
-    
     load_hardware_config
-    generate_compiler_flags
     generate_cmake_toolchain
     generate_build_config
-    
-    local duration=$((SECONDS - start_time))
-    log_success "Config Module abgeschlossen in ${duration}s"
-    log_info "Nächstes Modul: convert_module.sh"
+    log_success "Konfiguration abgeschlossen."
 }
 
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi

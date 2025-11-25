@@ -18,10 +18,11 @@ from enum import Enum
 import threading
 import copy
 import re
+
 import yaml
 
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.validation import ValidationError
+from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, safe_json_load
 
 
@@ -36,7 +37,6 @@ class ConfigFormat(Enum):
     ENV = "env"
     TOML = "toml"
 
-
 class ConfigScope(Enum):
     """Configuration scope levels"""
     GLOBAL = "global"
@@ -44,7 +44,6 @@ class ConfigScope(Enum):
     PROJECT = "project"
     ENVIRONMENT = "environment"
     RUNTIME = "runtime"
-
 
 class AdvancedFeature(Enum):
     """Optional advanced features"""
@@ -95,11 +94,9 @@ class ConfigSchema:
     def _apply_validation_rule(self, value: Any, rule: str) -> bool:
         try:
             if rule.startswith("min:"):
-                min_val = float(rule.split(":", 1)[1])
-                return value >= min_val
+                return value >= float(rule.split(":", 1)[1])
             elif rule.startswith("max:"):
-                max_val = float(rule.split(":", 1)[1])
-                return value <= max_val
+                return value <= float(rule.split(":", 1)[1])
             elif rule.startswith("regex:"):
                 pattern = rule.split(":", 1)[1]
                 return bool(re.match(pattern, str(value)))
@@ -111,14 +108,12 @@ class ConfigSchema:
             return False
         return True
 
-
 @dataclass
 class ConfigSource:
     source_type: str
     source_path: Optional[str] = None
     loaded_at: Optional[datetime] = None
     priority: int = 0
-
 
 @dataclass
 class ConfigValue:
@@ -141,7 +136,6 @@ class ConfigValue:
             return []
         _, errors = self.schema.validate_value(self.value)
         return errors
-
 
 @dataclass
 class AdvancedModeConfig:
@@ -403,7 +397,6 @@ class ConfigManager:
                 self.logger.warning(f"Listener error: {e}")
 
     def add_change_listener(self, listener: Callable[[str, Any], None]):
-        """Add configuration change listener"""
         if self.advanced_mode.is_feature_enabled(AdvancedFeature.DYNAMIC_UPDATES):
             self.change_listeners.append(listener)
     
@@ -417,6 +410,5 @@ class ConfigManager:
                     result[key] = val.value
         return result
 
-# Initialize module
 if __name__ == "__main__":
     print("ConfigManager module loaded")

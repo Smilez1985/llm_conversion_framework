@@ -1,11 +1,10 @@
 # Dockerfile für [Hardware-Familie]
 # LLM Cross-Compiler Framework - Template
-# DIREKTIVE: Goldstandard, Multi-stage, Hadolint-konform
+# DIREKTIVE: Goldstandard, Multi-stage, Hadolint-konform, Secured
 
 # ============================================================================
 # STAGE 1: Build Environment Setup
 # ============================================================================
-# Verwenden Sie ein stabiles Basis-Image, z.B. debian:bookworm oder ubuntu:22.04
 FROM debian:bookworm-slim AS builder
 
 # Metadaten
@@ -13,16 +12,20 @@ LABEL maintainer="[Ihr Name]"
 LABEL description="[Hardware-Familie] Cross-Compilation Container"
 LABEL version="1.0.0"
 
-# Build-Argumente
+# Build-Argumente (Standard-Werte, werden durch docker-compose überschrieben)
 ARG BUILD_JOBS=4
 ARG PYTHON_VERSION=3.11
+ARG POETRY_URL="https://install.python-poetry.org"
+ARG POETRY_SHA256="3b5842cd6318176812455429c6c109909d21b184579720f154506f6734828455"
 
 # Umgebungsvariablen
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LLAMA_CPP_PATH=/usr/src/llama.cpp
 ENV BUILD_CACHE_DIR=/build-cache
+ENV CCACHE_DIR=/build-cache/ccache
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PATH="/root/.local/bin:$PATH"
 
 # ============================================================================
 # SYSTEM DEPENDENCIES & TOOLCHAIN
@@ -45,16 +48,13 @@ RUN apt-get update && \
         # gcc-aarch64-linux-gnu \
         # g++-aarch64-linux-gnu \
         
-        # Beispiel für x86_64 (Native, Intel NPU):
-        # (Keine Cross-Compiler nötig, nur build-essential)
-        
         # Python
         python3=${PYTHON_VERSION}* \
         python3-pip \
         python3-dev \
         python3-venv \
         \
-        # Utilities
+        # Utilities & Security
         pkg-config \
         libffi-dev \
         libssl-dev \
@@ -62,19 +62,26 @@ RUN apt-get update && \
         bc \
         file \
         time \
+        ccache \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
 # ============================================================================
+# SECURE POETRY INSTALLATION
+# ============================================================================
+RUN curl -sSL -o poetry_installer.py "${POETRY_URL}" \
+    && echo "${POETRY_SHA256}  poetry_installer.py" | sha256sum -c - \
+    && python3 poetry_installer.py \
+    && rm poetry_installer.py
+
+# Configure Poetry
+ENV PATH="/root/.local/bin:$PATH"
+RUN poetry config virtualenvs.create false
+
+# ============================================================================
 # 2. ERSETZEN: Proprietäre SDKs (falls erforderlich)
 # ============================================================================
-# Beispiel für NVIDIA CUDA (auskommentiert):
-# RUN wget ...
-# RUN ./cuda_installer.run --silent ...
-
-# Beispiel für Intel OpenVINO (auskommentiert):
-# RUN wget ...
-# RUN /opt/intel/openvino/install_dependencies.sh
+# Beispiel: RUN wget ... && ./cuda_installer.run --silent ...
 
 # ============================================================================
 # PYTHON ENVIRONMENT & DEPENDENCIES
@@ -82,22 +89,12 @@ RUN apt-get update && \
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Installiere PyTorch (notwendig für Konvertierung)
+# Installiere Core ML Dependencies (Pinned versions recommended)
 RUN python3 -m pip install --no-cache-dir \
-        torch torchvision torchaudio \
-        --index-url https://download.pytorch.org/whl/cpu
-
-# Installiere ML-Abhängigkeiten
-RUN python3 -m pip install --no-cache-dir \
+        torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu \
         transformers tokenizers safetensors sentencepiece protobuf \
         huggingface-hub datasets numpy scipy onnx onnxruntime \
         tqdm psutil pyyaml requests
-
-# ============================================================================
-# LLAMA.CPP SETUP (Wird von source_module.sh ausgeführt)
-# ============================================================================
-# Das Klonen und Bauen von llama.cpp erfolgt durch die Module,
-# um Flexibilität zu gewährleisten.
 
 # ============================================================================
 # STAGE 2: Runtime Environment
@@ -119,16 +116,12 @@ ENV PATH="/app/modules:/app/scripts:${PATH}"
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         # 3. ERSETZEN: Runtime-Bibliotheken (z.B. Cross-Compiler Runtime)
-        # Beispiel für AArch64:
         # crossbuild-essential-arm64 \
-        
-        # Python Runtime
         python3 \
-        # Build tools (benötigt für config_module/target_module)
+        python3-pip \
         cmake \
         make \
         git \
-        # Utilities
         bc \
         jq \
         file \
@@ -139,9 +132,6 @@ RUN apt-get update && \
 # Kopiere Python-Umgebung
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Kopiere llama.cpp (falls in Stufe 1 gebaut)
-# Normalerweise wird dies durch source_module.sh im Volume erledigt
 
 # Kopiere Framework-Module und Skripte
 WORKDIR /app
@@ -156,13 +146,15 @@ RUN chmod +x modules/*.sh scripts/*.sh
 # Erstelle Cache-Verzeichnis und Non-Root-User
 RUN mkdir -p ${BUILD_CACHE_DIR} \
     && mkdir -p ${BUILD_CACHE_DIR}/{models,temp,output,logs,toolchains} \
-    && groupadd -r llmbuilder \
-    && useradd -r -g llmbuilder -d /app -s /bin/bash llmbuilder \
+    && chmod -R 755 ${BUILD_CACHE_DIR}
+
+RUN groupadd -r llmbuilder && \
+    useradd -r -g llmbuilder -d /app -s /bin/bash llmbuilder \
     && chown -R llmbuilder:llmbuilder /app ${BUILD_CACHE_DIR}
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python3 -c "import torch, transformers; print('OK')" || exit 1
+    CMD python3 -c "import torch; print('OK')" || exit 1
 
 # Setze Workdir und User
 WORKDIR ${BUILD_CACHE_DIR}
@@ -171,8 +163,8 @@ USER llmbuilder
 # Volumes
 VOLUME ["${BUILD_CACHE_DIR}"]
 
-# Entrypoint
-COPY docker/entrypoint.sh /entrypoint.sh
+# Entrypoint (Pfad korrigiert!)
+COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["interactive"]

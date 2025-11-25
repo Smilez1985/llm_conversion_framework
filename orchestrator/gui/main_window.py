@@ -12,7 +12,7 @@ import os
 import time
 import socket
 import logging
-import shutil  # NEU: Für Profil-Import
+import shutil
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -35,6 +35,7 @@ from orchestrator.utils.logging import get_logger
 
 # GUI Module Imports
 from orchestrator.gui.community_hub import CommunityHubWindow
+from orchestrator.gui.huggingface_window import HuggingFaceWindow
 from orchestrator.gui.dialogs import AddSourceDialog
 from orchestrator.gui.wizards import ModuleCreationWizard
 
@@ -186,7 +187,7 @@ class MainOrchestrator(QMainWindow):
     def create_menu_bar(self):
         menubar = self.menuBar()
         
-        # --- File Menu (NEU) ---
+        # --- File Menu ---
         file_menu = menubar.addMenu("&File")
         
         import_action = QAction("Import Hardware Profile...", self)
@@ -200,7 +201,7 @@ class MainOrchestrator(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        # Tools Menu
+        # --- Tools Menu ---
         tools_menu = menubar.addMenu("&Tools")
         
         wizard_action = QAction("Create New Module...", self)
@@ -211,7 +212,7 @@ class MainOrchestrator(QMainWindow):
         audit_action.triggered.connect(self.run_image_audit)
         tools_menu.addAction(audit_action)
 
-        # Community Menu
+        # --- Community Menu ---
         community_menu = menubar.addMenu("&Community")
         hub_action = QAction("🌍 Open Community Hub", self)
         hub_action.triggered.connect(self.open_community_hub)
@@ -232,7 +233,7 @@ class MainOrchestrator(QMainWindow):
         
         if file_path:
             try:
-                # Zielverzeichnis ist der 'cache' Ordner, der als Volume gemountet wird
+                # Zielverzeichnis ist der 'cache' Ordner
                 cache_dir = self.app_root / "cache"
                 if not cache_dir.exists():
                     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -255,6 +256,14 @@ class MainOrchestrator(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open Community Hub:\n{e}")
 
+    def open_hf_browser(self):
+        """Öffnet den Hugging Face Model Browser"""
+        try:
+            self.hf_window = HuggingFaceWindow(self.framework_manager, self)
+            self.hf_window.show()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not open HF Browser:\n{e}")
+
     def check_for_updates_automatic(self):
         if not self.update_worker.isRunning():
             self.log("Prüfe auf Updates...")
@@ -271,6 +280,14 @@ class MainOrchestrator(QMainWindow):
         self.model_name.setPlaceholderText("Model Name (e.g. granite-3b)")
         c_layout.addWidget(QLabel("Model:"))
         c_layout.addWidget(self.model_name)
+        
+        # --- HuggingFace Browse Button ---
+        self.hf_btn = QPushButton("🌐 Browse HF")
+        self.hf_btn.setToolTip("Search models on Hugging Face Hub")
+        self.hf_btn.setStyleSheet("background-color: #FFD21E; color: black; font-weight: bold;")
+        self.hf_btn.clicked.connect(self.open_hf_browser)
+        c_layout.addWidget(self.hf_btn)
+        # --------------------------------
         
         self.target_combo = QComboBox()
         self.target_combo.addItems(["rk3566", "rk3588", "raspberry_pi", "nvidia_jetson"])

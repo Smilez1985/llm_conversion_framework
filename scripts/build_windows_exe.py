@@ -42,11 +42,19 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     "--name", APP_NAME,
     
     # WICHTIG: Explicit paths für PyInstaller in komplexen VENVs
+    # Das externe Programm kann hier eigene --paths hinzufügen.
     *([f"--paths={SITE_PACKAGES_PATH}"] if SITE_PACKAGES_PATH else []),
 
     # FIX 1 (YAML C-Code): Hidden Import für yaml/PyYAML. Dies zwingt PyInstaller, alle C-Komponenten zu bündeln.
     "--hidden-import", "yaml", 
     "--hidden-import", "shutil", 
+    
+    # FIX 2: Neue Dependencies explizit einbinden (Sicherheitshalber)
+    "--hidden-import", "huggingface_hub",
+    "--hidden-import", "tqdm",
+    "--hidden-import", "psutil",
+    "--collect-all", "huggingface_hub", 
+    "--collect-all", "tqdm",
 ]
 
 # Füge die tieferen YAML-Module hinzu
@@ -69,7 +77,7 @@ PYINSTALLER_CMD_ARGS.extend([
     # Optional: Icon-Datei
     f"--icon={ICON_FILE}",
     
-    # Main Script (Wird vom externen Programm als letztes Argument HINZUGEFÜGT)
+    # Main Script (WICHTIG: MUSS VOM externen Programm als letztes Argument HINZUGEFÜGT werden)
     MAIN_SCRIPT
 ])
 

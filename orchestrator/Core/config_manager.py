@@ -17,6 +17,7 @@ from datetime import datetime
 from enum import Enum
 import threading
 import copy
+import re
 
 import yaml
 
@@ -50,7 +51,6 @@ class AdvancedFeature(Enum):
     ENVIRONMENTS = "environments"
     COMPLIANCE = "compliance"
 
-
 # ============================================================================
 # DATA MODELS
 # ============================================================================
@@ -83,6 +83,7 @@ class ConfigSchema:
         for rule in self.validation_rules:
             if not self._apply_validation_rule(value, rule):
                 errors.append(f"Validation rule failed for {self.field_name}: {rule}")
+        
         return len(errors) == 0, errors
     
     def _apply_validation_rule(self, value: Any, rule: str) -> bool:
@@ -92,8 +93,8 @@ class ConfigSchema:
             elif rule.startswith("max:"):
                 return value <= float(rule.split(":", 1)[1])
             elif rule.startswith("regex:"):
-                import re
-                return bool(re.match(rule.split(":", 1)[1], str(value)))
+                pattern = rule.split(":", 1)[1]
+                return bool(re.match(pattern, str(value)))
             elif rule == "positive":
                 return value > 0
             elif rule == "non_empty":
@@ -149,7 +150,6 @@ class AdvancedModeConfig:
         if self.enabled:
             self.enabled_features.add(feature)
 
-
 # ============================================================================
 # CONFIGURATION MANAGER CLASS
 # ============================================================================
@@ -182,44 +182,59 @@ class ConfigManager:
         self._initialize_core_schemas()
         self._ensure_directories()
         
-        self.logger.info(f"Config Manager initialized (advanced: {advanced_mode})")
+        self.logger.info(f"Configuration Manager initialized (advanced_mode: {advanced_mode})")
     
     def _detect_config_directory(self) -> Path:
-        candidates = [Path.cwd() / "configs", Path.cwd() / "config", Path.home() / ".llm-framework", Path.cwd()]
-        for c in candidates:
-            if c.exists() and c.is_dir():
-                return c
+        candidates = [
+            Path.cwd() / "configs",
+            Path.cwd() / "config", 
+            Path.home() / ".llm-framework",
+            Path.cwd()
+        ]
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_dir():
+                return candidate
         return Path.cwd() / "configs"
     
     def _ensure_directories(self):
-        dirs = [self.config_dir, self.config_dir / "environments", self.config_dir / "templates", self.config_dir / "backups"]
+        directories = [
+            self.config_dir,
+            self.config_dir / "environments",
+            self.config_dir / "templates",
+            self.config_dir / "backups"
+        ]
         if self.advanced_mode.enabled:
-            dirs.extend([self.config_dir / "secrets", self.config_dir / "compliance", self.config_dir / "audit"])
-        for d in dirs:
-            ensure_directory(d)
+            directories.extend([
+                self.config_dir / "secrets",
+                self.config_dir / "compliance",
+                self.config_dir / "audit"
+            ])
+        for directory in directories:
+            ensure_directory(directory)
 
     def _initialize_core_schemas(self):
-        schemas = [
-            ConfigSchema("targets_dir", str, True, "targets", "Target definitions dir"),
-            ConfigSchema("models_dir", str, True, "models", "Model storage dir"),
-            ConfigSchema("output_dir", str, True, "output", "Output dir"),
-            ConfigSchema("cache_dir", str, True, "cache", "Cache dir"),
-            ConfigSchema("logs_dir", str, True, "logs", "Logs dir"),
-            ConfigSchema("log_level", str, False, "INFO", "Log level"),
-            ConfigSchema("max_concurrent_builds", int, False, 2, "Max builds"),
-            ConfigSchema("build_timeout", int, False, 3600, "Timeout seconds"),
-            ConfigSchema("auto_cleanup", bool, False, True, "Auto cleanup"),
-            ConfigSchema("docker_registry", str, False, "ghcr.io", "Registry URL"),
-            ConfigSchema("docker_namespace", str, False, "llm-framework", "Namespace"),
+        core_schemas = [
+            ConfigSchema("targets_dir", str, True, "targets", "Directory for target definitions"),
+            ConfigSchema("models_dir", str, True, "models", "Directory for model storage"),
+            ConfigSchema("output_dir", str, True, "output", "Directory for build outputs"),
+            ConfigSchema("cache_dir", str, True, "cache", "Directory for cache files"),
+            ConfigSchema("logs_dir", str, True, "logs", "Directory for log files"),
+            ConfigSchema("log_level", str, False, "INFO", "Logging level", ["regex:^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$"]),
+            ConfigSchema("max_concurrent_builds", int, False, 2, "Maximum concurrent builds", ["min:1", "max:10"]),
+            ConfigSchema("build_timeout", int, False, 3600, "Build timeout in seconds", ["min:60"]),
+            ConfigSchema("auto_cleanup", bool, False, True, "Enable automatic cleanup"),
+            ConfigSchema("docker_registry", str, False, "ghcr.io", "Docker registry URL"),
+            ConfigSchema("docker_namespace", str, False, "llm-framework", "Docker namespace"),
             ConfigSchema("gui_theme", str, False, "dark", "GUI theme"),
-            ConfigSchema("gui_auto_refresh", bool, False, True, "Auto refresh"),
-            ConfigSchema("gui_refresh_interval", int, False, 30, "Refresh interval"),
-            ConfigSchema("api_enabled", bool, False, False, "Enable API"),
-            ConfigSchema("api_port", int, False, 8000, "API port"),
-            ConfigSchema("api_host", str, False, "127.0.0.1", "API host")
+            ConfigSchema("gui_auto_refresh", bool, False, True, "GUI auto-refresh"),
+            ConfigSchema("gui_refresh_interval", int, False, 30, "GUI refresh interval"),
+            ConfigSchema("api_enabled", bool, False, False, "Enable API server"),
+            ConfigSchema("api_port", int, False, 8000, "API server port"),
+            ConfigSchema("api_host", str, False, "127.0.0.1", "API server host")
         ]
-        for s in schemas:
-            self.config_schemas[s.field_name] = s
+        
+        for schema in core_schemas:
+            self.config_schemas[schema.field_name] = schema
     
     def load_configuration(self, config_file: Optional[Path] = None) -> bool:
         try:
@@ -232,89 +247,107 @@ class ConfigManager:
             self._validate_configuration()
             return True
         except Exception as e:
-            self.logger.error(f"Config load failed: {e}")
+            self.logger.error(f"Configuration loading failed: {e}")
             return False
     
     def _load_default_configuration(self):
-        src = ConfigSource("default", loaded_at=datetime.now(), priority=0)
-        for name, schema in self.config_schemas.items():
+        default_source = ConfigSource("default", loaded_at=datetime.now(), priority=0)
+        for schema_name, schema in self.config_schemas.items():
             if schema.default_value is not None:
                 with self._lock:
-                    self.config_values[name] = ConfigValue(name, schema.default_value, src, schema, last_modified=datetime.now())
+                    self.config_values[schema_name] = ConfigValue(
+                        key=schema_name,
+                        value=schema.default_value,
+                        source=default_source,
+                        schema=schema,
+                        last_modified=datetime.now()
+                    )
     
     def _load_config_files_auto(self):
-        candidates = [self.config_dir / "framework.yml", self.config_dir / "config.yml", Path.cwd() / "framework.yml"]
-        for f in candidates:
-            if f.exists():
+        config_candidates = [
+            self.config_dir / "framework.yml",
+            self.config_dir / "config.yml",
+            Path.cwd() / "framework.yml"
+        ]
+        for config_file in config_candidates:
+            if config_file.exists():
                 try:
-                    self._load_config_file(f)
+                    self._load_config_file(config_file)
                 except Exception as e:
-                    self.logger.warning(f"Failed to load {f}: {e}")
+                    self.logger.warning(f"Failed to load config file {config_file}: {e}")
     
-    def _load_config_file(self, path: Path):
-        if not path.exists():
-            raise FileNotFoundError(f"Config not found: {path}")
-        with open(path, 'r') as f:
-            if path.suffix in ['.yml', '.yaml']:
-                data = yaml.safe_load(f)
-            elif path.suffix == '.json':
-                data = json.load(f)
-            else:
-                data = {}
+    def _load_config_file(self, config_file: Path):
+        if not config_file.exists():
+            raise FileNotFoundError(f"Configuration file not found: {config_file}")
         
-        if not data:
-            return
-        src = ConfigSource("file", str(path), datetime.now(), 10)
-        self._load_config_data(data, src)
+        with open(config_file, 'r') as f:
+            if config_file.suffix in ['.yml', '.yaml']:
+                config_data = yaml.safe_load(f)
+            elif config_file.suffix == '.json':
+                config_data = json.load(f)
+            else:
+                config_data = {}
+        
+        if not config_data: return
+        
+        file_source = ConfigSource("file", str(config_file), datetime.now(), 10)
+        self._load_config_data(config_data, file_source)
     
-    def _load_config_data(self, data: Dict[str, Any], source: ConfigSource):
-        for k, v in data.items():
-            schema = self.config_schemas.get(k)
+    def _load_config_data(self, config_data: Dict[str, Any], source: ConfigSource):
+        for key, value in config_data.items():
+            schema = self.config_schemas.get(key)
             if schema and schema.enterprise_only and not self.advanced_mode.enabled:
                 continue
+            
             with self._lock:
-                existing = self.config_values.get(k)
+                existing = self.config_values.get(key)
                 if not existing or source.priority >= existing.source.priority:
-                    self.config_values[k] = ConfigValue(k, v, source, schema, last_modified=datetime.now())
+                    self.config_values[key] = ConfigValue(
+                        key=key, value=value, source=source, schema=schema, last_modified=datetime.now()
+                    )
 
     def _load_environment_variables(self):
-        src = ConfigSource("environment", loaded_at=datetime.now(), priority=20)
+        env_source = ConfigSource("environment", loaded_at=datetime.now(), priority=20)
         prefixes = ["LLM_FRAMEWORK_", "FRAMEWORK_", "LLM_"]
-        for k, v in os.environ.items():
-            key = None
-            for p in prefixes:
-                if k.startswith(p):
-                    key = k[len(p):].lower()
+        
+        for env_name, env_value in os.environ.items():
+            config_key = None
+            for prefix in prefixes:
+                if env_name.startswith(prefix):
+                    config_key = env_name[len(prefix):].lower()
                     break
-            if key:
-                schema = self.config_schemas.get(key)
+            
+            if config_key:
+                schema = self.config_schemas.get(config_key)
                 if schema and schema.enterprise_only and not self.advanced_mode.enabled:
                     continue
+                
                 try:
-                    val = self._convert_env_value(v, schema)
+                    val = self._convert_env_value(env_value, schema)
                     with self._lock:
-                        self.config_values[key] = ConfigValue(key, val, src, schema, last_modified=datetime.now())
-                except:
+                        self.config_values[config_key] = ConfigValue(
+                            key=config_key, value=val, source=env_source, schema=schema, last_modified=datetime.now()
+                        )
+                except Exception:
                     pass
 
-    def _convert_env_value(self, val: str, schema: Optional[ConfigSchema]) -> Any:
-        if not schema:
-            return val
+    def _convert_env_value(self, env_value: str, schema: Optional[ConfigSchema]) -> Any:
+        if not schema: return env_value
         try:
             if schema.field_type == bool:
-                return val.lower() in ('true', '1', 'yes')
+                return env_value.lower() in ('true', '1', 'yes')
             elif schema.field_type == int:
-                return int(val)
+                return int(env_value)
             elif schema.field_type == float:
-                return float(val)
-            return val
+                return float(env_value)
+            return env_value
         except:
-            return val
+            return env_value
 
     def _validate_configuration(self):
-        for name, schema in self.config_schemas.items():
-            if schema.required and name not in self.config_values:
-                self.logger.error(f"Missing required config: {name}")
+        for schema_name, schema in self.config_schemas.items():
+            if schema.required and schema_name not in self.config_values:
+                self.logger.error(f"Missing required config: {schema_name}")
 
     def get(self, key: str, default: Any = None) -> Any:
         with self._lock:
@@ -325,10 +358,10 @@ class ConfigManager:
         schema = self.config_schemas.get(key)
         if schema and schema.enterprise_only and not self.advanced_mode.enabled:
             return False
+            
         if schema:
             valid, _ = schema.validate_value(value)
-            if not valid:
-                return False
+            if not valid: return False
             
         src = ConfigSource(source_type, loaded_at=datetime.now(), priority=30)
         val = ConfigValue(key, value, src, schema, last_modified=datetime.now())
@@ -343,29 +376,32 @@ class ConfigManager:
         return True
 
     def _track_config_change(self, key: str, old_value: Any, new_value: Any, source: str):
-        self.change_history.append({"ts": datetime.now().isoformat(), "key": key, "old": old_value, "new": new_value, "src": source})
+        self.change_history.append({
+            "timestamp": datetime.now().isoformat(),
+            "key": key, "old": old_value, "new": new_value, "source": source
+        })
 
     def _notify_change_listeners(self, key: str, value: Any):
         if not self.advanced_mode.is_feature_enabled(AdvancedFeature.DYNAMIC_UPDATES):
             return
-        for l in self.change_listeners:
+        for listener in self.change_listeners:
             try:
-                l(key, value)
+                listener(key, value)
             except Exception as e:
                 self.logger.warning(f"Listener error: {e}")
 
     def add_change_listener(self, listener: Callable[[str, Any], None]):
         if self.advanced_mode.is_feature_enabled(AdvancedFeature.DYNAMIC_UPDATES):
             self.change_listeners.append(listener)
-
+    
     def get_all(self, include_secrets: bool = False) -> Dict[str, Any]:
         result = {}
         with self._lock:
-            for k, v in self.config_values.items():
-                if v.is_secret and not include_secrets:
-                    result[k] = "***HIDDEN***"
+            for key, val in self.config_values.items():
+                if val.is_secret and not include_secrets:
+                    result[key] = "***HIDDEN***"
                 else:
-                    result[k] = v.value
+                    result[key] = val.value
         return result
 
 if __name__ == "__main__":

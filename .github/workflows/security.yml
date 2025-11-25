@@ -17,13 +17,14 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install Dependencies
+      - name: Install Python Dependencies
         run: |
           pip install --upgrade pip
-          # Installiere Python-Dependencies die für Imports benötigt werden
+          # KRITISCH: Diese Dependencies werden für die Imports benötigt!
           pip install pyyaml psutil docker packaging
-          # Installiere Audit Tools
-          pip install bandit safety
+
+      - name: Install Audit Tools
+        run: pip install bandit safety
 
       - name: Security Scan (Bandit)
         run: bandit -r orchestrator/ scripts/ -x tests -s B101

@@ -9,6 +9,7 @@ Container-native with Poetry+VENV, robust error recovery.
 
 Key Responsibilities:
 - HuggingFace model downloading with resumable transfers
+- NEW: HuggingFace API Search integration
 - Local model caching and storage management
 - Model format detection and validation
 - Model metadata extraction and analysis
@@ -92,6 +93,17 @@ class ModelSize(Enum):
 # ============================================================================
 # DATA MODELS
 # ============================================================================
+
+@dataclass
+class HFModelResult:
+    """Result from HuggingFace API Search"""
+    model_id: str
+    downloads: int
+    likes: int
+    pipeline_tag: str
+    created_at: str
+    tags: List[str]
+
 
 @dataclass
 class ModelMetadata:
@@ -520,6 +532,331 @@ class ModelManager:
         except Exception as e:
             self.logger.error(f"Failed to save cache index: {e}")
     
+    # ========================================================================
+    # NEW FEATURE: HUGGINGFACE SEARCH
+    # ========================================================================
+
+    def search_huggingface_models(self, query: str, limit: int = 20, 
+                                sort: str = "downloads", direction: int = -1,
+                                filter_tag: str = None) -> List[HFModelResult]:
+        """
+        Search models on HuggingFace Hub via API.
+        
+        Args:
+            query: Search string
+            limit: Max results
+            sort: Sort field (downloads, likes, createdAt)
+            direction: -1 for descending, 1 for ascending
+            filter_tag: Filter by task (e.g., 'text-generation')
+            
+        Returns:
+            List[HFModelResult]: Found models
+        """
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi()
+            
+            # Construct filter
+            model_filter = [filter_tag] if filter_tag else []
+            
+            self.logger.info(f"Searching HF: {query} (Sort: {sort})")
+            
+            models = api.list_models(
+                search=query,
+                limit=limit,
+                sort=sort,
+                direction=direction,
+                filter=model_filter,
+                full=False
+            )
+            
+            results = []
+            for m in models:
+                res = HFModelResult(
+                    model_id=m.modelId,
+                    downloads=getattr(m, 'downloads', 0),
+                    likes=getattr(m, 'likes', 0),
+                    pipeline_tag=getattr(m, 'pipeline_tag', 'unknown'),
+                    created_at=str(getattr(m, 'created_at', '')),
+                    tags=getattr(m, 'tags', [])
+                )
+                results.append(res)
+                
+            return results
+            
+        except ImportError:
+            self.logger.error("huggingface_hub not installed")
+            raise RuntimeError("Please install huggingface_hub")
+        except Exception as e:
+            self.logger.error(f"HF Search failed: {e}")
+            return []
+
+    # ========================================================================
+    # MODEL DOWNLOADING AND CACHING
+    # ========================================================================
+
+    def _download_hf_model_files(self, model_id: str, archive_path: Path):
+        """
+        Download HuggingFace model files with progress tracking and Authentication support.
+        This implementation supports gated repos via HF_TOKEN environment variable.
+        """
+        try:
+            from huggingface_hub import hf_hub_download, list_repo_files
+            from huggingface_hub.utils import RepositoryNotFoundError, GatedRepoError, LocalEntryNotFoundError
+            
+            # Check Authentication Token
+            token = os.environ.get("HF_TOKEN")
+            
+            # Get list of files
+            try:
+                repo_files = list_repo_files(model_id, token=token)
+                self.logger.info(f"Found {len(repo_files)} files for {model_id}")
+            except GatedRepoError:
+                raise PermissionError(
+                    f"Model {model_id} is GATED. Please accept the license on HuggingFace "
+                    "and set your HF_TOKEN in settings."
+                )
+            except RepositoryNotFoundError:
+                raise FileNotFoundError(f"Model {model_id} not found on HuggingFace.")
+            except Exception as e:
+                self.logger.warning(f"Failed to list repo files: {e}. Trying fallback list.")
+                repo_files = ["config.json", "tokenizer.json", "model.safetensors", "pytorch_model.bin"]
+
+            # Create download progress tracker
+            download_id = f"hf_{model_id.replace('/', '_')}_{int(time.time())}"
+            progress = DownloadProgress(
+                model_name=model_id,
+                download_id=download_id,
+                status=DownloadStatus.IN_PROGRESS,
+                files_total=len(repo_files),
+                start_time=datetime.now()
+            )
+            
+            with self._lock:
+                self.download_progress[download_id] = progress
+            
+            # Download files
+            downloaded_files = []
+            total_size = 0
+            
+            for i, filename in enumerate(repo_files):
+                # Filter unwichtige Dateien (optional)
+                if filename.endswith(".gitattributes") or filename.endswith("README.md"):
+                    continue
+
+                try:
+                    progress.current_file = filename
+                    progress.files_completed = i
+                    
+                    # Download execution
+                    downloaded_file = hf_hub_download(
+                        repo_id=model_id,
+                        filename=filename,
+                        cache_dir=str(archive_path.parent),
+                        local_dir=str(archive_path),
+                        local_dir_use_symlinks=False,
+                        token=token  # Authenticated download
+                    )
+                    
+                    downloaded_files.append(downloaded_file)
+                    
+                    # Update stats
+                    file_size = Path(downloaded_file).stat().st_size
+                    total_size += file_size
+                    progress.downloaded_bytes = total_size
+                    
+                except Exception as e:
+                    # Bei optionalen Files weitermachen, bei Config abbrechen
+                    if filename in ["config.json", "model.safetensors"]:
+                        raise e
+                    self.logger.warning(f"Skipped {filename}: {e}")
+                    continue
+            
+            progress.status = DownloadStatus.COMPLETED
+            progress.end_time = datetime.now()
+            self.logger.info(f"Download completed: {model_id} ({total_size / (1024**3):.2f} GB)")
+            
+        except Exception as e:
+            if download_id in self.download_progress:
+                self.download_progress[download_id].status = DownloadStatus.FAILED
+                self.download_progress[download_id].error_message = str(e)
+            raise
+    
+    def _download_file_with_progress(self, url: str, target_file: Path, 
+                                   chunk_size: int = None) -> bool:
+        """Download file from URL with progress tracking"""
+        if chunk_size is None:
+            chunk_size = self.chunk_size
+        
+        try:
+            # Create download progress tracker
+            download_id = f"url_{int(time.time())}"
+            progress = DownloadProgress(
+                model_name=str(target_file.name),
+                download_id=download_id,
+                status=DownloadStatus.IN_PROGRESS,
+                current_file=str(target_file.name),
+                start_time=datetime.now()
+            )
+            
+            with self._lock:
+                self.download_progress[download_id] = progress
+            
+            # Start download
+            response = requests.get(url, stream=True, timeout=self.timeout_seconds)
+            response.raise_for_status()
+            
+            # Get total size if available
+            total_size = int(response.headers.get('content-length', 0))
+            progress.total_bytes = total_size
+            
+            downloaded = 0
+            
+            with open(target_file, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        progress.update_progress(downloaded, total_size)
+            
+            # Verify download
+            actual_size = target_file.stat().st_size
+            if total_size > 0 and actual_size != total_size:
+                raise RuntimeError(f"Download incomplete: expected {total_size}, got {actual_size}")
+            
+            progress.status = DownloadStatus.COMPLETED
+            progress.end_time = datetime.now()
+            
+            self.logger.info(f"File download completed: {target_file.name} ({actual_size / (1024*1024):.1f} MB)")
+            return True
+            
+        except Exception as e:
+            if download_id in self.download_progress:
+                self.download_progress[download_id].status = DownloadStatus.FAILED
+                self.download_progress[download_id].error_message = str(e)
+            
+            # Clean up partial download
+            if target_file.exists():
+                target_file.unlink()
+            
+            self.logger.error(f"File download failed: {url} - {e}")
+            return False
+
+    def _extract_model_metadata(self, model_path: Path, metadata: ModelMetadata):
+        """Extract detailed metadata from model files"""
+        try:
+            # Look for config.json (HuggingFace format)
+            config_file = model_path / "config.json"
+            if config_file.exists():
+                with open(config_file, 'r') as f:
+                    config = json.load(f)
+                
+                metadata.model_type = config.get('model_type', '')
+                metadata.architecture = config.get('architectures', ['unknown'])[0] if 'architectures' in config else 'unknown'
+                metadata.vocab_size = config.get('vocab_size')
+                metadata.hidden_size = config.get('hidden_size')
+                metadata.num_layers = config.get('num_hidden_layers')
+                metadata.num_attention_heads = config.get('num_attention_heads')
+                metadata.max_position_embeddings = config.get('max_position_embeddings')
+                
+                self.logger.debug(f"Extracted HuggingFace config metadata for {metadata.name}")
+            
+            # Look for GGUF metadata
+            gguf_files = list(model_path.glob("*.gguf"))
+            if gguf_files:
+                try:
+                    # Try to extract GGUF metadata (basic implementation)
+                    gguf_file = gguf_files[0]
+                    with open(gguf_file, 'rb') as f:
+                        # Read GGUF header (simplified)
+                        magic = f.read(4)
+                        if magic == b'GGUF':
+                            metadata.model_type = "gguf"
+                            metadata.file_count = len(gguf_files)
+                            self.logger.debug(f"Detected GGUF format for {metadata.name}")
+                except Exception as e:
+                    self.logger.warning(f"Failed to read GGUF metadata: {e}")
+            
+            # Count files and calculate total size
+            if model_path.is_dir():
+                all_files = list(model_path.rglob("*"))
+                model_files = [f for f in all_files if f.is_file()]
+                
+                metadata.file_count = len(model_files)
+                metadata.total_size_bytes = sum(f.stat().st_size for f in model_files)
+                
+                # Categorize files
+                metadata.main_files = []
+                metadata.config_files = []
+                
+                for f in model_files:
+                    filename = f.name.lower()
+                    if any(pattern in filename for pattern in ['model', 'pytorch', 'safetensors', '.gguf', '.onnx']):
+                        metadata.main_files.append(f.name)
+                    elif any(pattern in filename for pattern in ['config', 'tokenizer', 'vocab']):
+                        metadata.config_files.append(f.name)
+            
+            # Update size category based on actual size
+            size_gb = metadata.size_gb
+            if size_gb < 1:
+                metadata.size_category = ModelSize.TINY
+            elif size_gb < 3:
+                metadata.size_category = ModelSize.SMALL
+            elif size_gb < 7:
+                metadata.size_category = ModelSize.MEDIUM
+            elif size_gb < 15:
+                metadata.size_category = ModelSize.LARGE
+            elif size_gb < 30:
+                metadata.size_category = ModelSize.XLARGE
+            else:
+                metadata.size_category = ModelSize.XXLARGE
+            
+            metadata.updated_at = datetime.now()
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to extract model metadata: {e}")
+    
+    def _calculate_directory_size(self, directory: Path) -> int:
+        """Calculate total size of directory"""
+        if not directory.exists():
+            return 0
+        
+        if directory.is_file():
+            return directory.stat().st_size
+        
+        total_size = 0
+        for item in directory.rglob("*"):
+            if item.is_file():
+                total_size += item.stat().st_size
+        
+        return total_size
+    
+    def _calculate_directory_checksum(self, directory: Path) -> str:
+        """Calculate checksum for directory contents"""
+        hasher = hashlib.sha256()
+        
+        if directory.is_file():
+            with open(directory, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hasher.update(chunk)
+        else:
+            # Sort files for consistent checksum
+            files = sorted(directory.rglob("*"))
+            for file_path in files:
+                if file_path.is_file():
+                    # Add filename to hash for structure integrity
+                    hasher.update(str(file_path.relative_to(directory)).encode())
+                    
+                    with open(file_path, 'rb') as f:
+                        for chunk in iter(lambda: f.read(4096), b""):
+                            hasher.update(chunk)
+        
+        return hasher.hexdigest()
+    
+    # ========================================================================
+    # VALIDATION AND INTEGRITY
+    # ========================================================================
+
     def _validate_cache_integrity(self):
         """Validate archive integrity"""
         self.logger.info("Validating model archive integrity...")
@@ -947,267 +1284,9 @@ class ModelManager:
             return ModelFormat.PYTORCH_MOBILE
         else:
             return ModelFormat.HUGGINGFACE  # Default fallback
-            
-    def _download_hf_model_files(self, model_id: str, archive_path: Path):
-        """
-        Download HuggingFace model files with progress tracking and Authentication support.
-        This implementation supports gated repos via HF_TOKEN environment variable.
-        """
-        try:
-            from huggingface_hub import hf_hub_download, list_repo_files
-            from huggingface_hub.utils import RepositoryNotFoundError, GatedRepoError, LocalEntryNotFoundError
-            
-            # Check Authentication Token
-            token = os.environ.get("HF_TOKEN")
-            
-            # Get list of files
-            try:
-                repo_files = list_repo_files(model_id, token=token)
-                self.logger.info(f"Found {len(repo_files)} files for {model_id}")
-            except GatedRepoError:
-                raise PermissionError(
-                    f"Model {model_id} is GATED. Please accept the license on HuggingFace "
-                    "and set your HF_TOKEN in settings."
-                )
-            except RepositoryNotFoundError:
-                raise FileNotFoundError(f"Model {model_id} not found on HuggingFace.")
-            except Exception as e:
-                self.logger.warning(f"Failed to list repo files: {e}. Trying fallback list.")
-                repo_files = ["config.json", "tokenizer.json", "model.safetensors", "pytorch_model.bin"]
-
-            # Create download progress tracker
-            download_id = f"hf_{model_id.replace('/', '_')}_{int(time.time())}"
-            progress = DownloadProgress(
-                model_name=model_id,
-                download_id=download_id,
-                status=DownloadStatus.IN_PROGRESS,
-                files_total=len(repo_files),
-                start_time=datetime.now()
-            )
-            
-            with self._lock:
-                self.download_progress[download_id] = progress
-            
-            # Download files
-            downloaded_files = []
-            total_size = 0
-            
-            for i, filename in enumerate(repo_files):
-                # Filter unwichtige Dateien (optional)
-                if filename.endswith(".gitattributes") or filename.endswith("README.md"):
-                    continue
-
-                try:
-                    progress.current_file = filename
-                    progress.files_completed = i
-                    
-                    # Download execution
-                    downloaded_file = hf_hub_download(
-                        repo_id=model_id,
-                        filename=filename,
-                        cache_dir=str(archive_path.parent),
-                        local_dir=str(archive_path),
-                        local_dir_use_symlinks=False,
-                        token=token  # Authenticated download
-                    )
-                    
-                    downloaded_files.append(downloaded_file)
-                    
-                    # Update stats
-                    file_size = Path(downloaded_file).stat().st_size
-                    total_size += file_size
-                    progress.downloaded_bytes = total_size
-                    
-                except Exception as e:
-                    # Bei optionalen Files weitermachen, bei Config abbrechen
-                    if filename in ["config.json", "model.safetensors"]:
-                        raise e
-                    self.logger.warning(f"Skipped {filename}: {e}")
-                    continue
-            
-            progress.status = DownloadStatus.COMPLETED
-            progress.end_time = datetime.now()
-            self.logger.info(f"Download completed: {model_id} ({total_size / (1024**3):.2f} GB)")
-            
-        except Exception as e:
-            if download_id in self.download_progress:
-                self.download_progress[download_id].status = DownloadStatus.FAILED
-                self.download_progress[download_id].error_message = str(e)
-            raise
-    
-    def _download_file_with_progress(self, url: str, target_file: Path, 
-                                   chunk_size: int = None) -> bool:
-        """Download file from URL with progress tracking"""
-        if chunk_size is None:
-            chunk_size = self.chunk_size
-        
-        try:
-            # Create download progress tracker
-            download_id = f"url_{int(time.time())}"
-            progress = DownloadProgress(
-                model_name=str(target_file.name),
-                download_id=download_id,
-                status=DownloadStatus.IN_PROGRESS,
-                current_file=str(target_file.name),
-                start_time=datetime.now()
-            )
-            
-            with self._lock:
-                self.download_progress[download_id] = progress
-            
-            # Start download
-            response = requests.get(url, stream=True, timeout=self.timeout_seconds)
-            response.raise_for_status()
-            
-            # Get total size if available
-            total_size = int(response.headers.get('content-length', 0))
-            progress.total_bytes = total_size
-            
-            downloaded = 0
-            
-            with open(target_file, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=chunk_size):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        progress.update_progress(downloaded, total_size)
-            
-            # Verify download
-            actual_size = target_file.stat().st_size
-            if total_size > 0 and actual_size != total_size:
-                raise RuntimeError(f"Download incomplete: expected {total_size}, got {actual_size}")
-            
-            progress.status = DownloadStatus.COMPLETED
-            progress.end_time = datetime.now()
-            
-            self.logger.info(f"File download completed: {target_file.name} ({actual_size / (1024*1024):.1f} MB)")
-            return True
-            
-        except Exception as e:
-            if download_id in self.download_progress:
-                self.download_progress[download_id].status = DownloadStatus.FAILED
-                self.download_progress[download_id].error_message = str(e)
-            
-            # Clean up partial download
-            if target_file.exists():
-                target_file.unlink()
-            
-            self.logger.error(f"File download failed: {url} - {e}")
-            return False
-    
-    def _extract_model_metadata(self, model_path: Path, metadata: ModelMetadata):
-        """Extract detailed metadata from model files"""
-        try:
-            # Look for config.json (HuggingFace format)
-            config_file = model_path / "config.json"
-            if config_file.exists():
-                with open(config_file, 'r') as f:
-                    config = json.load(f)
-                
-                metadata.model_type = config.get('model_type', '')
-                metadata.architecture = config.get('architectures', ['unknown'])[0] if 'architectures' in config else 'unknown'
-                metadata.vocab_size = config.get('vocab_size')
-                metadata.hidden_size = config.get('hidden_size')
-                metadata.num_layers = config.get('num_hidden_layers')
-                metadata.num_attention_heads = config.get('num_attention_heads')
-                metadata.max_position_embeddings = config.get('max_position_embeddings')
-                
-                self.logger.debug(f"Extracted HuggingFace config metadata for {metadata.name}")
-            
-            # Look for GGUF metadata
-            gguf_files = list(model_path.glob("*.gguf"))
-            if gguf_files:
-                try:
-                    # Try to extract GGUF metadata (basic implementation)
-                    gguf_file = gguf_files[0]
-                    with open(gguf_file, 'rb') as f:
-                        # Read GGUF header (simplified)
-                        magic = f.read(4)
-                        if magic == b'GGUF':
-                            metadata.model_type = "gguf"
-                            metadata.file_count = len(gguf_files)
-                            self.logger.debug(f"Detected GGUF format for {metadata.name}")
-                except Exception as e:
-                    self.logger.warning(f"Failed to read GGUF metadata: {e}")
-            
-            # Count files and calculate total size
-            if model_path.is_dir():
-                all_files = list(model_path.rglob("*"))
-                model_files = [f for f in all_files if f.is_file()]
-                
-                metadata.file_count = len(model_files)
-                metadata.total_size_bytes = sum(f.stat().st_size for f in model_files)
-                
-                # Categorize files
-                metadata.main_files = []
-                metadata.config_files = []
-                
-                for f in model_files:
-                    filename = f.name.lower()
-                    if any(pattern in filename for pattern in ['model', 'pytorch', 'safetensors', '.gguf', '.onnx']):
-                        metadata.main_files.append(f.name)
-                    elif any(pattern in filename for pattern in ['config', 'tokenizer', 'vocab']):
-                        metadata.config_files.append(f.name)
-            
-            # Update size category based on actual size
-            size_gb = metadata.size_gb
-            if size_gb < 1:
-                metadata.size_category = ModelSize.TINY
-            elif size_gb < 3:
-                metadata.size_category = ModelSize.SMALL
-            elif size_gb < 7:
-                metadata.size_category = ModelSize.MEDIUM
-            elif size_gb < 15:
-                metadata.size_category = ModelSize.LARGE
-            elif size_gb < 30:
-                metadata.size_category = ModelSize.XLARGE
-            else:
-                metadata.size_category = ModelSize.XXLARGE
-            
-            metadata.updated_at = datetime.now()
-            
-        except Exception as e:
-            self.logger.warning(f"Failed to extract model metadata: {e}")
-    
-    def _calculate_directory_size(self, directory: Path) -> int:
-        """Calculate total size of directory"""
-        if not directory.exists():
-            return 0
-        
-        if directory.is_file():
-            return directory.stat().st_size
-        
-        total_size = 0
-        for item in directory.rglob("*"):
-            if item.is_file():
-                total_size += item.stat().st_size
-        
-        return total_size
-    
-    def _calculate_directory_checksum(self, directory: Path) -> str:
-        """Calculate checksum for directory contents"""
-        hasher = hashlib.sha256()
-        
-        if directory.is_file():
-            with open(directory, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    hasher.update(chunk)
-        else:
-            # Sort files for consistent checksum
-            files = sorted(directory.rglob("*"))
-            for file_path in files:
-                if file_path.is_file():
-                    # Add filename to hash for structure integrity
-                    hasher.update(str(file_path.relative_to(directory)).encode())
-                    
-                    with open(file_path, 'rb') as f:
-                        for chunk in iter(lambda: f.read(4096), b""):
-                            hasher.update(chunk)
-        
-        return hasher.hexdigest()
     
     # ========================================================================
-    # PUBLIC API METHODS
+    # PUBLIC API METHODS (List, Get, Search, etc.)
     # ========================================================================
     
     def list_archived_models(self, include_artifacts: bool = False) -> List[Dict[str, Any]]:
@@ -1435,7 +1514,7 @@ class ModelManager:
     def search_models(self, query: str, source_filter: ModelSource = None, 
                      format_filter: ModelFormat = None) -> List[Dict[str, Any]]:
         """
-        Search archived models.
+        Search archived models in local cache.
         
         Args:
             query: Search query (matches name, model_id, architecture)
@@ -1584,284 +1663,6 @@ class ModelManager:
         
         self.logger.info(f"Download cancelled: {download_id}")
         return True
-    
-    # ========================================================================
-    # NETWORK MONITORING SYSTEM
-    # ========================================================================
-    
-    def _start_network_monitoring(self):
-        """Start network monitoring for download resilience"""
-        self.network_monitor_thread = threading.Thread(
-            target=self._network_monitor_loop,
-            name="network-monitor",
-            daemon=True
-        )
-        self.network_monitor_active = True
-        self.network_status = True  # Assume online initially
-        self.paused_downloads = set()  # Track paused downloads
-        
-        self.network_monitor_thread.start()
-        self.logger.info("Network monitoring started")
-    
-    def _network_monitor_loop(self):
-        """Network monitoring loop with redundant servers"""
-        # Redundant ping targets
-        ping_targets = [
-            "8.8.8.8",      # Google DNS
-            "1.1.1.1",      # Cloudflare DNS
-            "208.67.222.222" # OpenDNS
-        ]
-        
-        ping_interval = 5  # Check every 5 seconds
-        consecutive_failures = 0
-        max_failures = 3  # Declare offline after 3 consecutive failures
-        
-        while self.network_monitor_active:
-            try:
-                network_available = False
-                
-                # Test connectivity to redundant servers
-                for target in ping_targets:
-                    if self._ping_server(target):
-                        network_available = True
-                        break  # One successful ping is enough
-                
-                # Handle network state changes
-                if network_available and not self.network_status:
-                    # Network restored
-                    consecutive_failures = 0
-                    self.network_status = True
-                    self._resume_paused_downloads()
-                    self.logger.info("Network connectivity restored")
-                    
-                elif not network_available:
-                    consecutive_failures += 1
-                    
-                    if consecutive_failures >= max_failures and self.network_status:
-                        # Network lost
-                        self.network_status = False
-                        self._pause_active_downloads()
-                        self.logger.warning("Network connectivity lost - downloads paused")
-                
-                time.sleep(ping_interval)
-                
-            except Exception as e:
-                self.logger.error(f"Network monitoring error: {e}")
-                time.sleep(ping_interval)
-    
-    def _ping_server(self, target: str, timeout: int = 3) -> bool:
-        """
-        Ping a server to check connectivity.
-        
-        Args:
-            target: Target IP or hostname
-            timeout: Ping timeout in seconds
-            
-        Returns:
-            bool: True if ping successful
-        """
-        try:
-            import subprocess
-            import platform
-            
-            # Use appropriate ping command for OS
-            if platform.system().lower() == "windows":
-                cmd = ["ping", "-n", "1", "-w", str(timeout * 1000), target]
-            else:
-                cmd = ["ping", "-c", "1", "-W", str(timeout), target]
-            
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=timeout + 1
-            )
-            
-            return result.returncode == 0
-            
-        except Exception:
-            return False
-    
-    def _pause_active_downloads(self):
-        """Pause all active downloads due to network issues"""
-        active_downloads = self.list_active_downloads()
-        
-        for progress in active_downloads:
-            if progress.download_id not in self.paused_downloads:
-                progress.status = DownloadStatus.PENDING  # Mark as paused
-                self.paused_downloads.add(progress.download_id)
-                self.logger.info(f"Download paused due to network: {progress.download_id}")
-    
-    def _resume_paused_downloads(self):
-        """Resume downloads that were paused due to network issues"""
-        if not self.paused_downloads:
-            return
-        
-        for download_id in self.paused_downloads.copy():
-            progress = self.download_progress.get(download_id)
-            if progress and progress.status == DownloadStatus.PENDING:
-                progress.status = DownloadStatus.IN_PROGRESS
-                self.paused_downloads.remove(download_id)
-                self.logger.info(f"Download resumed: {download_id}")
-                
-                # Note: Actual download resumption would need to be handled
-                # by the specific download method (HuggingFace, URL, etc.)
-    
-    def _stop_network_monitoring(self):
-        """Stop network monitoring"""
-        if hasattr(self, 'network_monitor_active'):
-            self.network_monitor_active = False
-        
-        if hasattr(self, 'network_monitor_thread') and self.network_monitor_thread.is_alive():
-            self.network_monitor_thread.join(timeout=5)
-        
-        self.logger.info("Network monitoring stopped")
-    
-    # ========================================================================
-    # CLEANUP AND MAINTENANCE
-    # ========================================================================
-    
-    def cleanup_temp_files(self, max_age_hours: int = 24) -> int:
-        """
-        Clean up temporary download files.
-        
-        Args:
-            max_age_hours: Maximum age for temp files
-            
-        Returns:
-            int: Number of files cleaned
-        """
-        cleaned_count = 0
-        cutoff_time = time.time() - (max_age_hours * 3600)
-        
-        try:
-            temp_dirs = [self.temp_dir, self.cache_dir / "downloads"]
-            
-            for temp_dir in temp_dirs:
-                if not temp_dir.exists():
-                    continue
-                
-                for item in temp_dir.iterdir():
-                    try:
-                        if item.stat().st_mtime < cutoff_time:
-                            if item.is_dir():
-                                shutil.rmtree(item)
-                            else:
-                                item.unlink()
-                            cleaned_count += 1
-                            self.logger.debug(f"Cleaned temp file: {item}")
-                    except Exception as e:
-                        self.logger.warning(f"Failed to clean {item}: {e}")
-            
-            self.logger.info(f"Cleaned {cleaned_count} temporary files")
-            return cleaned_count
-            
-        except Exception as e:
-            self.logger.error(f"Temp file cleanup failed: {e}")
-            return 0
-    
-    def repair_archive_integrity(self) -> Dict[str, Any]:
-        """
-        Repair archive integrity issues.
-        
-        Returns:
-            dict: Repair results
-        """
-        repair_results = {
-            "repaired_entries": 0,
-            "removed_orphans": 0,
-            "errors": []
-        }
-        
-        try:
-            # Find and remove orphaned cache entries
-            orphaned_keys = []
-            
-            for cache_key, entry in self.cache_entries.items():
-                if not Path(entry.cache_path).exists():
-                    orphaned_keys.append(cache_key)
-            
-            for key in orphaned_keys:
-                del self.cache_entries[key]
-                repair_results["removed_orphans"] += 1
-                self.logger.info(f"Removed orphaned cache entry: {key}")
-            
-            # Update metadata for existing entries
-            for cache_key, entry in self.cache_entries.items():
-                archive_path = Path(entry.cache_path)
-                if archive_path.exists():
-                    # Recalculate size and checksum
-                    actual_size = self._calculate_directory_size(archive_path)
-                    if abs(actual_size - entry.disk_usage_bytes) > (1024 * 1024):  # 1MB difference
-                        entry.disk_usage_bytes = actual_size
-                        entry.metadata.total_size_bytes = actual_size
-                        repair_results["repaired_entries"] += 1
-                        self.logger.info(f"Updated size for: {cache_key}")
-            
-            # Save updated index
-            if repair_results["repaired_entries"] > 0 or repair_results["removed_orphans"] > 0:
-                self._save_cache_index()
-            
-            self.logger.info(f"Archive repair completed: {repair_results}")
-            
-        except Exception as e:
-            error_msg = f"Archive repair failed: {e}"
-            repair_results["errors"].append(error_msg)
-            self.logger.error(error_msg)
-        
-        return repair_results
-    
-    def export_archive_manifest(self, output_file: Path) -> bool:
-        """
-        Export complete archive manifest.
-        
-        Args:
-            output_file: Output file path
-            
-        Returns:
-            bool: True if export successful
-        """
-        try:
-            manifest = {
-                "metadata": {
-                    "export_time": datetime.now().isoformat(),
-                    "framework_version": "1.0.0",
-                    "total_models": len(self.cache_entries),
-                    "total_size_gb": sum(entry.metadata.size_gb for entry in self.cache_entries.values())
-                },
-                "archive_entries": []
-            }
-            
-            # Export all archive entries
-            for cache_key, entry in self.cache_entries.items():
-                entry_data = {
-                    "archive_key": cache_key,
-                    "model_name": entry.model_name,
-                    "source": entry.metadata.source.value,
-                    "format": entry.metadata.format.value,
-                    "size_gb": entry.metadata.size_gb,
-                    "archive_path": entry.cache_path,
-                    "archived_at": entry.cached_at.isoformat(),
-                    "access_count": entry.access_count,
-                    "is_valid": entry.metadata.is_valid,
-                    "checksum": entry.checksum
-                }
-                
-                if entry.metadata.hf_model_id:
-                    entry_data["hf_model_id"] = entry.metadata.hf_model_id
-                
-                manifest["archive_entries"].append(entry_data)
-            
-            # Write manifest
-            ensure_directory(output_file.parent)
-            with open(output_file, 'w') as f:
-                json.dump(manifest, f, indent=2)
-            
-            self.logger.info(f"Archive manifest exported: {output_file}")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to export archive manifest: {e}")
-            return False
     
     def get_disk_usage_report(self) -> Dict[str, Any]:
         """Get detailed disk usage report"""

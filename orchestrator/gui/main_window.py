@@ -12,6 +12,7 @@ import os
 import time
 import socket
 import logging
+import shutil  # NEU: Für Profil-Import
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -21,7 +22,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QLabel, QPushButton, QTextEdit, QProgressBar,
     QGroupBox, QFormLayout, QLineEdit, QComboBox, 
     QMessageBox, QTableWidget, QTableWidgetItem,
-    QDialog, QInputDialog
+    QDialog, QInputDialog, QFileDialog 
 )
 from PySide6.QtCore import Qt, QThread, pyqtSignal, QTimer, QProcess
 from PySide6.QtGui import QAction
@@ -184,6 +185,22 @@ class MainOrchestrator(QMainWindow):
 
     def create_menu_bar(self):
         menubar = self.menuBar()
+        
+        # --- File Menu (NEU) ---
+        file_menu = menubar.addMenu("&File")
+        
+        import_action = QAction("Import Hardware Profile...", self)
+        import_action.setStatusTip("Import target_hardware_config.txt from target device")
+        import_action.triggered.connect(self.import_hardware_profile)
+        file_menu.addAction(import_action)
+        
+        file_menu.addSeparator()
+        
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+
+        # Tools Menu
         tools_menu = menubar.addMenu("&Tools")
         
         wizard_action = QAction("Create New Module...", self)
@@ -194,6 +211,7 @@ class MainOrchestrator(QMainWindow):
         audit_action.triggered.connect(self.run_image_audit)
         tools_menu.addAction(audit_action)
 
+        # Community Menu
         community_menu = menubar.addMenu("&Community")
         hub_action = QAction("🌍 Open Community Hub", self)
         hub_action.triggered.connect(self.open_community_hub)
@@ -202,6 +220,33 @@ class MainOrchestrator(QMainWindow):
         update_action = QAction("🔄 Check for Updates", self)
         update_action.triggered.connect(self.check_for_updates_automatic)
         community_menu.addAction(update_action)
+
+    def import_hardware_profile(self):
+        """Öffnet einen Dialog zum Importieren des Hardware-Profils."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, 
+            "Hardware Profil auswählen (target_hardware_config.txt)", 
+            "", 
+            "Config Files (*.txt);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                # Zielverzeichnis ist der 'cache' Ordner, der als Volume gemountet wird
+                cache_dir = self.app_root / "cache"
+                if not cache_dir.exists():
+                    cache_dir.mkdir(parents=True, exist_ok=True)
+                    
+                target_path = cache_dir / "target_hardware_config.txt"
+                
+                shutil.copy2(file_path, target_path)
+                
+                self.log(f"✅ Hardware Profil importiert: {target_path}")
+                QMessageBox.information(self, "Erfolg", f"Profil erfolgreich importiert.\n\nEs wird beim nächsten Build automatisch verwendet.")
+                
+            except Exception as e:
+                self.log(f"❌ Fehler beim Profil-Import: {e}")
+                QMessageBox.critical(self, "Fehler", f"Konnte Profil nicht importieren:\n{e}")
 
     def open_community_hub(self):
         try:

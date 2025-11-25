@@ -19,7 +19,7 @@ class UpdateManager:
             git_dir = self.app_root / ".git"
             if not git_dir.exists(): return False
             
-            # Secure subprocess call without shell=True
+            # Security Fix: shell=False, list args
             subprocess.run(["git", "fetch"], cwd=self.app_root, check=True, capture_output=True)
             res = subprocess.run(["git", "status", "-uno"], cwd=self.app_root, capture_output=True, text=True)
             return "Your branch is behind" in res.stdout
@@ -32,57 +32,27 @@ class UpdateManager:
         except: return True
 
     def perform_update_and_restart(self):
-        """Erstellt ein Batch-Skript, das die App schließt, git pull ausführt und neu startet."""
         try:
             major = self._is_major_update()
-            # Wir nehmen an, die EXE heißt 'LLM-Builder.exe' und der Installer 'Setup_LLM-Framework.exe'
             exe_name = "LLM-Builder.exe"
-            setup_name = "Setup_LLM-Framework.exe" 
-            
-            # Fallback für Dev-Mode
+            setup_name = "Setup_LLM-Framework.exe"
             is_frozen = getattr(sys, 'frozen', False)
             
-            # Temporäres Batch-Skript erstellen
             batch_file = Path(tempfile.gettempdir()) / "llm_updater.bat"
             
-            # Batch-Logik dynamisch aufbauen
             if major:
-                self.logger.info("Major Update erkannt -> Starte Installer nach Download")
+                self.logger.info("Major Update erkannt -> Starte Installer")
                 next_step_cmd = f'start "" "{setup_name}" --update'
             else:
-                self.logger.info("Minor Update erkannt -> Direkter Neustart")
+                self.logger.info("Minor Update erkannt -> Restart")
                 if is_frozen:
                     next_step_cmd = f'start "" "{exe_name}"'
                 else:
                     script_path = Path(sys.argv[0])
                     next_step_cmd = f'python "{script_path}"'
 
-            batch_content = f"""
-@echo off
-title LLM-Builder Smart Updater
-echo Warte auf Beendigung der Anwendung...
-timeout /t 3 /nobreak > NUL
-cd /d "{self.app_root}"
-
-echo.
-echo ------------------------------------------------
-echo Fuehre Git Pull durch...
-echo ------------------------------------------------
-git pull
-
-echo.
-echo ------------------------------------------------
-echo Starte Folgesprozess...
-echo Modus: {"MAJOR (Installer)" if major else "MINOR (Direct Start)"}
-echo ------------------------------------------------
-{next_step_cmd}
-
-del "%~f0"
-exit
-            """
-            
             with open(batch_file, "w") as f:
-                f.write(batch_content)
+                f.write(f'@echo off\ncd /d "{self.app_root}"\ngit pull\n{next_step_cmd}\ndel "%~f0"\nexit\n')
             
             self.logger.info(f"Update-Skript erstellt: {batch_file}")
             
@@ -90,11 +60,10 @@ exit
             if sys.platform == "win32":
                 subprocess.Popen(["cmd.exe", "/c", str(batch_file)], creationflags=subprocess.CREATE_NEW_CONSOLE)
             else:
-                # Linux fallback (einfacher restart)
+                # Linux fallback
                 subprocess.Popen(["/bin/bash", "-c", f"cd {self.app_root} && git pull && ./llm-builder"])
                 
             sys.exit(0)
-            
         except Exception as e:
             self.logger.error(f"Update failed: {e}")
             raise e

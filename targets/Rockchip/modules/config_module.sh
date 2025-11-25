@@ -156,7 +156,7 @@ SET(CMAKE_CXX_COMPILER /usr/bin/g++)
 EOF
     fi
 
-    # CCACHE Integration (NEU!)
+    # CCACHE Integration (NEU: Wichtig für Performance!)
     if [[ -n "$ccache_path" ]]; then
         cat >> "$OUTPUT_TOOLCHAIN_FILE" << EOF
 
@@ -165,6 +165,8 @@ SET(CMAKE_C_COMPILER_LAUNCHER "$ccache_path")
 SET(CMAKE_CXX_COMPILER_LAUNCHER "$ccache_path")
 EOF
         log_info "CCACHE aktiviert: $ccache_path"
+    else
+        log_warn "CCACHE nicht gefunden, Build wird langsamer sein."
     fi
 
     # Compiler Flags

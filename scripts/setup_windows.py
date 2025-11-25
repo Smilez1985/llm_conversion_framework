@@ -270,7 +270,7 @@ class InstallationWorker(threading.Thread):
             # 1. MSVC
             self._handle_msvc()
             
-            # 2. QEMU (NEU: Eingefügt in den Ablauf)
+            # 2. QEMU
             self._smart_progress(15, "Konfiguriere Docker QEMU...")
             self._install_qemu_support()
             

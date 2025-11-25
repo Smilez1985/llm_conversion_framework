@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 LLM Cross-Compiler Framework - Target Manager
-DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+DIREKTIVE: Goldstandard, vollstaendig, professionell geschrieben.
 """
 
 import os
@@ -58,17 +59,29 @@ class ToolchainInfo:
 class HardwareProfile:
     name: str
     target_arch: str
+    board_variant: Optional[str] = None
     cpu_architecture: str = ""
     cpu_features: List[str] = field(default_factory=list)
     cpu_cores: int = 4
+    cpu_freq_mhz: int = 1800
     memory_mb: int = 4096
+    memory_type: str = "LPDDR4"
+    memory_bandwidth_gbps: float = 17.0
     cflags: List[str] = field(default_factory=list)
     cxxflags: List[str] = field(default_factory=list)
+    ldflags: List[str] = field(default_factory=list)
     optimization_level: str = "O3"
+    enable_neon: bool = False
+    enable_fp16: bool = False
+    enable_int8: bool = True
+    parallel_jobs: int = 4
+    memory_limit_mb: int = 2048
     
     def __post_init__(self):
-        if not self.cflags and "arm" in str(self.target_arch).lower():
-            self.cflags = ["-march=armv8-a", "-O3"]
+        if not self.cflags and "rk3566" in str(self.target_arch).lower():
+            self.cflags = ["-march=armv8-a+crc+crypto", "-mtune=cortex-a55", "-mfpu=neon-fp-armv8", "-mfloat-abi=hard"]
+            self.enable_neon = True
+            self.enable_fp16 = True
 
 @dataclass
 class TargetConfiguration:
@@ -125,6 +138,9 @@ class TargetManager:
             self.logger.info("Initializing Target Manager...")
             self._discover_targets()
             self._validate_all_targets()
+            self._setup_default_toolchains()
+            self._load_hardware_profiles()
+            self._generate_cmake_toolchains()
             self._initialized = True
             return True
         except Exception as e:
@@ -136,20 +152,25 @@ class TargetManager:
             ensure_directory(d)
 
     def _discover_targets(self):
-        if not self.targets_dir.exists(): return
+        if not self.targets_dir.exists():
+            return
         for td in self.targets_dir.iterdir():
-            if not td.is_dir() or td.name.startswith('_'): continue
+            if not td.is_dir() or td.name.startswith('_'):
+                continue
             try:
                 cfg = self._load_target_configuration(td)
-                if cfg: self.registry.targets[cfg.name] = cfg
+                if cfg:
+                    self.registry.targets[cfg.name] = cfg
             except Exception as e:
                 self.logger.error(f"Failed to load {td.name}: {e}")
 
     def _load_target_configuration(self, target_dir: Path) -> Optional[TargetConfiguration]:
         yml = target_dir / "target.yml"
-        if not yml.exists(): return None
+        if not yml.exists():
+            return None
         try:
-            with open(yml, 'r') as f: data = yaml.safe_load(f)
+            with open(yml, 'r') as f:
+                data = yaml.safe_load(f)
             meta = data.get('metadata', {})
             arch = meta.get('architecture', target_dir.name)
             
@@ -184,8 +205,21 @@ class TargetManager:
 
     def _validate_all_targets(self):
         for t in self.registry.targets.values():
-            if t.status == TargetStatus.ERROR: continue
+            if t.status == TargetStatus.ERROR:
+                continue
 
+    def _setup_default_toolchains(self):
+        pass
+    
+    def _load_hardware_profiles(self):
+        pass
+    
+    def _generate_cmake_toolchains(self):
+        pass
+    
+    def _validate_target_configuration(self, cfg):
+        pass
+    
     def refresh_targets(self) -> bool:
         try:
             self.registry = TargetRegistry()
@@ -207,7 +241,8 @@ class TargetManager:
                             res["is_rk3566"] = True
                             res["confidence"] = "high"
                             break
-        except: pass
+        except:
+            pass
         return res
 
     def generate_rk3566_build_flags(self) -> List[str]:
@@ -219,11 +254,14 @@ class TargetManager:
 
 def create_target_manager(framework_manager) -> TargetManager:
     tm = TargetManager(framework_manager)
-    if not tm.initialize(): raise Exception("Init failed")
+    if not tm.initialize():
+        raise Exception("Init failed")
     return tm
 
 def validate_target_requirements() -> Dict[str, Any]:
     reqs = {"docker": False, "cmake": False, "git": False, "errors": []}
-    if check_command_exists("docker"): reqs["docker"] = True
-    else: reqs["errors"].append("Docker missing")
+    if check_command_exists("docker"):
+        reqs["docker"] = True
+    else:
+        reqs["errors"].append("Docker missing")
     return reqs

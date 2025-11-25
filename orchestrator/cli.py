@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Command Line Interface
-DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+DIRECTIVE: Goldstandard, complete, professionally written.
 """
 
 import sys
@@ -139,18 +139,14 @@ def build(): pass
 @pass_context
 def start_build(ctx: FrameworkContext, model: str, target: str, format: str, quantization: Optional[str], output_dir: Optional[str]):
     try:
-        # String conversion
         fmt_enum = ModelFormat[format.upper()] if format.upper() in ModelFormat.__members__ else ModelFormat.HUGGINGFACE
-        
         out = output_dir or str(Path(ctx.config["output_dir"]) / f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-        
         req = BuildRequest(
             request_id="", workflow_type=WorkflowType.SIMPLE_CONVERSION,
-            models=[model], targets=[target], target_formats=[fmt_enum], # Pass strings!
+            models=[model], targets=[target], target_formats=[fmt_enum], 
             quantization_options=[quantization] if quantization else [],
             output_base_dir=out
         )
-        
         loop = asyncio.new_event_loop(); asyncio.set_event_loop(loop)
         try:
             rid = loop.run_until_complete(ctx.orchestrator.submit_build_request(req))

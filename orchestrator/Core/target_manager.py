@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 LLM Cross-Compiler Framework - Target Manager
-DIREKTIVE: Goldstandard, vollstaendig, professionell geschrieben.
+DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 """
 
 import os
@@ -138,9 +137,6 @@ class TargetManager:
             self.logger.info("Initializing Target Manager...")
             self._discover_targets()
             self._validate_all_targets()
-            self._setup_default_toolchains()
-            self._load_hardware_profiles()
-            self._generate_cmake_toolchains()
             self._initialized = True
             return True
         except Exception as e:
@@ -152,25 +148,20 @@ class TargetManager:
             ensure_directory(d)
 
     def _discover_targets(self):
-        if not self.targets_dir.exists():
-            return
+        if not self.targets_dir.exists(): return
         for td in self.targets_dir.iterdir():
-            if not td.is_dir() or td.name.startswith('_'):
-                continue
+            if not td.is_dir() or td.name.startswith('_'): continue
             try:
                 cfg = self._load_target_configuration(td)
-                if cfg:
-                    self.registry.targets[cfg.name] = cfg
+                if cfg: self.registry.targets[cfg.name] = cfg
             except Exception as e:
                 self.logger.error(f"Failed to load {td.name}: {e}")
 
     def _load_target_configuration(self, target_dir: Path) -> Optional[TargetConfiguration]:
         yml = target_dir / "target.yml"
-        if not yml.exists():
-            return None
+        if not yml.exists(): return None
         try:
-            with open(yml, 'r') as f:
-                data = yaml.safe_load(f)
+            with open(yml, 'r') as f: data = yaml.safe_load(f)
             meta = data.get('metadata', {})
             arch = meta.get('architecture', target_dir.name)
             
@@ -205,21 +196,8 @@ class TargetManager:
 
     def _validate_all_targets(self):
         for t in self.registry.targets.values():
-            if t.status == TargetStatus.ERROR:
-                continue
+            if t.status == TargetStatus.ERROR: continue
 
-    def _setup_default_toolchains(self):
-        pass
-    
-    def _load_hardware_profiles(self):
-        pass
-    
-    def _generate_cmake_toolchains(self):
-        pass
-    
-    def _validate_target_configuration(self, cfg):
-        pass
-    
     def refresh_targets(self) -> bool:
         try:
             self.registry = TargetRegistry()
@@ -229,6 +207,15 @@ class TargetManager:
         except Exception as e:
             self.logger.error(f"Refresh failed: {e}")
             return False
+
+    def list_available_targets(self) -> List[str]:
+        if not self._initialized: self.initialize()
+        return list(self.registry.targets.keys())
+
+    def get_target_info(self, target_name: str) -> Dict[str, Any]:
+        t = self.registry.get_target(target_name)
+        if t: return asdict(t)
+        return {"error": "Target not found"}
 
     def detect_rk3566_hardware(self) -> Dict[str, Any]:
         res = {"is_rk3566": False, "confidence": "none", "detected_features": []}
@@ -241,8 +228,7 @@ class TargetManager:
                             res["is_rk3566"] = True
                             res["confidence"] = "high"
                             break
-        except:
-            pass
+        except: pass
         return res
 
     def generate_rk3566_build_flags(self) -> List[str]:
@@ -254,14 +240,11 @@ class TargetManager:
 
 def create_target_manager(framework_manager) -> TargetManager:
     tm = TargetManager(framework_manager)
-    if not tm.initialize():
-        raise Exception("Init failed")
+    if not tm.initialize(): raise Exception("Init failed")
     return tm
 
 def validate_target_requirements() -> Dict[str, Any]:
     reqs = {"docker": False, "cmake": False, "git": False, "errors": []}
-    if check_command_exists("docker"):
-        reqs["docker"] = True
-    else:
-        reqs["errors"].append("Docker missing")
+    if check_command_exists("docker"): reqs["docker"] = True
+    else: reqs["errors"].append("Docker missing")
     return reqs

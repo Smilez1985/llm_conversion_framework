@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Validation Utilities
-DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+DIREKTIVE: Goldstandard, professionell geschrieben.
 
 Comprehensive validation system for configurations, data structures,
 system requirements, and runtime validation. Container-native with

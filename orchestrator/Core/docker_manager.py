@@ -130,7 +130,6 @@ class DockerWorker(QObject):
         """Generiert Docker Compose Build Befehl."""
         target_name = job_data['target'].lower().replace(' ', '-')
         cmd = ["docker-compose", "build", "--progress=plain"]
-        # Environment vars könnten hier auch als Build-Args übergeben werden
         cmd.extend([target_name + '-builder'])
         return cmd
 
@@ -141,31 +140,36 @@ class DockerWorker(QObject):
         # Basis-Kommando
         pipeline_cmd = ["docker-compose", "exec", "-T"]
         
-        # --- SOURCE INJECTION LOGIC ---
-        # Wir iterieren über die geladenen Sources und fügen sie als ENV-Vars hinzu
+        # --- SOURCE INJECTION LOGIC (UPDATED FOR SECURE SOURCES) ---
         sources = self.fm.config.source_repositories
         
-        # Mappings: project_sources key -> ENV VAR Name
-        # Wir konvertieren "core.llama_cpp" zu "LLAMA_CPP_REPO_OVERRIDE"
-        # oder "rockchip_npu.rknn_toolkit2" zu "RKNN_TOOLKIT2_REPO_OVERRIDE"
-        
+        # Helper to inject URL and Commit if available
+        def inject_source(key_in_config, env_var_prefix):
+            if key_in_config in sources:
+                src_data = sources[key_in_config]
+                
+                # Check if it's a secure object (dict) or simple string
+                if isinstance(src_data, dict):
+                    url = src_data.get('url')
+                    commit = src_data.get('commit')
+                    if url: 
+                        pipeline_cmd.extend(["-e", f"{env_var_prefix}_REPO_OVERRIDE={url}"])
+                    if commit:
+                        pipeline_cmd.extend(["-e", f"{env_var_prefix}_COMMIT={commit}"])
+                else:
+                    # Simple string fallback
+                    pipeline_cmd.extend(["-e", f"{env_var_prefix}_REPO_OVERRIDE={src_data}"])
+
         # Core Mappings
-        if "core.llama_cpp" in sources:
-            pipeline_cmd.extend(["-e", f"LLAMA_CPP_REPO_OVERRIDE={sources['core.llama_cpp']}"])
-            
+        inject_source("core.llama_cpp", "LLAMA_CPP")
+        
         # Rockchip Mappings
-        if "rockchip_npu.rknn_toolkit2" in sources:
-            pipeline_cmd.extend(["-e", f"RKNN_TOOLKIT2_REPO_OVERRIDE={sources['rockchip_npu.rknn_toolkit2']}"])
-            
-        if "rockchip_npu.rknn_llm" in sources:
-             pipeline_cmd.extend(["-e", f"RKNN_LLM_REPO_OVERRIDE={sources['rockchip_npu.rknn_llm']}"])
+        inject_source("rockchip_npu.rknn_toolkit2", "RKNN_TOOLKIT2")
+        inject_source("rockchip_npu.rknn_llm", "RKNN_LLM")
              
         # Voice Mappings
-        if "voice_tts.piper_tts" in sources:
-             pipeline_cmd.extend(["-e", f"PIPER_PHONEMIZE_REPO_OVERRIDE={sources['voice_tts.piper_tts']}"])
-             
-        if "voice_tts.vosk_api" in sources:
-             pipeline_cmd.extend(["-e", f"VOSK_API_REPO_OVERRIDE={sources['voice_tts.vosk_api']}"])
+        inject_source("voice_tts.piper_tts", "PIPER_PHONEMIZE")
+        inject_source("voice_tts.vosk_api", "VOSK_API")
 
         # Container und Script Argumente
         pipeline_cmd.extend([
@@ -206,7 +210,6 @@ class DockerManager(QObject):
         self._is_ready = True
         
     def _handle_comp(self, build_id, success, fm):
-        # Output Path Logik
         out = f"{fm.config.output_dir}/packages/{build_id}" if success else ""
         self.build_completed.emit(build_id, success, out)
 

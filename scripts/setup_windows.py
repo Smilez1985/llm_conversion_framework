@@ -5,7 +5,7 @@ DIREKTIVE: Goldstandard.
            1. CLI-Support (--update) für automatisierten Start.
            2. ETA (Time Remaining) Berechnung im UI.
            3. Auto-Launch der Hauptanwendung nach Update.
-           4. QEMU binfmt Support Installation.
+           4. QEMU binfmt Support Installation (Docker Cross-Arch).
 """
 
 import os
@@ -241,7 +241,7 @@ class InstallationWorker(threading.Thread):
 
         self.log("Installiere QEMU Cross-Architektur Support (Docker)...", "info")
         try:
-            # Nutze das offizielle tonistiigi/binfmt Image, um Support für ARM64 auf x86 zu installieren
+            # Nutze das offizielle tonistiigi/binfmt Image
             subprocess.run(
                 ["docker", "run", "--rm", "--privileged", "tonistiigi/binfmt", "--install", "all"],
                 check=True,
@@ -249,10 +249,8 @@ class InstallationWorker(threading.Thread):
                 capture_output=True
             )
             self.log("QEMU binfmt erfolgreich registriert.", "success")
-        except subprocess.CalledProcessError as e:
-            self.log(f"WARNUNG: QEMU Setup fehlgeschlagen: {e}. Builds könnten scheitern.", "error")
         except Exception as e:
-            self.log(f"Fehler bei QEMU Setup: {e}", "error")
+            self.log(f"WARNUNG: QEMU Setup fehlgeschlagen: {e}", "error")
 
     def _pre_pull_docker(self):
         # Nur wenn Internet da ist und Docker läuft
@@ -271,7 +269,7 @@ class InstallationWorker(threading.Thread):
             # 1. MSVC
             self._handle_msvc()
             
-            # 2. QEMU (NEU!)
+            # 2. QEMU (NEU: Eingefügt in den Ablauf)
             self._smart_progress(15, "Konfiguriere Docker QEMU...")
             self._install_qemu_support()
             

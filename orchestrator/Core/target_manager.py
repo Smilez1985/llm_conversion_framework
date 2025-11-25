@@ -58,29 +58,17 @@ class ToolchainInfo:
 class HardwareProfile:
     name: str
     target_arch: str
-    board_variant: Optional[str] = None
     cpu_architecture: str = ""
     cpu_features: List[str] = field(default_factory=list)
     cpu_cores: int = 4
-    cpu_freq_mhz: int = 1800
     memory_mb: int = 4096
-    memory_type: str = "LPDDR4"
-    memory_bandwidth_gbps: float = 17.0
     cflags: List[str] = field(default_factory=list)
     cxxflags: List[str] = field(default_factory=list)
-    ldflags: List[str] = field(default_factory=list)
     optimization_level: str = "O3"
-    enable_neon: bool = False
-    enable_fp16: bool = False
-    enable_int8: bool = True
-    parallel_jobs: int = 4
-    memory_limit_mb: int = 2048
     
     def __post_init__(self):
-        if not self.cflags and "rk3566" in str(self.target_arch).lower():
-            self.cflags = ["-march=armv8-a+crc+crypto", "-mtune=cortex-a55", "-mfpu=neon-fp-armv8", "-mfloat-abi=hard"]
-            self.enable_neon = True
-            self.enable_fp16 = True
+        if not self.cflags and "arm" in str(self.target_arch).lower():
+            self.cflags = ["-march=armv8-a", "-O3"]
 
 @dataclass
 class TargetConfiguration:
@@ -137,9 +125,6 @@ class TargetManager:
             self.logger.info("Initializing Target Manager...")
             self._discover_targets()
             self._validate_all_targets()
-            self._setup_default_toolchains()
-            self._load_hardware_profiles()
-            self._generate_cmake_toolchains()
             self._initialized = True
             return True
         except Exception as e:
@@ -201,11 +186,6 @@ class TargetManager:
         for t in self.registry.targets.values():
             if t.status == TargetStatus.ERROR: continue
 
-    def _setup_default_toolchains(self): pass
-    def _load_hardware_profiles(self): pass
-    def _generate_cmake_toolchains(self): pass
-    def _validate_target_configuration(self, cfg): pass
-    
     def refresh_targets(self) -> bool:
         try:
             self.registry = TargetRegistry()

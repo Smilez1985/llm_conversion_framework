@@ -154,4 +154,38 @@ def start_build(ctx: FrameworkContext, model: str, target: str, format: str, qua
         finally: loop.close()
     except Exception as e: console.print(f"[red]Build failed: {e}[/red]"); sys.exit(1)
 
+from orchestrator.Core.ditto_manager import DittoCoder
+
+@module.command('generate-from-probe')
+@click.argument('probe_file', type=click.Path(exists=True))
+@click.option('--name', prompt='Target Name', help='Name of the new target (e.g. "OrangePi5")')
+@click.option('--api-key', help='OpenAI/Provider API Key', envvar='OPENAI_API_KEY')
+@pass_context
+def generate_from_probe(ctx, probe_file, name, api_key):
+    """
+    🤖 Ditto-Powered: Generate a module from a hardware probe file.
+    """
+    console.print(f"[bold cyan]🤖 Ditto is analyzing {probe_file}...[/bold cyan]")
+    
+    try:
+        coder = DittoCoder(api_key=api_key)
+        
+        # 1. Generierung
+        with console.status("Analyzing hardware & writing code...", spinner="dots"):
+            files = coder.generate_module_content(Path(probe_file))
+        
+        # 2. Speichern
+        targets_dir = Path(ctx.config["targets_dir"])
+        coder.save_module(name, files, targets_dir)
+        
+        console.print(f"[bold green]✅ Module '{name}' successfully created in {targets_dir}/{name}[/bold green]")
+        console.print("Generated files:")
+        for f in files.keys():
+            console.print(f" - {f}")
+            
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        if "litellm" in str(e):
+            console.print("Please install: pip install litellm")
+
 if __name__ == "__main__": cli()

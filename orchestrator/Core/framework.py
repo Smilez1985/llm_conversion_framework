@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Core Framework Manager
-DIRECTIVE: Goldstandard, complete, professionally written.
+DIRECTIVE: Gold standard, complete, professionally written.
 """
 
 import os

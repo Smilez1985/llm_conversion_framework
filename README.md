@@ -63,8 +63,8 @@ Das **LLM Cross-Compiler Framework** ist keine einfache "Installations-Anleitung
 > Das Framework prüft automatisch, ob Docker läuft, bevor die Installation fortgesetzt wird.
 
 ### Installation (Windows - Empfohlen)
-1. Lade den neuesten [Installer (setup.exe)](Platzhalter-Link-zur-exe) herunter.
-2. Führe die Installation aus.
+1. Lade den neuesten [Installer (setup.exe)](Platzhalter-Link-zur-exe) und das zugehörige Zertifikat cert) herunter.
+2. Führe erst das Cert-File und dann die Installation aus.
 3. Starte "LLM-Builder" vom Desktop.
 
 ### Installation (Entwickler / Linux)

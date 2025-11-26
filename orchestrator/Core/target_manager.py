@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Target Manager
-DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+DIRECTIVE: Gold standard, complete, professionally written.
 """
 
 import os
@@ -80,10 +80,14 @@ class TargetConfiguration:
     description: str = ""
     target_dir: str = ""
     modules_dir: str = ""
+    configs_dir: str = ""
     available_modules: List[str] = field(default_factory=list)
+    required_modules: List[str] = field(default_factory=lambda: ["source_module.sh", "config_module.sh", "convert_module.sh", "target_module.sh"])
+    toolchain: Optional[ToolchainInfo] = None
     hardware_profiles: List[HardwareProfile] = field(default_factory=list)
     default_profile: Optional[str] = None
     docker_image: str = ""
+    docker_build_args: Dict[str, str] = field(default_factory=dict)
     supported_formats: List[ModelFormat] = field(default_factory=list)
     supported_quantizations: List[str] = field(default_factory=list)
     validation_errors: List[str] = field(default_factory=list)
@@ -147,7 +151,8 @@ class TargetManager:
                 maintainer=meta.get('maintainer', 'Community'),
                 description=meta.get('description', ''),
                 target_dir=str(target_dir),
-                modules_dir=str(target_dir / "modules")
+                modules_dir=str(target_dir / "modules"),
+                configs_dir=str(target_dir / "configs")
             )
             
             if Path(config.modules_dir).exists():
@@ -204,7 +209,4 @@ class TargetManager:
 # UTILITY FUNCTIONS
 # ============================================================================
 
-def create_target_manager(framework_manager) -> TargetManager:
-    tm = TargetManager(framework_manager)
-    if not tm.initialize(): raise Exception("Init failed")
-    return tm
+def create_target_manager(framework_manager) -> Target

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Configuration Manager
-DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+DIRECTIVE: Gold standard, complete, professionally written.
 """
 
 import os
@@ -21,7 +21,7 @@ import re
 import yaml
 
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.validation import ValidationError
+from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, safe_json_load
 
 class ConfigFormat(Enum):
@@ -63,7 +63,7 @@ class ConfigSchema:
                 elif self.field_type == float: value = float(value)
                 elif self.field_type == bool: value = str(value).lower() in ('true', '1', 'yes', 'on')
                 elif self.field_type == str: value = str(value)
-            except: errors.append(f"Invalid type for {self.field_name}")
+            except Exception: errors.append(f"Invalid type for {self.field_name}")
         return len(errors) == 0, errors
 
 @dataclass
@@ -140,8 +140,8 @@ class ConfigManager:
 
     def _initialize_core_schemas(self):
         schemas = [
-            ConfigSchema("targets_dir", str, True, "targets", "Target definitions dir"),
-            ConfigSchema("models_dir", str, True, "models", "Model storage dir"),
+            ConfigSchema("targets_dir", str, True, "targets", "Directory for target definitions"),
+            ConfigSchema("models_dir", str, True, "models", "Directory for model storage"),
             ConfigSchema("output_dir", str, True, "output", "Output dir"),
             ConfigSchema("cache_dir", str, True, "cache", "Cache dir"),
             ConfigSchema("logs_dir", str, True, "logs", "Logs dir"),
@@ -275,8 +275,8 @@ class ConfigManager:
     def get_all(self, include_secrets: bool = False) -> Dict[str, Any]:
         result = {}
         with self._lock:
-            for k, v in self.config_values.items():
-                if v.is_secret and not include_secrets: result[k] = "***HIDDEN***"
+            for key, val in self.config_values.items():
+                if val.is_secret and not include_secrets: result[k] = "***HIDDEN***"
                 else: result[k] = v.value
         return result
 

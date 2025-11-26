@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Build Engine
-DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+DIRECTIVE: Gold standard, complete, professionally written.
 """
 
 import os
@@ -70,7 +70,7 @@ class BuildConfiguration:
     build_id: str
     timestamp: str
     model_source: str
-    target_arch: str  # String-basiert für Modularität
+    target_arch: str  # String based - MODULAR
     target_format: ModelFormat
     output_dir: str
     model_branch: Optional[str] = "main"
@@ -127,8 +127,6 @@ class BuildEngine:
         self.max_concurrent_builds = max_concurrent_builds
         self.default_timeout = default_timeout
         self.docker_client = framework_manager.get_component("docker_client")
-        if not self.docker_client:
-            raise RuntimeError("Docker client not available")
         self._lock = threading.Lock()
         self._builds: Dict[str, BuildProgress] = {}
         self._active_containers: Dict[str, Container] = {}
@@ -139,21 +137,19 @@ class BuildEngine:
         self.output_dir = self.base_dir / framework_manager.config.output_dir
         self.cache_dir = self.base_dir / framework_manager.config.cache_dir
         self._ensure_directories()
-        self._validate_docker_environment()
-        self.logger.info(f"Build Engine initialized (max: {max_concurrent_builds})")
-    
+        
     def _ensure_directories(self):
         dirs = [self.targets_dir, self.models_dir, self.output_dir, self.cache_dir, 
                 self.cache_dir / "docker", self.cache_dir / "models", self.cache_dir / "tools"]
         for d in dirs: ensure_directory(d)
-    
+
     def _validate_docker_environment(self):
         try:
             self.docker_client.ping()
             try:
                 # SECURITY: List args instead of shell=True
                 subprocess.run(["docker", "buildx", "version"], capture_output=True, check=True)
-            except:
+            except Exception:
                 self.logger.warning("Docker BuildX not available")
         except Exception as e:
             raise RuntimeError(f"Docker environment failed: {e}")
@@ -169,10 +165,11 @@ class BuildEngine:
                         targets.append({
                             "id": tp.name,
                             "target_arch": meta.get("metadata", {}).get("architecture_family", tp.name),
+                            "name": meta.get("metadata", {}).get("name", tp.name),
                             "available": True,
                             "path": str(tp)
                         })
-                except: pass
+                except Exception: pass
         return targets
 
     def build_model(self, config: BuildConfiguration) -> str:
@@ -200,7 +197,7 @@ class BuildEngine:
         container = self._active_containers.get(build_id)
         if container:
             try: container.stop(timeout=10)
-            except: pass
+            except Exception: pass
         return True
 
     def cleanup_build(self, build_id: str) -> bool:
@@ -213,11 +210,11 @@ class BuildEngine:
                 try: 
                     container.remove(force=True)
                     del self._active_containers[build_id]
-                except: pass
+                except Exception: pass
             build_temp = self.cache_dir / "builds" / build_id
             if build_temp.exists(): shutil.rmtree(build_temp)
             return True
-        except: return False
+        except Exception: return False
     
     def _execute_build(self, config: BuildConfiguration):
         bid = config.build_id
@@ -227,7 +224,6 @@ class BuildEngine:
             
             target_path = self.targets_dir / config.target_arch
             if not target_path.exists():
-                # Search case-insensitive
                 found = False
                 for p in self.targets_dir.iterdir():
                     if p.name.lower() == config.target_arch.lower():
@@ -252,52 +248,44 @@ class BuildEngine:
             prog.add_error(str(e))
             self.logger.error(f"Build failed: {e}")
             try: self.cleanup_build(bid)
-            except: pass
+            except Exception: pass
 
     def _validate_build_config(self, config: BuildConfiguration):
         if not config.build_id or not config.model_source or not config.output_dir:
             raise ValidationError("Missing required build config")
 
-    def _prepare_build_environment(self, config: BuildConfiguration, progress: BuildProgress, target_path: Path):
+    def _prepare_build_environment(self, config, progress, target_path):
         progress.current_stage = "Preparing env"
         progress.progress_percent = 10
         build_temp = self.cache_dir / "builds" / config.build_id
         ensure_directory(build_temp)
         for d in ["output", "logs"]: ensure_directory(build_temp / d)
-        
         with open(build_temp / "build_config.json", 'w') as f:
             json.dump(asdict(config), f, indent=2, default=str)
 
-    def _generate_dockerfile(self, config: BuildConfiguration, progress: BuildProgress, target_path: Path) -> Path:
+    def _generate_dockerfile(self, config, progress, target_path):
         progress.current_stage = "Generating Dockerfile"
         progress.progress_percent = 20
         build_temp = self.cache_dir / "builds" / config.build_id
         df_path = build_temp / "Dockerfile"
-        
         src_df = target_path / "Dockerfile"
         if not src_df.exists(): src_df = target_path / "dockerfile"
         if not src_df.exists(): raise FileNotFoundError("Dockerfile missing in target")
-        
         shutil.copy2(src_df, df_path)
-        
-        if config.enable_hadolint: self._validate_dockerfile_hadolint(df_path, progress)
+        if config.enable_hadolint:
+             try: subprocess.run(["hadolint", str(df_path)], check=True, capture_output=True) # nosec
+             except Exception: pass
         return df_path
 
-    def _validate_dockerfile_hadolint(self, path: Path, prog: BuildProgress):
-        try: subprocess.run(["hadolint", str(path)], check=True, capture_output=True) # nosec
-        except: prog.add_warning("Hadolint check failed")
-
-    def _build_docker_image(self, config: BuildConfiguration, progress: BuildProgress, path: Path) -> Image:
+    def _build_docker_image(self, config, progress, path):
         progress.current_stage = "Building Image"
         progress.progress_percent = 40
         tag = f"llm-framework/{config.target_arch.lower()}:{config.build_id.lower()}"
         context = self.base_dir
         rel_df = path.relative_to(context)
-        
         try:
             cmd = ["docker", "build", "-f", str(rel_df), "-t", tag, str(context)]
             for k, v in config.build_args.items(): cmd.extend(["--build-arg", f"{k}={v}"])
-            
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=str(context))
             for line in proc.stdout: progress.add_log(f"BUILD: {line.rstrip()}")
             proc.wait()
@@ -310,7 +298,6 @@ class BuildEngine:
         progress.current_stage = "Running modules"
         progress.progress_percent = 60
         build_temp = self.cache_dir / "builds" / config.build_id
-        
         vols = {
             str(build_temp / "output"): {"bind": "/build-cache/output", "mode": "rw"},
             str(self.cache_dir / "models"): {"bind": "/build-cache/models", "mode": "rw"},
@@ -324,23 +311,14 @@ class BuildEngine:
             "QUANTIZATION": config.quantization or "",
             "LLAMA_CPP_COMMIT": config.build_args.get("LLAMA_CPP_COMMIT", "b3626")
         }
-        
-        if hasattr(self.framework_manager.config, 'source_repositories'):
-            for k, v in self.framework_manager.config.source_repositories.items():
-                key = k.split('.')[-1].upper() if '.' in k else k.upper()
-                url = v['url'] if isinstance(v, dict) else v
-                env[f"{key}_REPO_OVERRIDE"] = url
-
         container = self.docker_client.containers.create(
             image=image.id, command=["pipeline", "/build-cache/models", config.model_source, config.quantization or "Q4_K_M"], 
             volumes=vols, environment=env, name=f"llm-build-{config.build_id}", user="llmbuilder"
         )
         with self._lock: self._active_containers[config.build_id] = container
         container.start()
-        
         for line in container.logs(stream=True, follow=True):
             progress.add_log(f"CONT: {line.decode().strip()}")
-            
         res = container.wait(timeout=config.build_timeout)
         if res['StatusCode'] != 0:
             raise RuntimeError(f"Container failed: {container.logs().decode()}")

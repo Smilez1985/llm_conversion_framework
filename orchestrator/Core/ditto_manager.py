@@ -22,37 +22,56 @@ from orchestrator.utils.logging import get_logger
 class DittoCoder:
     """
     AI-Agent, der Hardware-Probes analysiert und Konfigurationen generiert.
+    Unterstützt Cloud APIs und lokale LLMs via litellm.
     """
     
-    def __init__(self, model: str = "gpt-4o", api_key: Optional[str] = None):
+    def __init__(self, provider: str = "OpenAI", model: str = "gpt-4o", 
+                 api_key: Optional[str] = None, base_url: Optional[str] = None):
         self.logger = get_logger(__name__)
-        self.model = model
+        self.provider = provider
+        self.base_url = base_url
+        
+        # Modell-String für litellm formatieren
+        self.litellm_model = self._format_model_name(provider, model)
+        
         if api_key:
+            # Litellm sucht oft nach spezifischen ENV Vars, aber wir können es auch direkt setzen
+            # oder generisch als OPENAI_API_KEY für kompatible Endpoints
             os.environ["OPENAI_API_KEY"] = api_key
+            if "Anthropic" in provider:
+                os.environ["ANTHROPIC_API_KEY"] = api_key
+            if "Google" in provider:
+                os.environ["GEMINI_API_KEY"] = api_key
             
         # Pfad zu den Templates (relativ zu dieser Datei)
         # orchestrator/Core/ -> targets/_template
         self.framework_root = Path(__file__).parent.parent.parent
         self.template_dir = self.framework_root / "targets" / "_template"
 
+    def _format_model_name(self, provider: str, model: str) -> str:
+        """Formatiert den Modellnamen für litellm (z.B. ollama/llama3)."""
+        if "Ollama" in provider:
+            return f"ollama/{model}"
+        if "Anthropic" in provider:
+            return model # Anthropic Modelle haben keinen Prefix nötig wenn Key gesetzt
+        if "Google" in provider:
+            return f"gemini/{model}"
+        return model # Default (OpenAI etc.)
+
     def _read_template(self, filename: str) -> str:
         """Liest ein Template ein."""
-        # Versuche direkten Pfad oder modules/ Unterordner
         paths = [
             self.template_dir / filename,
             self.template_dir / "modules" / filename
         ]
-        
         for path in paths:
             if path.exists():
                 return path.read_text(encoding="utf-8")
-        
         return f"# Error: Template {filename} not found"
 
     def generate_module_content(self, probe_file: Path) -> Dict[str, Any]:
         """
         Analysiert die Probe-Datei und generiert die Modul-Konfiguration.
-        Gibt ein Dictionary mit den erkannten Werten zurück.
         """
         if not completion:
             raise RuntimeError("Missing dependency: pip install litellm")
@@ -62,7 +81,7 @@ class DittoCoder:
 
         # 1. Hardware Daten lesen
         probe_data = probe_file.read_text(encoding="utf-8", errors="ignore")
-        self.logger.info(f"Analyzing probe data ({len(probe_data)} bytes)...")
+        self.logger.info(f"Analyzing probe data ({len(probe_data)} bytes) using {self.litellm_model}...")
 
         # 2. Der "Ditto" System Prompt
         system_prompt = """
@@ -93,17 +112,35 @@ class DittoCoder:
 
         # 3. LLM Call
         try:
-            response = completion(
-                model=self.model,
-                messages=[
+            # Parameter vorbereiten
+            kwargs = {
+                "model": self.litellm_model,
+                "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                response_format={ "type": "json_object" },
-                temperature=0.1
-            )
+                "temperature": 0.1
+            }
+            
+            # Base URL für lokale Modelle (Ollama/LocalAI)
+            if self.base_url:
+                kwargs["api_base"] = self.base_url
+
+            # JSON Mode (von vielen Modellen unterstützt, aber nicht allen)
+            if "gpt" in self.litellm_model or "gemini" in self.litellm_model:
+                 kwargs["response_format"] = { "type": "json_object" }
+
+            response = completion(**kwargs)
             
             content = response.choices[0].message.content
+            
+            # Markdown Code-Block Parsing (falls das Modell ```json ... ``` zurückgibt)
+            if "```" in content:
+                import re
+                match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
+                if match:
+                    content = match.group(1).strip()
+
             config = json.loads(content)
             self.logger.info("AI analysis completed successfully")
             return config
@@ -114,11 +151,10 @@ class DittoCoder:
 
     def save_module(self, module_name: str, config: Dict[str, Any], targets_dir: Path):
         """
-        Nutzt den ModuleGenerator (bestehende Logik), um das Modul physisch zu erstellen.
+        Nutzt den ModuleGenerator, um das Modul physisch zu erstellen.
         """
         from orchestrator.Core.module_generator import ModuleGenerator
         
-        # Daten für den Generator aufbereiten
         gen_data = {
             "module_name": module_name,
             "architecture": config.get("architecture", "aarch64"),

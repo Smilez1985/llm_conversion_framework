@@ -185,3 +185,33 @@ class ModuleCreationWizard(QWizard):
             
         except Exception as e:
             QMessageBox.critical(self, "Generation Error", f"Failed to generate module:\n{e}")
+
+
+def _run_ditto_agent(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select Probe Result", "", "Text (*.txt)")
+        if not path: return
+        
+        # Name abfragen
+        name, ok = QInputDialog.getText(self, "Module Name", "Name for new Target:")
+        if not ok or not name: return
+
+        self.status_label.setText("🤖 Ditto is working...")
+        
+        # Threading für GUI Responsiveness
+        import threading
+        def work():
+            try:
+                # API Key Dialog oder ENV nutzen
+                coder = DittoCoder() 
+                files = coder.generate_module_content(Path(path))
+                
+                # Speichern
+                targets_dir = self.parent().app_root / "targets" # Zugriff via Main Window
+                coder.save_module(name, files, targets_dir)
+                
+                # Success Signal senden (hier vereinfacht)
+                print("Done") 
+            except Exception as e:
+                print(f"Error: {e}")
+
+        threading.Thread(target=work, daemon=True).start()

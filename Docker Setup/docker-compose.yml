@@ -1,19 +1,17 @@
 version: '3.8'
 
-# LLM Cross-Compiler Framework - Docker Compose Configuration
-# DIREKTIVE: Goldstandard, Modular Infrastructure.
-# HINWEIS: Diese Datei startet nur die Management-Plattform. 
-#          Target-Builds werden vom Orchestrator dynamisch gestartet.
-
 services:
   # ============================================================================
-  # ORCHESTRATOR SERVICE (The Brain)
+  # ORCHESTRATOR SERVICE
   # ============================================================================
   orchestrator:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
       args:
+        # CI-Kompatibilität: User-ID durchreichen
+        USER_ID: ${UID:-1000}
+        GROUP_ID: ${GID:-1000}
         BUILD_DATE: ${BUILD_DATE:-}
         VERSION: ${VERSION:-1.0.0}
     image: llm-framework/orchestrator:${VERSION:-latest}
@@ -28,18 +26,16 @@ services:
       - API_ENABLED=${API_ENABLED:-true}
       - API_PORT=8000
       - WEB_PORT=3000
+      # Wichtig für Permissions im Container
+      - PUID=${UID:-1000}
+      - PGID=${GID:-1000}
     
     volumes:
-      # Docker Socket für dynamische Container-Erzeugung (Builder)
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Globaler Cache für alle Builds
       - build_cache:/build-cache
-      # Output Verzeichnis
       - ${OUTPUT_DIR:-./output}:/output
-      # Konfigurationen & Modelle
       - ${MODELS_DIR:-./models}:/models:ro
       - ${CONFIG_DIR:-./configs}:/configs:ro
-      # Code-Mapping für Entwicklung (Hot-Reload)
       - ./orchestrator/config:/app/config:ro
       - ./orchestrator/gui:/app/gui:ro
     
@@ -69,8 +65,6 @@ services:
 
   # ============================================================================
   # INFRASTRUCTURE SECURITY SCAN (TRIVY)
-  # Scannt nur den Orchestrator selbst beim Start.
-  # Target-Scan erfolgt dynamisch im Builder.
   # ============================================================================
   trivy-infra-scanner:
     image: aquasec/trivy:latest
@@ -81,7 +75,7 @@ services:
     command: 
       - image
       - --exit-code
-      - "0" # Warn only for infra
+      - "0" 
       - --severity
       - HIGH,CRITICAL
       - llm-framework/orchestrator:${VERSION:-latest}
@@ -90,9 +84,6 @@ services:
     networks:
       - llm-framework
 
-# ============================================================================
-# NETWORKS & VOLUMES
-# ============================================================================
 networks:
   llm-framework:
     driver: bridge

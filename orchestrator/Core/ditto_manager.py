@@ -20,58 +20,34 @@ from orchestrator.utils.logging import get_logger
 from orchestrator.Core.module_generator import ModuleGenerator
 
 class DittoCoder:
-    """
-    AI Agent that analyzes hardware probe dumps and generates
-    optimized build configurations using LLMs.
-    Supports ALL providers via litellm abstraction.
-    """
-    
     def __init__(self, provider: str = "OpenAI", model: str = "gpt-4o", 
                  api_key: Optional[str] = None, base_url: Optional[str] = None,
                  config_manager = None):
         self.logger = get_logger(__name__)
         self.provider = provider
-        self.model = model
-        self.api_key = api_key
         self.base_url = base_url
         self.config_manager = config_manager
-        
-        # Modell-String für litellm formatieren
         self.litellm_model = self._format_model_name(provider, model)
         
+        if api_key:
+            os.environ["OPENAI_API_KEY"] = api_key
+            if "Anthropic" in provider: os.environ["ANTHROPIC_API_KEY"] = api_key
+            if "Google" in provider: os.environ["GEMINI_API_KEY"] = api_key
+            
         self.framework_root = Path(__file__).parent.parent.parent
         self.template_dir = self.framework_root / "targets" / "_template"
 
     def _format_model_name(self, provider: str, model: str) -> str:
-        """Formatiert den Modellnamen für litellm."""
-        # Mapping für gängige Provider-Präfixe
-        provider_prefixes = {
-            "Ollama": "ollama",
-            "Google": "gemini", # oder vertex_ai
-            "Anthropic": "anthropic",
-            "Mistral": "mistral",
-            "OpenAI": "openai" # oft optional, aber sauberer
-        }
-        
-        # Suche nach passendem Prefix (Case Insensitive Match im Provider Namen)
-        for key, prefix in provider_prefixes.items():
-            if key.lower() in provider.lower():
-                # Wenn das Modell den Prefix noch nicht hat, fügen wir ihn hinzu
-                if not model.startswith(f"{prefix}/"):
-                    return f"{prefix}/{model}"
-                return model
-                
-        return model # Fallback (z.B. LocalAI oder Custom)
+        if "Ollama" in provider: return f"ollama/{model}"
+        if "Google" in provider: return f"gemini/{model}"
+        return model
 
     def _fetch_documentation(self, sdk_name: str) -> str:
-        """Liest Doku-Text aus der SSOT URL."""
         if not self.config_manager: return ""
-        
         sources = self.config_manager.get("source_repositories", {})
         url = ""
         
         doc_key_suffix = "docs_workflow"
-        
         for key, val in sources.items():
             if sdk_name.lower() in key.lower():
                 if isinstance(val, dict) and doc_key_suffix in val:
@@ -82,119 +58,76 @@ class DittoCoder:
                     break
         
         if not url or not url.startswith("http"): return ""
-        
         try:
             self.logger.info(f"Fetching docs from {url}...")
             resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                return resp.text[:15000] # Limit context
-        except Exception as e:
-            self.logger.warning(f"Doc fetch failed: {e}")
+            if resp.status_code == 200: return resp.text[:15000]
+        except: pass
         return ""
 
     def generate_module_content(self, probe_file: Path) -> Dict[str, Any]:
-        """
-        Analysiert die Probe-Datei und generiert die Modul-Konfiguration.
-        """
-        if not completion:
-            raise RuntimeError("Missing dependency: pip install litellm")
+        if not completion: raise RuntimeError("Missing dependency: pip install litellm")
+        if not probe_file.exists(): raise FileNotFoundError("Probe file missing")
 
-        if not probe_file.exists():
-            raise FileNotFoundError(f"Probe file not found: {probe_file}")
-
-        # 1. Hardware Daten lesen
         probe_data = probe_file.read_text(encoding="utf-8", errors="ignore")
         
-        # SDK Hint für Doku-Suche
         sdk_hint = "generic"
         if "nvidia" in probe_data.lower(): sdk_hint = "nvidia"
         elif "rockchip" in probe_data.lower(): sdk_hint = "rockchip"
         elif "hailo" in probe_data.lower(): sdk_hint = "hailo"
-        elif "intel" in probe_data.lower(): sdk_hint = "intel"
         
         doc_context = self._fetch_documentation(sdk_hint)
 
-        # 2. System Prompt
         system_prompt = """
         You are 'Ditto', an expert Embedded Systems Engineer.
-        Analyze the hardware probe and generate a JSON configuration to fill the framework templates.
+        Analyze the hardware probe and generate a JSON configuration.
         
-        TASKS:
-        1. Analyze Hardware (Arch, CPU Flags, NPU).
-        2. Generate Bash Code blocks for 'build.sh'.
+        CRITICAL TASK: Generate 'quantization_logic' for build.sh based on Hardware + Task.
         
-        REQUIRED JSON STRUCTURE:
-        {
-            "module_name": "Str",
-            "architecture": "aarch64|x86_64",
-            "sdk": "Str",
-            "base_os": "Docker Image Name",
-            "packages": ["list", "of", "packages"],
-            "cpu_flags": "GCC Flags",
-            "cmake_flags": "CMake Flags",
-            "setup_commands": "Bash code for Dockerfile setup (optional)",
-            "quantization_logic": "Bash CASE block content for build.sh"
-        }
+        Rules:
+        - If Rockchip RK3588 detected -> Use 'rkllm_module.sh' for LLM tasks.
+        - If Rockchip RK3566 detected -> Use CPU fallback for LLM, but 'rknn_module.sh' for Voice/Vision.
+        - If NVIDIA -> Use 'tensorrt_module.sh'.
         
-        For 'quantization_logic', generate ONLY the case content lines.
-        Example for RKNN:
-        "INT8"|"i8")
-            echo "Converting to INT8..."
-            rknn-llm-convert --i8 $MODEL_SOURCE ;;
-        "FP16")
-            echo "Keeping FP16..." ;;
+        Generate the BASH 'case' statement content (as a string) for the variable '$QUANTIZATION'.
+        But essentially you are defining the build flow.
+        
+        Documentation Context:
+        {doc_context}
+        
+        Return JSON with keys: module_name, architecture, sdk, base_os, cpu_flags, cmake_flags, packages, quantization_logic.
         """
 
         user_prompt = f"""
-        CONTEXT: {doc_context[:2000]}...
-        PROBE DATA: {probe_data[:8000]}
+        INPUT: target_hardware_config.txt
+        {probe_data[:8000]}
         Generate JSON.
         """
 
-        # 3. LLM Call
         try:
-            # Parameter dynamisch aufbauen
-            kwargs = {
-                "model": self.litellm_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
+            response = completion(
+                model=self.litellm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt.replace("{doc_context}", doc_context)},
                     {"role": "user", "content": user_prompt}
                 ],
-                "temperature": 0.1
-            }
-            
-            # API Key explizit übergeben (sicherer als os.environ global zu setzen)
-            if self.api_key and self.api_key != "sk-dummy":
-                kwargs["api_key"] = self.api_key
-            
-            # Base URL (für LocalAI / Ollama)
-            if self.base_url:
-                kwargs["api_base"] = self.base_url
-                
-            # JSON Mode Support Check (Ollama unterstützt es oft, OpenAI immer)
-            # Wir setzen es sicherheitshalber
-            kwargs["response_format"] = { "type": "json_object" }
-
-            response = completion(**kwargs)
-            
+                response_format={ "type": "json_object" },
+                temperature=0.1,
+                api_base=self.base_url
+            )
             content = response.choices[0].message.content
             if "```" in content:
                 import re
                 match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
                 if match: content = match.group(1).strip()
-
             return json.loads(content)
-            
         except Exception as e:
             self.logger.error(f"AI Analysis failed: {e}")
             raise e
 
     def save_module(self, module_name: str, config: Dict[str, Any], targets_dir: Path):
-        """Wrapper um den ModuleGenerator aufzurufen."""
-        
         packages = config.get("packages", "")
-        if isinstance(packages, str):
-            packages = packages.split()
+        if isinstance(packages, str): packages = packages.split()
             
         gen_data = {
             "module_name": module_name,
@@ -206,10 +139,9 @@ class DittoCoder:
             "cpu_flags": config.get("cpu_flags", ""),
             "cmake_flags": config.get("cmake_flags", ""),
             "quantization_logic": config.get("quantization_logic", ""),
-            "setup_commands": "# Auto-generated setup by Ditto",
+            "setup_commands": "# Auto-generated setup",
             "detection_commands": "lscpu",
             "supported_boards": [module_name]
         }
-        
         generator = ModuleGenerator(targets_dir)
         return generator.generate_module(gen_data)

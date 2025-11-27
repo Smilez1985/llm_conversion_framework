@@ -1,217 +1,191 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - HuggingFace Browser
-DIREKTIVE: Goldstandard, PySide6 GUI, Threaded Search.
+LLM Cross-Compiler Framework - Hugging Face Browser
+DIREKTIVE: Goldstandard, GUI.
 """
 
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, 
-    QComboBox, QMessageBox, QProgressBar, QAbstractItemView
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
+    QHeaderView, QLabel, QMessageBox, QComboBox
 )
 from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont, QColor, QBrush
+from PySide6.QtGui import QIcon, QColor
 
-# Import ModelManager via framework structure
-# Note: In the actual window we get the manager instance from framework_manager
-from orchestrator.Core.model_manager import ModelManager
+from orchestrator.gui.dialogs import AskTokenDialog
 
 class SearchWorker(QThread):
-    """Background thread for API calls to prevent GUI freezing"""
-    results_ready = Signal(list)
-    error_occurred = Signal(str)
+    finished = Signal(list)
+    error = Signal(str)
 
-    def __init__(self, manager, query, sort, filter_tag):
+    def __init__(self, manager, query):
         super().__init__()
         self.manager = manager
         self.query = query
-        self.sort = sort
-        self.filter_tag = filter_tag
 
     def run(self):
         try:
-            # Aufruf der neuen search_huggingface_models Methode im ModelManager
-            results = self.manager.search_huggingface_models(
-                query=self.query,
-                limit=50,
-                sort=self.sort,
-                filter_tag=self.filter_tag
-            )
-            self.results_ready.emit(results)
+            results = self.manager.search_huggingface_models(self.query)
+            self.finished.emit(results)
         except Exception as e:
-            self.error_occurred.emit(str(e))
+            self.error.emit(str(e))
+
+class DownloadWorker(QThread):
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, manager, repo_id, filename, token=None):
+        super().__init__()
+        self.manager = manager
+        self.repo_id = repo_id
+        self.filename = filename
+        self.token = token
+
+    def run(self):
+        try:
+            path = self.manager.download_file(self.repo_id, self.filename, self.token)
+            if path: self.finished.emit(path)
+            else: self.error.emit("Download returned None")
+        except Exception as e:
+            self.error.emit(str(e))
 
 class HuggingFaceWindow(QMainWindow):
-    """
-    Browser window for Hugging Face Models.
-    Allows searching, filtering, and selecting models for download.
-    """
     def __init__(self, framework_manager, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Hugging Face Model Browser")
-        self.resize(1100, 700)
-        
-        # Wir nutzen den ModelManager aus dem Framework
-        # Falls er dort noch nicht instanziiert ist (lazy loading), erstellen wir einen.
-        if hasattr(framework_manager, 'model_manager') and framework_manager.model_manager:
-             self.manager = framework_manager.model_manager
-        else:
-             # Fallback: Neu erstellen
-             self.manager = ModelManager(framework_manager)
-        
-        self._init_ui()
+        self.framework_manager = framework_manager
+        self.model_manager = framework_manager.model_manager
+        self.setWindowTitle("Hugging Face Model Hub Browser")
+        self.resize(900, 600)
+        self.all_results = [] # Cache for filtering
 
-    def _init_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
-        
-        # --- Top Bar ---
-        header = QHBoxLayout()
-        
-        # Search Input
-        self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("🔍 Search models (e.g. 'llama 3', 'mistral', 'granite')...")
-        self.search_bar.returnPressed.connect(self._start_search)
-        header.addWidget(self.search_bar, stretch=2)
-        
-        # Filter Type
-        self.filter_combo = QComboBox()
-        self.filter_combo.addItems(["All Tasks", "text-generation", "text-to-speech", "feature-extraction", "automatic-speech-recognition"])
-        header.addWidget(self.filter_combo)
-        
-        # Sort Options
-        self.sort_combo = QComboBox()
-        self.sort_combo.addItem("Most Downloaded", "downloads")
-        self.sort_combo.addItem("Most Likes", "likes")
-        self.sort_combo.addItem("Recently Updated", "lastModified")
-        header.addWidget(self.sort_combo)
-        
-        # Search Button
-        self.btn_search = QPushButton("Search")
-        self.btn_search.setStyleSheet("background-color: #007acc; color: white; font-weight: bold;")
-        self.btn_search.clicked.connect(self._start_search)
-        header.addWidget(self.btn_search)
-        
-        layout.addLayout(header)
-        
-        # --- Progress Bar (Hidden by default) ---
-        self.progress = QProgressBar()
-        self.progress.setRange(0, 0) # Indeterminate animation
-        self.progress.setVisible(False)
-        layout.addWidget(self.progress)
-        
-        # --- Results Table ---
-        self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Model ID", "Downloads", "Likes", "Task", "Tags"])
-        
-        # Styling
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch) # ID gets most space
-        self.table.setAlternatingRowColors(True)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        
-        layout.addWidget(self.table)
-        
-        # --- Bottom Action Bar ---
-        bottom = QHBoxLayout()
-        
-        self.status_lbl = QLabel("Ready")
-        bottom.addWidget(self.status_lbl)
-        
-        bottom.addStretch()
-        
-        self.btn_download = QPushButton("⬇️ Select for Build")
-        self.btn_download.setToolTip("Use this model ID for the current build configuration")
-        self.btn_download.setStyleSheet("background-color: #2d8a2d; color: white; font-weight: bold; padding: 8px 20px;")
-        self.btn_download.clicked.connect(self._select_model)
-        bottom.addWidget(self.btn_download)
-        
-        layout.addLayout(bottom)
 
-    def _start_search(self):
-        query = self.search_bar.text().strip()
+        # --- Search Bar ---
+        hbox = QHBoxLayout()
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("Search models (e.g. 'llama-3', 'mistral')...")
+        self.search_edit.returnPressed.connect(self.start_search)
+        hbox.addWidget(self.search_edit)
+
+        self.search_btn = QPushButton("Search")
+        self.search_btn.clicked.connect(self.start_search)
+        hbox.addWidget(self.search_btn)
+        layout.addLayout(hbox)
         
+        # --- Filter Bar ---
+        filter_box = QHBoxLayout()
+        filter_box.addWidget(QLabel("Filter:"))
+        self.filter_combo = QComboBox()
+        self.filter_combo.addItems(["All Models", "Free Models Only", "Gated Models Only"])
+        self.filter_combo.currentIndexChanged.connect(self.apply_filter)
+        filter_box.addWidget(self.filter_combo)
+        filter_box.addStretch()
+        layout.addLayout(filter_box)
+
+        # --- Results Table ---
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Model ID", "Downloads", "Likes", "Access"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.cellDoubleClicked.connect(self.on_download_request)
+        layout.addWidget(self.table)
+
+        self.status_label = QLabel("Ready")
+        layout.addWidget(self.status_label)
+
+    def start_search(self):
+        query = self.search_edit.text()
+        if not query: return
+        
+        self.status_label.setText("Searching...")
+        self.search_btn.setEnabled(False)
         self.table.setRowCount(0)
-        self.progress.setVisible(True)
-        self.btn_search.setEnabled(False)
-        self.status_lbl.setText("Searching Hugging Face Hub...")
         
-        # Filter Logic
-        tag = self.filter_combo.currentText()
-        if tag == "All Tasks": tag = None
-        
-        sort_key = self.sort_combo.currentData()
-        
-        # Threading to keep UI responsive
-        self.worker = SearchWorker(self.manager, query, sort_key, tag)
-        self.worker.results_ready.connect(self._on_results)
-        self.worker.error_occurred.connect(self._on_error)
+        self.worker = SearchWorker(self.model_manager, query)
+        self.worker.finished.connect(self.on_search_finished)
+        self.worker.error.connect(self.on_search_error)
         self.worker.start()
 
-    def _on_results(self, results):
-        self.progress.setVisible(False)
-        self.btn_search.setEnabled(True)
-        self.status_lbl.setText(f"Found {len(results)} models.")
+    def on_search_finished(self, results):
+        self.all_results = results
+        self.apply_filter()
+        self.status_label.setText(f"Found {len(results)} models")
+        self.search_btn.setEnabled(True)
+
+    def on_search_error(self, err):
+        self.status_label.setText(f"Error: {err}")
+        self.search_btn.setEnabled(True)
         
+    def apply_filter(self):
+        """Filters the cached results based on dropdown selection."""
+        mode = self.filter_combo.currentText()
+        filtered = []
+        
+        for m in self.all_results:
+            is_gated = m.get("gated", False)
+            
+            if mode == "Free Models Only" and is_gated:
+                continue
+            if mode == "Gated Models Only" and not is_gated:
+                continue
+            
+            filtered.append(m)
+            
+        self.populate_table(filtered)
+
+    def populate_table(self, models):
         self.table.setRowCount(0)
-        for model in results:
+        for m in models:
             row = self.table.rowCount()
             self.table.insertRow(row)
             
             # ID
-            id_item = QTableWidgetItem(model.model_id)
-            id_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
-            self.table.setItem(row, 0, id_item)
+            self.table.setItem(row, 0, QTableWidgetItem(m["id"]))
+            # Stats
+            self.table.setItem(row, 1, QTableWidgetItem(str(m["downloads"])))
+            self.table.setItem(row, 2, QTableWidgetItem(str(m["likes"])))
             
-            # Downloads
-            down_item = QTableWidgetItem(f"{model.downloads:,}")
-            self.table.setItem(row, 1, down_item)
-            
-            # Likes
-            self.table.setItem(row, 2, QTableWidgetItem(f"❤️ {model.likes}"))
-            
-            # Task
-            self.table.setItem(row, 3, QTableWidgetItem(model.pipeline_tag))
-            
-            # Tags (Highlight quantization tags)
-            tags_str = ", ".join([t for t in model.tags if t in ['gguf', 'safetensors', 'onnx'] or 'quant' in t])
-            if not tags_str: 
-                # Fallback: show first 3 tags if no specific tags found
-                tags_str = ", ".join(model.tags[:3])
-            
-            self.table.setItem(row, 4, QTableWidgetItem(tags_str))
-
-    def _on_error(self, err):
-        self.progress.setVisible(False)
-        self.btn_search.setEnabled(True)
-        self.status_lbl.setText("Error occurred.")
-        QMessageBox.critical(self, "API Error", f"Search failed:\n{err}")
-
-    def _select_model(self):
-        row = self.table.currentRow()
-        if row < 0:
-            QMessageBox.warning(self, "Selection", "Please select a model from the list.")
-            return
-            
-        model_id = self.table.item(row, 0).text()
-        
-        # Logic to return the selection to the main window
-        reply = QMessageBox.question(
-            self, "Select Model", 
-            f"Do you want to use '{model_id}'?\n\n"
-            "This will insert the Model ID into your Build Configuration.",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            # Attempt to set text in parent window if it exists and has the field
-            parent = self.parent()
-            if parent and hasattr(parent, "model_name"):
-                parent.model_name.setText(model_id)
-                parent.log(f"Selected model from HF: {model_id}")
-                self.close()
+            # Access Status (Lock Icon)
+            gated = m.get("gated", False)
+            status_text = "🔒 Gated" if gated else "✅ Free"
+            item = QTableWidgetItem(status_text)
+            if gated:
+                item.setForeground(QColor("orange"))
+                item.setToolTip("Authentication required. Double click to enter token.")
             else:
-                # Fallback information if opened standalone
-                QMessageBox.information(self, "Selected", f"Model ID '{model_id}' selected.\nPlease copy this to the Model field.")
+                item.setForeground(QColor("green"))
+            
+            self.table.setItem(row, 3, item)
+
+    def on_download_request(self, row, col):
+        model_id = self.table.item(row, 0).text()
+        access_item = self.table.item(row, 3)
+        is_gated = "🔒" in access_item.text()
+        
+        token = None
+        
+        if is_gated:
+            # Show Token Dialog
+            dlg = AskTokenDialog(model_id, self)
+            if dlg.exec():
+                token = dlg.token
+            else:
+                return # Cancelled
+                
+        self.download_model(model_id, token)
+
+    def download_model(self, model_id, token):
+        # For MVP, assume we download a default config or GGUF file
+        # In a real app, we would list files in repo first
+        filename = "config.json" # Placeholder default
+        
+        reply = QMessageBox.question(self, "Download", f"Download '{filename}' from {model_id}?\n(This is a demo action)")
+        if reply == QMessageBox.No: return
+        
+        self.status_label.setText(f"Downloading {model_id}...")
+        
+        self.dl_worker = DownloadWorker(self.model_manager, model_id, filename, token)
+        self.dl_worker.finished.connect(lambda p: QMessageBox.information(self, "Success", f"Saved to: {p}"))
+        self.dl_worker.error.connect(lambda e: QMessageBox.critical(self, "Error", f"Download failed:\n{e}"))
+        self.dl_worker.start()

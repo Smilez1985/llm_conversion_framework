@@ -33,12 +33,8 @@ class ModuleGenerator:
     def generate_module(self, data: Dict[str, Any]) -> Path:
         """
         Generate a complete module from configuration data.
-        
         Args:
-            data: Dictionary containing configuration keys (module_name, architecture, etc.)
-        
-        Returns:
-            Path: Path to the created module directory
+            data: Dictionary containing configuration keys (module_name, architecture, sdk, etc.)
         """
         module_slug = data["module_name"].lower().replace(" ", "_")
         target_dir = self.targets_dir / module_slug
@@ -51,7 +47,19 @@ class ModuleGenerator:
         ensure_directory(target_dir / "scripts")
         
         # 2. Generate Files via Template Processing
-        self._process_template("Dockerfile", target_dir, data)
+        
+        # INTELLIGENTE DOCKERFILE WAHL
+        # Wenn SDK "cuda" ist oder das Base-OS "nvidia" enthält, nutzen wir das GPU-Template
+        sdk = data.get("sdk", "").lower()
+        base_os = data.get("base_os", "").lower()
+        
+        if "cuda" in sdk or "nvidia" in base_os:
+            self.logger.info("Detected GPU Target. Using Dockerfile.gpu template.")
+            self._process_template("Dockerfile.gpu", target_dir, data, target_filename="Dockerfile")
+        else:
+            self.logger.info("Using Standard CPU Dockerfile template.")
+            self._process_template("Dockerfile", target_dir, data)
+
         self._process_template("target.yml", target_dir, data)
         self._process_template("modules/config_module.sh", target_dir, data)
         self._process_template("modules/source_module.sh", target_dir, data)
@@ -75,10 +83,12 @@ class ModuleGenerator:
         self.logger.info("Module generation completed successfully.")
         return target_dir
 
-    def _process_template(self, filename: str, target_dir: Path, data: Dict[str, Any]):
+    def _process_template(self, filename: str, target_dir: Path, data: Dict[str, Any], target_filename: str = None):
         """Reads a template, replaces placeholders, and writes it to target_dir."""
         src = self.template_dir / filename
-        dst = target_dir / filename
+        # Wenn target_filename gesetzt ist, nutzen wir diesen Namen für die Zieldatei (z.B. Dockerfile.gpu -> Dockerfile)
+        dst_name = target_filename if target_filename else filename
+        dst = target_dir / dst_name
         
         if not src.exists():
             return

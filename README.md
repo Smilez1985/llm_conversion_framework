@@ -393,6 +393,7 @@ Dieses Projekt ist lizenziert unter der **MIT License** - siehe die [LICENSE](LI
 
 ## 🙏 Danksagung
 
+- **[Ditto for LLM Conversion](https://github.com/Smilez1985/ditto4-LLMconversion)** - AI-Agent für automatische Hardware-Modul-Generierung
 - **[llama.cpp](https://github.com/ggerganov/llama.cpp)** - Das Herzstück der Inferenz
 - **[Hugging Face](https://huggingface.co/)** - Für das Modell-Ökosystem
 - **[Radxa Community](https://forum.radxa.com/)** - Für den Support bei der RK3566 Integration

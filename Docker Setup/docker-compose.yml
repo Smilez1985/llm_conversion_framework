@@ -1,96 +1,98 @@
 version: '3.8'
 
 # LLM Cross-Compiler Framework - Docker Compose Configuration
-# DIREKTIVE: Goldstandard, Security-Hardened.
+# DIREKTIVE: Goldstandard, Modular Infrastructure.
+# HINWEIS: Diese Datei startet nur die Management-Plattform. 
+#          Target-Builds werden vom Orchestrator dynamisch gestartet.
 
 services:
   # ============================================================================
-  # ROCKCHIP TARGET CONTAINER
-  # SECURED: No Docker Socket access.
-  # ============================================================================
-  rockchip-builder:
-    build:
-      context: .
-      dockerfile: targets/Rockchip/dockerfile
-      args:
-        BUILD_DATE: ${BUILD_DATE:-}
-        VERSION: ${VERSION:-1.0.0}
-    image: llm-framework/rockchip:${VERSION:-latest}
-    container_name: llm-rockchip-builder
-    hostname: rockchip-builder
-    
-    environment:
-      - BUILD_CACHE_DIR=/build-cache
-      - TARGET_ARCH=aarch64
-    
-    # Reduced Capabilities
-    cap_drop:
-      - ALL
-    
-    volumes:
-      - build_cache:/build-cache
-      - ${MODELS_DIR:-./models}:/build-cache/models:ro
-      - ${OUTPUT_DIR:-./output}:/build-cache/output
-      - ./targets/Rockchip/modules:/app/modules:ro
-      # Scripts werden read-only gemountet
-      - ./targets/Rockchip/scripts:/app/scripts:ro 
-    
-    networks:
-      - llm-framework
-    
-    security_opt:
-      - no-new-privileges:true
-    
-    command: ["interactive"]
-    tty: true
-    stdin_open: true
-
-  # ============================================================================
-  # ORCHESTRATOR SERVICE
-  # Needed for Management, keeps socket access (as per review)
+  # ORCHESTRATOR SERVICE (The Brain)
   # ============================================================================
   orchestrator:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
+      args:
+        BUILD_DATE: ${BUILD_DATE:-}
+        VERSION: ${VERSION:-1.0.0}
     image: llm-framework/orchestrator:${VERSION:-latest}
     container_name: llm-orchestrator
+    hostname: orchestrator
+    
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
+      - FRAMEWORK_VERSION=${VERSION:-1.0.0}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - GUI_ENABLED=${GUI_ENABLED:-true}
+      - API_ENABLED=${API_ENABLED:-true}
       - API_PORT=8000
+      - WEB_PORT=3000
+    
     volumes:
+      # Docker Socket für dynamische Container-Erzeugung (Builder)
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Globaler Cache für alle Builds
       - build_cache:/build-cache
+      # Output Verzeichnis
       - ${OUTPUT_DIR:-./output}:/output
+      # Konfigurationen & Modelle
+      - ${MODELS_DIR:-./models}:/models:ro
+      - ${CONFIG_DIR:-./configs}:/configs:ro
+      # Code-Mapping für Entwicklung (Hot-Reload)
       - ./orchestrator/config:/app/config:ro
+      - ./orchestrator/gui:/app/gui:ro
+    
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
+      - "${WEB_PORT:-3000}:3000"
+      - "${VNC_PORT:-5900}:5900"
+    
     networks:
       - llm-framework
-    depends_on:
-      - rockchip-builder
 
   # ============================================================================
-  # SECURITY & MONITORING
+  # MONITORING SERVICE (CTOP)
   # ============================================================================
-  trivy-scanner:
+  ctop:
+    image: quay.io/vektorlab/ctop:latest
+    container_name: llm-monitor
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - CTOP_FILTER=llm-
+    networks:
+      - llm-framework
+    stdin_open: true
+    tty: true
+
+  # ============================================================================
+  # INFRASTRUCTURE SECURITY SCAN (TRIVY)
+  # Scannt nur den Orchestrator selbst beim Start.
+  # Target-Scan erfolgt dynamisch im Builder.
+  # ============================================================================
+  trivy-infra-scanner:
     image: aquasec/trivy:latest
-    container_name: llm-trivy-scanner
+    container_name: llm-infra-scanner
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - trivy_cache:/root/.cache/
     command: 
       - image
       - --exit-code
-      - "1"
+      - "0" # Warn only for infra
       - --severity
       - HIGH,CRITICAL
-      - llm-framework/rockchip:${VERSION:-latest}
+      - llm-framework/orchestrator:${VERSION:-latest}
     depends_on:
-      - rockchip-builder
+      - orchestrator
     networks:
       - llm-framework
 
+# ============================================================================
+# NETWORKS & VOLUMES
+# ============================================================================
 networks:
   llm-framework:
     driver: bridge
@@ -98,5 +100,9 @@ networks:
 volumes:
   build_cache:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CACHE_DIR:-./cache}
   trivy_cache:
     driver: local

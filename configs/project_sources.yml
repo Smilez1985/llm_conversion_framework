@@ -18,7 +18,7 @@ core:
   llama_cpp: 
     url: "https://github.com/ggerganov/llama.cpp.git"
     commit: "b3626" # Pinned Commit für Reproduzierbarkeit
-  
+   
   # Python Transformers für Konvertierungs-Skripte
   transformers: "https://github.com/huggingface/transformers"
 
@@ -34,23 +34,31 @@ rockchip_npu:
     commit: "e5d3c12" # Pinned Stable
   # Model Zoo
   rknn_model_zoo: "https://github.com/airockchip/rknn_model_zoo"
+  # DITTO DOKU (Neu)
+  docs_workflow: "https://github.com/airockchip/rknn-llm/blob/main/README.md"
 
 # --- NVIDIA JETSON (Orin / Xavier / Nano) ---
 nvidia_jetson:
   tensorrt_llm: "https://github.com/NVIDIA/TensorRT-LLM"
   jetson_inference: "https://github.com/dusty-nv/jetson-inference"
   jetson_containers: "https://github.com/dusty-nv/jetson-containers"
+  # DITTO DOKU (Neu)
+  docs_workflow: "https://nvidia.github.io/TensorRT-LLM/architecture/workflow.html"
 
 # --- HAILO AI (Raspberry Pi 5 + Hailo-8 / 8L) ---
 hailo_ai:
   hailort: "https://github.com/hailo-ai/hailort"
   tappas: "https://github.com/hailo-ai/tappas"
   hailo_rpi5_examples: "https://github.com/hailo-ai/hailo-rpi5-examples"
+  # DITTO DOKU (Neu)
+  docs_workflow: "https://github.com/hailo-ai/hailo_model_zoo/blob/master/docs/public_models/HAILO8/HAILO8_inference_guide.rst"
 
 # --- INTEL NPU (Core Ultra / Meteor Lake) ---
 intel_npu:
   openvino: "https://github.com/openvinotoolkit/openvino"
   linux_npu_driver: "https://github.com/intel/linux-npu-driver"
+  # DITTO DOKU (Neu)
+  docs_workflow: "https://docs.openvino.ai/2024/documentation/openvino-ir-format.html"
 
 # --- AMD ROCm (Radeon GPUs) ---
 amd_rocm:

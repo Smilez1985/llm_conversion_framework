@@ -65,7 +65,7 @@ class TargetConfig:
 # ============================================================================
 
 console = Console()
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 DEFAULT_CONFIG = {
     "targets_dir": "targets",
@@ -487,10 +487,11 @@ def build():
               help='Build priority')
 @click.option('--parallel', is_flag=True, default=True, help='Enable parallel builds')
 @click.option('--follow', '-F', is_flag=True, help='Follow build output in real-time')
+@click.option('--gpu/--no-gpu', default=False, help='Enable GPU passthrough')
 @pass_context
 def start_build(ctx: FrameworkContext, model: str, target: str, format: str, 
                 quantization: Optional[str], output_dir: Optional[str], 
-                optimization: str, priority: str, parallel: bool, follow: bool):
+                optimization: str, priority: str, parallel: bool, follow: bool, gpu: bool):
     """Start a new build job"""
     
     try:
@@ -530,7 +531,8 @@ def start_build(ctx: FrameworkContext, model: str, target: str, format: str,
             quantization_options=[quantization] if quantization else [],
             parallel_builds=parallel,
             output_base_dir=output_dir,
-            description=f"CLI build: {model} -> {target} ({format})"
+            description=f"CLI build: {model} -> {target} ({format})",
+            use_gpu=gpu
         )
         
         loop = asyncio.new_event_loop()
@@ -545,7 +547,8 @@ def start_build(ctx: FrameworkContext, model: str, target: str, format: str,
                     f"[bold]Target:[/bold] {target}\n"
                     f"[bold]Format:[/bold] {format}\n"
                     f"[bold]Quantization:[/bold] {quantization or 'None'}\n"
-                    f"[bold]Output:[/bold] {output_dir}",
+                    f"[bold]Output:[/bold] {output_dir}\n"
+                    f"[bold]GPU:[/bold] {'✅ Enabled' if gpu else '❌ Disabled'}",
                     title=f"🚀 Starting Build: {request_id}"
                 ))
             
@@ -627,159 +630,4 @@ def build_status(ctx: FrameworkContext, request_id: Optional[str], all: bool):
 
 @cli.group()
 def config():
-    """Configuration management"""
-    pass
-
-@config.command('show')
-@pass_context
-def show_config(ctx: FrameworkContext):
-    """Show current configuration"""
-    click.echo(json.dumps(ctx.config, indent=2, default=str))
-
-@config.command('sources')
-@click.option('--list', '-l', is_flag=True, help='List configured sources')
-@click.option('--add', '-a', nargs=3, help='Add source: SECTION NAME URL (e.g. core llama_cpp https://...)')
-@pass_context
-def config_sources(ctx: FrameworkContext, list: bool, add: tuple):
-    """Manage source repositories from project_sources.yml"""
-    
-    sources_file = Path(ctx.config.get('configs_dir', 'configs')) / 'project_sources.yml'
-    
-    if list:
-        if hasattr(ctx.framework_manager.config, 'source_repositories'):
-            table = Table(title="Configured Source Repositories")
-            table.add_column("Key (Section.Name)", style="cyan")
-            table.add_column("URL", style="green")
-            
-            for key, url in ctx.framework_manager.config.source_repositories.items():
-                table.add_row(key, url)
-            console.print(table)
-        else:
-            console.print("[yellow]No sources configured.[/yellow]")
-            
-    if add:
-        if len(add) != 3:
-            console.print("[red]Error: Add requires exactly 3 arguments: SECTION NAME URL[/red]")
-            return
-
-        section, name, url = add
-        
-        # Load existing yaml
-        if sources_file.exists():
-            try:
-                with open(sources_file, 'r') as f:
-                    data = yaml.safe_load(f) or {}
-            except Exception as e:
-                console.print(f"[red]Error loading sources file: {e}[/red]")
-                return
-        else:
-            data = {}
-        
-        # Update data
-        if section not in data:
-            data[section] = {}
-        data[section][name] = url
-        
-        # Write back
-        try:
-            with open(sources_file, 'w') as f:
-                yaml.dump(data, f, default_flow_style=False)
-            console.print(f"[green]Successfully added source: {section}.{name} -> {url}[/green]")
-            console.print("[blue]Note: Restart framework/CLI to apply changes.[/blue]")
-        except Exception as e:
-            console.print(f"[red]Error writing sources file: {e}[/red]")
-
-
-# ============================================================================
-# SYSTEM COMMANDS (INKLUSIVE MONITOR & AUDIT)
-# ============================================================================
-
-@cli.group()
-def system():
-    """System management and diagnostics"""
-    pass
-
-@system.command('status')
-@pass_context
-def system_status(ctx: FrameworkContext):
-    """Show framework system status"""
-    info = ctx.framework_manager.get_info()
-    console.print(f"[bold]Framework Version:[/bold] {info.version}")
-    console.print(f"[bold]Docker:[/bold] {'✅ Connected' if info.docker_available else '❌ Disconnected'}")
-    console.print(f"[bold]Targets:[/bold] {info.targets_count}")
-
-@system.command('monitor')
-def system_monitor():
-    """Start interactive ctop monitor"""
-    try:
-        # Check if ctop container is running
-        subprocess.run(["docker", "start", "llm-monitor"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # Attach to ctop
-        subprocess.run(["docker", "attach", "llm-monitor"])
-    except subprocess.CalledProcessError:
-        console.print("[yellow]Monitor container not found. Run 'docker-compose up -d' first.[/yellow]")
-    except KeyboardInterrupt:
-        console.print("\nExiting monitor...")
-    except Exception as e:
-        console.print(f"[red]Failed to start monitor: {e}[/red]")
-
-@system.command('audit')
-@click.argument('image_tag', required=True)
-@click.option('--efficiency', '-e', default=90, help='Minimum efficiency percent (default: 90)')
-def system_audit(image_tag: str, efficiency: int):
-    """
-    Run a Goldstandard Audit on a Docker image using 'dive'.
-    Checks layer efficiency and wasted bytes.
-    """
-    script_path = Path("scripts/ci_image_audit.sh")
-    
-    if not script_path.exists():
-        console.print("[red]Error: Audit script 'scripts/ci_image_audit.sh' not found.[/red]")
-        sys.exit(1)
-        
-    try:
-        console.print(f"[blue]Starting audit for image: {image_tag} ...[/blue]")
-        # Skript ausführbar machen (sicher ist sicher)
-        if sys.platform != "win32":
-             os.chmod(script_path, 0o755)
-        
-        # Ausführen (bash/sh Aufruf für Windows Kompatibilität)
-        cmd = [str(script_path), image_tag, str(efficiency)]
-        if sys.platform == "win32":
-            cmd = ["bash"] + cmd
-
-        subprocess.run(cmd, check=True)
-        
-    except subprocess.CalledProcessError:
-        sys.exit(1)
-    except Exception as e:
-        console.print(f"[red]Audit execution failed: {e}[/red]")
-        sys.exit(1)
-
-@system.command('clean')
-@click.option('--all', is_flag=True, help='Clean everything')
-@click.option('--force', '-f', is_flag=True, help='Force clean')
-@pass_context
-def system_clean(ctx: FrameworkContext, all: bool, force: bool):
-    """Clean system artifacts"""
-    if not force and not click.confirm(f"Clean build cache and logs?"):
-        return
-    
-    try:
-        cache_dir = Path(ctx.config["cache_dir"])
-        if cache_dir.exists():
-            import shutil
-            for item in cache_dir.iterdir():
-                if item.is_dir(): shutil.rmtree(item)
-                else: item.unlink()
-            console.print("[green]Cache cleaned[/green]")
-    except Exception as e:
-        console.print(f"[red]Clean failed: {e}[/red]")
-
-
-# ============================================================================
-# MAIN ENTRY POINT
-# ============================================================================
-
-if __name__ == "__main__":
-    cli()
+    """Configuration

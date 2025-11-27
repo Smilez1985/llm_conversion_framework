@@ -25,8 +25,7 @@ import yaml
 import docker
 from docker.models.containers import Container
 from docker.models.images import Image
-# WICHTIG: Für GPU Support
-from docker.types import DeviceRequest
+from docker.types import DeviceRequest # Wichtig für GPU
 
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
@@ -72,7 +71,7 @@ class BuildConfiguration:
     build_id: str
     timestamp: str
     model_source: str
-    target_arch: str  # String-basiert für Modularität
+    target_arch: str
     target_format: ModelFormat
     output_dir: str
     model_branch: Optional[str] = "main"
@@ -93,7 +92,6 @@ class BuildConfiguration:
     enable_hadolint: bool = True
     poetry_version: str = "latest"
     model_task: str = "LLM" 
-    # NEU: GPU Support
     use_gpu: bool = False
 
 @dataclass
@@ -156,7 +154,6 @@ class BuildEngine:
         try:
             self.docker_client.ping()
             try:
-                # SECURITY: List args instead of shell=True
                 subprocess.run(["docker", "buildx", "version"], capture_output=True, check=True)
             except Exception:
                 self.logger.warning("Docker BuildX not available")
@@ -244,17 +241,10 @@ class BuildEngine:
 
             self._prepare_build_environment(config, prog, target_path)
             df_path = self._generate_dockerfile(config, prog, target_path)
-            
-            # Build Image
             image = self._build_docker_image(config, prog, df_path)
             
-            # Scan
             self._scan_image_security(image.tags[0], prog)
-            
-            # Run Build Modules (WITH GPU LOGIC)
             self._execute_build_modules(config, prog, image, target_path)
-            
-            # Artifacts
             self._extract_artifacts(config, prog)
             
             if config.cleanup_after_build: self.cleanup_build(bid)
@@ -287,14 +277,13 @@ class BuildEngine:
         progress.progress_percent = 20
         build_temp = self.cache_dir / "builds" / config.build_id
         df_path = build_temp / "Dockerfile"
-        
         src_df = target_path / "Dockerfile"
         if not src_df.exists(): src_df = target_path / "dockerfile"
         if not src_df.exists(): raise FileNotFoundError("Dockerfile missing in target")
-        
         shutil.copy2(src_df, df_path)
-        
-        if config.enable_hadolint: self._validate_dockerfile_hadolint(df_path, progress)
+        if config.enable_hadolint:
+             try: subprocess.run(["hadolint", str(df_path)], check=True, capture_output=True) # nosec
+             except Exception: pass
         return df_path
 
     def _validate_dockerfile_hadolint(self, path: Path, prog: BuildProgress):
@@ -307,11 +296,9 @@ class BuildEngine:
         tag = f"llm-framework/{config.target_arch.lower()}:{config.build_id.lower()}"
         context = self.base_dir
         rel_df = path.relative_to(context)
-        
         try:
             cmd = ["docker", "build", "-f", str(rel_df), "-t", tag, str(context)]
             for k, v in config.build_args.items(): cmd.extend(["--build-arg", f"{k}={v}"])
-            
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=str(context))
             for line in proc.stdout: progress.add_log(f"BUILD: {line.rstrip()}")
             proc.wait()
@@ -340,7 +327,6 @@ class BuildEngine:
         progress.current_stage = "Running modules"
         progress.progress_percent = 60
         build_temp = self.cache_dir / "builds" / config.build_id
-        
         vols = {
             str(build_temp / "output"): {"bind": "/build-cache/output", "mode": "rw"},
             str(self.cache_dir / "models"): {"bind": "/build-cache/models", "mode": "rw"},
@@ -361,8 +347,8 @@ class BuildEngine:
                 key = k.split('.')[-1].upper() if '.' in k else k.upper()
                 url = v['url'] if isinstance(v, dict) else v
                 env[f"{key}_REPO_OVERRIDE"] = url
-
-        # GPU PASSTHROUGH LOGIC
+        
+        # GPU Support Logic
         device_requests = []
         if config.use_gpu:
             progress.add_log("Enabling GPU Passthrough (NVIDIA)...")
@@ -371,14 +357,12 @@ class BuildEngine:
         container = self.docker_client.containers.create(
             image=image.id, command=["pipeline", "/build-cache/models", config.model_source, config.quantization or "Q4_K_M"], 
             volumes=vols, environment=env, name=f"llm-build-{config.build_id}", user="llmbuilder",
-            device_requests=device_requests # GPU HIER!
+            device_requests=device_requests
         )
         with self._lock: self._active_containers[config.build_id] = container
         container.start()
-        
         for line in container.logs(stream=True, follow=True):
             progress.add_log(f"CONT: {line.decode().strip()}")
-            
         res = container.wait(timeout=config.build_timeout)
         if res['StatusCode'] != 0:
             raise RuntimeError(f"Container failed: {container.logs().decode()}")

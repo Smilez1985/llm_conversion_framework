@@ -90,7 +90,7 @@ class BuildConfiguration:
     cleanup_after_build: bool = True
     enable_hadolint: bool = True
     poetry_version: str = "latest"
-    model_task: str = "LLM" # Task Type (LLM, VOICE, VLM)
+    model_task: str = "LLM" 
 
 @dataclass
 class BuildProgress:
@@ -240,9 +240,19 @@ class BuildEngine:
 
             self._prepare_build_environment(config, prog, target_path)
             df_path = self._generate_dockerfile(config, prog, target_path)
+            
+            # Build Image
             image = self._build_docker_image(config, prog, df_path)
+            
+            # NEW: Security Scan of the built image
+            self._scan_image_security(image.tags[0], prog)
+            
+            # Run Build Modules
             self._execute_build_modules(config, prog, image, target_path)
+            
+            # Artifacts
             self._extract_artifacts(config, prog)
+            
             if config.cleanup_after_build: self.cleanup_build(bid)
             prog.status = BuildStatus.COMPLETED
             prog.end_time = datetime.now()
@@ -265,7 +275,6 @@ class BuildEngine:
         build_temp = self.cache_dir / "builds" / config.build_id
         ensure_directory(build_temp)
         for d in ["output", "logs"]: ensure_directory(build_temp / d)
-        
         with open(build_temp / "build_config.json", 'w') as f:
             json.dump(asdict(config), f, indent=2, default=str)
 
@@ -307,6 +316,45 @@ class BuildEngine:
         except Exception as e:
             raise RuntimeError(f"Image build failed: {e}")
 
+    def _scan_image_security(self, image_tag: str, progress: BuildProgress):
+        """Runs Trivy scan on the newly built image."""
+        progress.add_log(f"Scanning image {image_tag} for vulnerabilities...")
+        try:
+            # Wir nutzen einen flüchtigen Container für den Scan
+            # Mountet trivy_cache (muss auf Host existieren oder von Orchestrator verwaltet werden)
+            # Hinweis: In einer Docker-in-Docker Umgebung muss der Socket durchgereicht sein
+            scan_cmd = [
+                "image", "--exit-code", "1", "--severity", "HIGH,CRITICAL", image_tag
+            ]
+            
+            # Wir nutzen die Low-Level API um den Stream zu bekommen oder run()
+            # Verwenden von subprocess hier ist einfacher wenn docker client verfügbar ist
+            # Aber wir wollen den Output im Log.
+            
+            # Nutzung von self.docker_client um trivy container zu starten
+            log_stream = self.docker_client.containers.run(
+                "aquasec/trivy:latest",
+                command=scan_cmd,
+                volumes={
+                    '/var/run/docker.sock': {'bind': '/var/run/docker.sock', 'mode': 'ro'},
+                    'trivy_cache': {'bind': '/root/.cache/', 'mode': 'rw'}
+                },
+                remove=True,
+                stream=True
+            )
+            
+            for line in log_stream:
+                progress.add_log(f"TRIVY: {line.decode().strip()}")
+                
+            progress.add_log("Security scan passed.")
+            
+        except docker.errors.ContainerError as e:
+            # Exit code 1 means vulnerabilities found
+            progress.add_warning(f"Security vulnerabilities found! Check logs.")
+            # Optional: raise RuntimeError("Security check failed") if strict mode
+        except Exception as e:
+            progress.add_warning(f"Security scan failed to run: {e}")
+
     def _execute_build_modules(self, config: BuildConfiguration, progress: BuildProgress, image: Image, target_path: Path):
         progress.current_stage = "Running modules"
         progress.progress_percent = 60
@@ -320,7 +368,7 @@ class BuildEngine:
         env = {
             "BUILD_ID": config.build_id,
             "MODEL_SOURCE": config.model_source,
-            "MODEL_TASK": config.model_task, # Injected
+            "MODEL_TASK": config.model_task, 
             "TARGET_ARCH": config.target_arch,
             "OPTIMIZATION_LEVEL": config.optimization_level.value,
             "QUANTIZATION": config.quantization or "",

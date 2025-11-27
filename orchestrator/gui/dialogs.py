@@ -1,196 +1,118 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Dialogs
-DIREKTIVE: Goldstandard, GUI-Komponenten.
+LLM Cross-Compiler Framework - Model Manager
+DIREKTIVE: Goldstandard, Modular & Data-Driven.
 """
 
+import os
+import sys
+import json
+import logging
+import shutil
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+from dataclasses import dataclass, field
+from datetime import datetime
+import time
+
 import requests
-from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
-    QComboBox, QLineEdit, QLabel, QPushButton, QApplication,
-    QGroupBox, QRadioButton, QButtonGroup, QStackedWidget, QWidget
-)
-from PySide6.QtCore import Qt
+from orchestrator.utils.logging import get_logger
+from orchestrator.utils.helpers import ensure_directory
 
-class AddSourceDialog(QDialog):
-    """Dialog to add a new source repository to project_sources.yml"""
+@dataclass
+class ModelMetadata:
+    name: str
+    source: str
+    format: str
+    model_type: str = ""
+    size_bytes: int = 0
     
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Add New Source Repository")
-        self.setMinimumWidth(500)
-        
-        self._init_ui()
+    @property
+    def size_gb(self) -> float:
+        return self.size_bytes / (1024 ** 3)
 
-    def _init_ui(self):
-        layout = QVBoxLayout(self)
+class ModelManager:
+    def __init__(self, framework_manager):
+        self.framework_manager = framework_manager
+        self.logger = get_logger(__name__)
+        self.config = framework_manager.config
+        self.models_dir = Path(framework_manager.info.installation_path) / self.config.models_dir
+        ensure_directory(self.models_dir)
         
-        form = QFormLayout()
-        self.section_edit = QComboBox()
-        self.section_edit.addItems(["core", "rockchip_npu", "voice_tts", "models", "custom"])
-        self.section_edit.setEditable(True)
-        form.addRow("Category (Section):", self.section_edit)
-        
-        self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("e.g., my_special_tool")
-        form.addRow("Name (Key):", self.name_edit)
-        
-        self.url_edit = QLineEdit()
-        self.url_edit.setPlaceholderText("https://github.com/username/repo.git")
-        form.addRow("Git URL:", self.url_edit)
-        
-        layout.addLayout(form)
-        
-        self.status_label = QLabel("")
-        layout.addWidget(self.status_label)
-        
-        btns = QHBoxLayout()
-        self.test_btn = QPushButton("Test URL")
-        self.test_btn.clicked.connect(self.test_url)
-        btns.addWidget(self.test_btn)
-        
-        self.save_btn = QPushButton("Add Source")
-        self.save_btn.clicked.connect(self.accept)
-        self.save_btn.setEnabled(False)
-        btns.addWidget(self.save_btn)
-        
-        layout.addLayout(btns)
-        
-    def test_url(self):
-        url = self.url_edit.text().strip()
-        if not url:
-            self.status_label.setText("Please enter a URL.")
-            self.status_label.setStyleSheet("color: orange")
-            return
-            
-        self.status_label.setText("Testing connection...")
-        self.status_label.setStyleSheet("color: black")
-        QApplication.processEvents()
-        
+    def initialize(self) -> bool:
+        self.logger.info("Model Manager initialized")
+        return True
+
+    def search_huggingface_models(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """
+        Searches Hugging Face Hub.
+        Fetches 'gated' status explicitly.
+        """
         try:
-            # Clean URL for testing (remove .git suffix for HTTP check if needed)
-            test_url = url
-            if url.endswith('.git'): 
-                test_url = url[:-4]
-
-            response = requests.head(test_url, timeout=5, allow_redirects=True)
+            from huggingface_hub import HfApi
+            api = HfApi()
+            # 'expand' is crucial to get full model info including gated status
+            models = api.list_models(
+                search=query, 
+                limit=limit, 
+                sort="downloads", 
+                direction=-1,
+                expand=["gated", "downloads", "likes"] 
+            )
             
-            if response.status_code < 400:
-                self.status_label.setText("✅ URL is valid and reachable.")
-                self.status_label.setStyleSheet("color: green")
-                self.save_btn.setEnabled(True)
-            else:
-                self.status_label.setText(f"❌ URL returned status: {response.status_code}")
-                self.status_label.setStyleSheet("color: red")
+            results = []
+            for m in models:
+                # Safe attribute access using getattr
+                is_gated = getattr(m, "gated", False)
+                # Sometimes it returns "auto" or "manual", which counts as True
+                if is_gated not in [False, None]:
+                    is_gated = True
+                else:
+                    is_gated = False
+                    
+                results.append({
+                    "id": m.modelId,
+                    "downloads": m.downloads,
+                    "likes": m.likes,
+                    "gated": is_gated
+                })
+            return results
+
+        except ImportError:
+            self.logger.error("huggingface_hub not installed")
+            return []
         except Exception as e:
-            self.status_label.setText(f"❌ Connection failed: {str(e)}")
-            self.status_label.setStyleSheet("color: red")
+            self.logger.error(f"HF Search failed: {e}")
+            return []
 
-    def get_data(self):
-        return {
-            "section": self.section_edit.currentText(),
-            "name": self.name_edit.text(),
-            "url": self.url_edit.text()
-        }
-
-
-class AIConfigurationDialog(QDialog):
-    """Dialog to configure AI Provider and Model for Ditto."""
-    
-    PROVIDERS = {
-        "OpenAI": ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
-        "Anthropic": ["claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"],
-        "Google VertexAI": ["gemini-1.5-pro", "gemini-1.0-pro"],
-        "Mistral": ["mistral-large-latest", "mistral-medium", "mistral-small"],
-        "Ollama (Local)": ["llama3", "mistral", "gemma", "codellama"],
-        "LocalAI / OpenAI Compatible": ["local-model"]
-    }
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Configure AI Agent (Ditto)")
-        self.setMinimumWidth(500)
-        self._init_ui()
-        
-    def _init_ui(self):
-        layout = QVBoxLayout(self)
-        
-        # --- Provider Selection ---
-        form = QFormLayout()
-        self.provider_combo = QComboBox()
-        self.provider_combo.addItems(self.PROVIDERS.keys())
-        self.provider_combo.currentTextChanged.connect(self._update_models)
-        form.addRow("AI Provider:", self.provider_combo)
-        
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(True) # Allow custom models
-        form.addRow("Model:", self.model_combo)
-        
-        layout.addLayout(form)
-        
-        # --- Credentials / Endpoint ---
-        self.stack = QStackedWidget()
-        
-        # Page 1: API Key (Cloud)
-        self.page_cloud = QWidget()
-        cloud_layout = QFormLayout(self.page_cloud)
-        self.api_key_edit = QLineEdit()
-        self.api_key_edit.setEchoMode(QLineEdit.Password)
-        self.api_key_edit.setPlaceholderText("sk-...")
-        cloud_layout.addRow("API Key:", self.api_key_edit)
-        self.stack.addWidget(self.page_cloud)
-        
-        # Page 2: Local URL (Ollama/LocalAI)
-        self.page_local = QWidget()
-        local_layout = QFormLayout(self.page_local)
-        self.base_url_edit = QLineEdit()
-        self.base_url_edit.setText("http://localhost:11434")
-        local_layout.addRow("Base URL:", self.base_url_edit)
-        self.stack.addWidget(self.page_local)
-        
-        layout.addWidget(self.stack)
-        
-        # Trigger initial update
-        self._update_models(self.provider_combo.currentText())
-        
-        # --- Buttons ---
-        btns = QHBoxLayout()
-        self.btn_cancel = QPushButton("Cancel")
-        self.btn_cancel.clicked.connect(self.reject)
-        btns.addWidget(self.btn_cancel)
-        
-        self.btn_ok = QPushButton("Save Configuration")
-        self.btn_ok.setStyleSheet("background-color: #6a0dad; color: white; font-weight: bold;")
-        self.btn_ok.clicked.connect(self.accept)
-        btns.addWidget(self.btn_ok)
-        
-        layout.addLayout(btns)
-
-    def _update_models(self, provider):
-        self.model_combo.clear()
-        models = self.PROVIDERS.get(provider, [])
-        self.model_combo.addItems(models)
-        
-        # Switch stack based on provider type
-        if "Local" in provider or "Compatible" in provider:
-            self.stack.setCurrentWidget(self.page_local)
-        else:
-            self.stack.setCurrentWidget(self.page_cloud)
-
-    def get_config(self):
-        provider = self.provider_combo.currentText()
-        model = self.model_combo.currentText()
-        
-        config = {
-            "provider": provider,
-            "model": model
-        }
-        
-        if self.stack.currentWidget() == self.page_cloud:
-            config["api_key"] = self.api_key_edit.text()
-            config["base_url"] = None
-        else:
-            config["api_key"] = "sk-dummy" # Local usually needs a dummy key
-            config["base_url"] = self.base_url_edit.text()
+    def download_file(self, repo_id: str, filename: str, token: Optional[str] = None) -> Optional[str]:
+        """Downloads a specific file from HF Hub, supporting auth tokens."""
+        try:
+            from huggingface_hub import hf_hub_download
+            self.logger.info(f"Downloading {filename} from {repo_id}...")
             
-        return config
+            path = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                cache_dir=str(self.models_dir),
+                token=token
+            )
+            self.logger.info(f"Download successful: {path}")
+            return path
+        except Exception as e:
+            self.logger.error(f"Download failed: {e}")
+            return None
+
+    def _detect_model_format(self, model_path: Path) -> str:
+        if not model_path.exists(): return "unknown"
+        if model_path.is_dir():
+            if (model_path / "config.json").exists(): return "huggingface"
+            return "directory"
+        
+        s = model_path.suffix.lower()
+        if s == ".gguf": return "gguf"
+        if s == ".onnx": return "onnx"
+        if s == ".tflite": return "tflite"
+        if s in [".pt", ".pth", ".bin"]: return "pytorch"
+        if s == ".safetensors": return "safetensors"
+        return "unknown"

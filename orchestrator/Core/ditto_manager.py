@@ -54,10 +54,11 @@ class DittoCoder:
         
         sources = self.config_manager.get("source_repositories", {})
         url = ""
+        
+        # Suche nach Doku-Link (Flattened Config Support)
         doc_key_suffix = "docs_workflow"
         
         for key, val in sources.items():
-            # Support flattened keys (section.key) or nested dicts
             if sdk_name.lower() in key.lower():
                 if isinstance(val, dict) and doc_key_suffix in val:
                     url = val[doc_key_suffix]
@@ -78,26 +79,36 @@ class DittoCoder:
         return ""
 
     def generate_module_content(self, probe_file: Path) -> Dict[str, Any]:
-        """Analysiert Probe-Datei und generiert Config."""
-        if not completion: raise RuntimeError("Missing dependency: pip install litellm")
-        if not probe_file.exists(): raise FileNotFoundError(f"Probe file not found: {probe_file}")
+        """
+        Analysiert die Probe-Datei und generiert die Modul-Konfiguration.
+        """
+        if not completion:
+            raise RuntimeError("Missing dependency: pip install litellm")
 
+        if not probe_file.exists():
+            raise FileNotFoundError(f"Probe file not found: {probe_file}")
+
+        # 1. Hardware Daten lesen
         probe_data = probe_file.read_text(encoding="utf-8", errors="ignore")
         
+        # SDK Hint für Doku-Suche
         sdk_hint = "generic"
-        if "nvidia" in probe_data.lower(): sdk_hint = "nvidia"
-        elif "rockchip" in probe_data.lower(): sdk_hint = "rockchip"
+        if "nvidia" in probe_data.lower() or "tegra" in probe_data.lower(): sdk_hint = "nvidia"
+        elif "rockchip" in probe_data.lower() or "rk3" in probe_data.lower(): sdk_hint = "rockchip"
         elif "hailo" in probe_data.lower(): sdk_hint = "hailo"
+        elif "intel" in probe_data.lower(): sdk_hint = "intel"
         
+        # Doku laden
         doc_context = self._fetch_documentation(sdk_hint)
 
+        # 2. System Prompt (ERWEITERT für Quantization Logic)
         system_prompt = """
         You are 'Ditto', an expert Embedded Systems Engineer.
-        Analyze the hardware probe and generate a JSON configuration.
+        Analyze the hardware probe and generate a JSON configuration to fill the framework templates.
         
         TASKS:
         1. Analyze Hardware (Arch, CPU Flags, NPU).
-        2. Generate Bash Code blocks for 'build.sh'.
+        2. Generate Bash Code blocks for 'build.sh' based on the SDK documentation provided.
         
         REQUIRED JSON STRUCTURE:
         {
@@ -108,13 +119,19 @@ class DittoCoder:
             "packages": ["list", "of", "packages"],
             "cpu_flags": "GCC Flags",
             "cmake_flags": "CMake Flags",
-            "setup_commands": "Bash code for Dockerfile setup",
-            "quantization_logic": "Bash CASE block content"
+            "setup_commands": "Bash code for Dockerfile setup (optional)",
+            "quantization_logic": "Bash CASE block content for build.sh"
         }
         
-        For 'quantization_logic':
-        - PREFER calling existing helper scripts (e.g. /app/modules/rkllm_module.sh) over raw code.
-        - Generate ONLY the case body lines.
+        CRITICAL RULES for 'quantization_logic':
+        - Generate ONLY the case content lines (cases and commands).
+        - Do not wrap in 'case ... esac', just the body.
+        - Example for RKNN:
+        "INT8"|"i8")
+            echo "Converting to INT8..."
+            rknn-llm-convert --i8 $MODEL_SOURCE ;;
+        "FP16")
+            echo "Keeping FP16..." ;;
         """
 
         user_prompt = f"""
@@ -123,14 +140,27 @@ class DittoCoder:
         Generate JSON.
         """
 
+        # 3. LLM Call
         try:
-            response = completion(
-                model=self.litellm_model,
-                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-                response_format={ "type": "json_object" },
-                temperature=0.1,
-                api_base=self.base_url
-            )
+            # Parameter dynamisch aufbauen
+            kwargs = {
+                "model": self.litellm_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt.replace("{doc_context}", doc_context)},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.1
+            }
+            
+            if self.api_key and self.api_key != "sk-dummy":
+                kwargs["api_key"] = self.api_key
+            
+            if self.base_url:
+                kwargs["api_base"] = self.base_url
+                
+            kwargs["response_format"] = { "type": "json_object" }
+
+            response = completion(**kwargs)
             
             content = response.choices[0].message.content
             if "```" in content:
@@ -146,8 +176,10 @@ class DittoCoder:
 
     def save_module(self, module_name: str, config: Dict[str, Any], targets_dir: Path):
         """Wrapper um den ModuleGenerator aufzurufen."""
+        
         packages = config.get("packages", "")
-        if isinstance(packages, str): packages = packages.split()
+        if isinstance(packages, str):
+            packages = packages.split()
             
         gen_data = {
             "module_name": module_name,
@@ -158,7 +190,7 @@ class DittoCoder:
             "packages": packages,
             "cpu_flags": config.get("cpu_flags", ""),
             "cmake_flags": config.get("cmake_flags", ""),
-            "quantization_logic": config.get("quantization_logic", ""),
+            "quantization_logic": config.get("quantization_logic", ""), # Hier übergeben wir die Logik
             "setup_commands": "# Auto-generated setup by Ditto",
             "detection_commands": "lscpu",
             "supported_boards": [module_name]

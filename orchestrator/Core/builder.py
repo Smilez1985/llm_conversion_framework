@@ -90,8 +90,7 @@ class BuildConfiguration:
     cleanup_after_build: bool = True
     enable_hadolint: bool = True
     poetry_version: str = "latest"
-    # NEU: Task für Dispatcher Logic
-    model_task: str = "LLM" 
+    model_task: str = "LLM" # Task Type (LLM, VOICE, VLM)
 
 @dataclass
 class BuildProgress:
@@ -266,6 +265,7 @@ class BuildEngine:
         build_temp = self.cache_dir / "builds" / config.build_id
         ensure_directory(build_temp)
         for d in ["output", "logs"]: ensure_directory(build_temp / d)
+        
         with open(build_temp / "build_config.json", 'w') as f:
             json.dump(asdict(config), f, indent=2, default=str)
 
@@ -275,7 +275,6 @@ class BuildEngine:
         build_temp = self.cache_dir / "builds" / config.build_id
         df_path = build_temp / "Dockerfile"
         
-        # Use target's Dockerfile
         src_df = target_path / "Dockerfile"
         if not src_df.exists(): src_df = target_path / "dockerfile"
         if not src_df.exists(): raise FileNotFoundError("Dockerfile missing in target")
@@ -321,7 +320,7 @@ class BuildEngine:
         env = {
             "BUILD_ID": config.build_id,
             "MODEL_SOURCE": config.model_source,
-            "MODEL_TASK": config.model_task, # NEU: Injektion
+            "MODEL_TASK": config.model_task, # Injected
             "TARGET_ARCH": config.target_arch,
             "OPTIMIZATION_LEVEL": config.optimization_level.value,
             "QUANTIZATION": config.quantization or "",

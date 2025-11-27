@@ -1,40 +1,9 @@
 version: '3.8'
 
-# LLM Cross-Compiler Framework - Docker Compose Configuration
-# DIREKTIVE: Goldstandard, Security-Hardened (Socket Proxy).
-
 services:
   # ============================================================================
-  # DOCKER SOCKET PROXY (Security Layer)
-  # ============================================================================
-  socket-proxy:
-    image: tecnativa/docker-socket-proxy
-    container_name: llm-socket-proxy
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      # Allow only necessary operations
-      - BUILD=1
-      - CONTAINERS=1
-      - IMAGES=1
-      - EXEC=1       # Needed for 'docker exec'
-      - NETWORKS=1   # Needed to attach build containers
-      - VOLUMES=1
-      # DENY dangerous operations
-      - EVENTS=0
-      - PING=1
-      - VERSION=1
-      - INFO=1
-      - AUTH=0
-      - SECRETS=0
-      - SWARM=0
-      - SYSTEM=0     # Block 'docker system prune' etc.
-    networks:
-      - llm-framework
-    restart: unless-stopped
-
-  # ============================================================================
   # ORCHESTRATOR SERVICE
+  # Needs GPU access to passthrough to builder containers if needed
   # ============================================================================
   orchestrator:
     build:
@@ -48,14 +17,21 @@ services:
     container_name: llm-orchestrator
     hostname: orchestrator
     
+    # OPTIONAL GPU SUPPORT
+    # Requires 'nvidia-container-toolkit' on host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    
     environment:
-      # SECURITY: Use Proxy instead of raw socket
       - DOCKER_HOST=tcp://socket-proxy:2375
       - FRAMEWORK_VERSION=${VERSION:-1.0.0}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      # AI Security Defaults
       - AI_SECURITY_LEVEL=${AI_SECURITY_LEVEL:-STRICT} 
-      
       - GUI_ENABLED=${GUI_ENABLED:-true}
       - API_ENABLED=${API_ENABLED:-true}
       - API_PORT=8000
@@ -64,7 +40,6 @@ services:
       - PGID=${GID:-1000}
     
     volumes:
-      # KEIN Docker Socket Mount mehr!
       - build_cache:/build-cache
       - ${OUTPUT_DIR:-./output}:/output
       - ${MODELS_DIR:-./models}:/models:ro
@@ -84,13 +59,39 @@ services:
       - socket-proxy
 
   # ============================================================================
-  # MONITORING SERVICE (CTOP)
+  # DOCKER SOCKET PROXY (Security Layer)
+  # ============================================================================
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: llm-socket-proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - BUILD=1
+      - CONTAINERS=1
+      - IMAGES=1
+      - EXEC=1       
+      - NETWORKS=1
+      - VOLUMES=1
+      - EVENTS=0
+      - PING=1
+      - VERSION=1
+      - INFO=1
+      - AUTH=0
+      - SECRETS=0
+      - SWARM=0
+      - SYSTEM=0
+    networks:
+      - llm-framework
+    restart: unless-stopped
+
+  # ============================================================================
+  # MONITORING & SECURITY
   # ============================================================================
   ctop:
     image: quay.io/vektorlab/ctop:latest
     container_name: llm-monitor
     restart: unless-stopped
-    # CTOP braucht leider direkten Socket für Stats, aber ist Read-Only
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
@@ -100,9 +101,6 @@ services:
     stdin_open: true
     tty: true
 
-  # ============================================================================
-  # INFRASTRUCTURE SECURITY SCAN (TRIVY)
-  # ============================================================================
   trivy-infra-scanner:
     image: aquasec/trivy:latest
     container_name: llm-infra-scanner

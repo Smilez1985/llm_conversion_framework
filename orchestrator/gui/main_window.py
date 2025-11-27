@@ -228,12 +228,19 @@ class MainOrchestrator(QMainWindow):
         c_layout.addWidget(self.hf_btn)
         
         self.target_combo = QComboBox()
-        self.target_combo.addItems(["rk3566", "rk3588", "raspberry_pi", "nvidia_jetson"])
+        self.target_combo.addItems(["rockchip", "nvidia_jetson", "raspberry_pi", "hailo"]) 
         c_layout.addWidget(QLabel("Target:"))
         c_layout.addWidget(self.target_combo)
         
+        # NEU: Task Auswahl
+        self.task_combo = QComboBox()
+        self.task_combo.addItems(["LLM", "VOICE", "VLM"])
+        c_layout.addWidget(QLabel("Task:"))
+        c_layout.addWidget(self.task_combo)
+        
+        # NEU: Quantisierung
         self.quant_combo = QComboBox()
-        self.quant_combo.addItems(["Q4_K_M", "Q8_0", "Q5_K_M", "F16"])
+        self.quant_combo.addItems(["Q4_K_M", "Q8_0", "INT4", "INT8", "FP16"])
         c_layout.addWidget(QLabel("Quant:"))
         c_layout.addWidget(self.quant_combo)
         
@@ -293,25 +300,32 @@ class MainOrchestrator(QMainWindow):
         ModuleCreationWizard(self.app_root / "targets", self).exec()
 
     def run_image_audit(self):
-        # Audit Logic placeholder - implementation same as before
         pass
 
     def start_build(self):
         if not self.model_name.text(): return QMessageBox.warning(self, "Error", "Model name required")
+        
+        # Build Config zusammenstellen
         cfg = {
             "model_name": self.model_name.text(),
             "target": self.target_combo.currentText(),
+            "task": self.task_combo.currentText(),
             "quantization": self.quant_combo.currentText(),
             "auto_benchmark": self.chk_auto_bench.isChecked()
         }
+        
+        self.log(f"Starting build for {cfg['target']} ({cfg['task']}) with {cfg['quantization']}...")
         self.start_btn.setEnabled(False)
+        
+        # Start via DockerManager
         self.docker_manager.start_build(cfg)
 
     def on_build_output(self, bid, line):
         self.log_view.append(line)
         self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
 
-    def on_build_progress(self, bid, pct): self.progress_bar.setValue(pct)
+    def on_build_progress(self, bid, pct):
+        self.progress_bar.setValue(pct)
 
     def on_build_completed(self, bid, success, path):
         self.start_btn.setEnabled(True)

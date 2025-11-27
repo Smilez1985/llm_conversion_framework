@@ -24,40 +24,39 @@ core:
 
 # --- ROCKCHIP (RK3566 / RK3588) ---
 rockchip_npu:
-  # LLM-spezifische NPU Inferenz
-  rknn_llm: 
-    url: "https://github.com/airockchip/rknn-llm"
-    commit: "6f21a93" # Pinned Stable (Beispiel)
-  # Generelles NPU Toolkit
+  # RKNN-Toolkit2 (Vision / Audio / Generic)
   rknn_toolkit2: 
-    url: "https://github.com/airockchip/rknn-toolkit2"
+    url: "https://github.com/airockchip/rknn-toolkit2.git"
     commit: "e5d3c12" # Pinned Stable
+    docs_workflow: "https://github.com/airockchip/rknn-toolkit2/tree/master/doc"
+  
+  # RKLLM-Toolkit (LLM Specific - Only for RK3588/RK3576)
+  rkllm_toolkit:
+    url: "https://github.com/airockchip/rknn-llm.git"
+    commit: "6f21a93" # Pinned Stable
+    docs_workflow: "https://github.com/airockchip/rknn-llm/blob/main/README.md"
+
   # Model Zoo
   rknn_model_zoo: "https://github.com/airockchip/rknn_model_zoo"
-  # DITTO DOKU (Neu)
-  docs_workflow: "https://github.com/airockchip/rknn-llm/blob/main/README.md"
 
 # --- NVIDIA JETSON (Orin / Xavier / Nano) ---
 nvidia_jetson:
-  tensorrt_llm: "https://github.com/NVIDIA/TensorRT-LLM"
+  tensorrt_llm: "https://github.com/NVIDIA/TensorRT-LLM.git"
   jetson_inference: "https://github.com/dusty-nv/jetson-inference"
   jetson_containers: "https://github.com/dusty-nv/jetson-containers"
-  # DITTO DOKU (Neu)
   docs_workflow: "https://nvidia.github.io/TensorRT-LLM/architecture/workflow.html"
 
 # --- HAILO AI (Raspberry Pi 5 + Hailo-8 / 8L) ---
 hailo_ai:
-  hailort: "https://github.com/hailo-ai/hailort"
+  hailort: "https://github.com/hailo-ai/hailort.git"
   tappas: "https://github.com/hailo-ai/tappas"
   hailo_rpi5_examples: "https://github.com/hailo-ai/hailo-rpi5-examples"
-  # DITTO DOKU (Neu)
   docs_workflow: "https://github.com/hailo-ai/hailo_model_zoo/blob/master/docs/public_models/HAILO8/HAILO8_inference_guide.rst"
 
 # --- INTEL NPU (Core Ultra / Meteor Lake) ---
 intel_npu:
   openvino: "https://github.com/openvinotoolkit/openvino"
   linux_npu_driver: "https://github.com/intel/linux-npu-driver"
-  # DITTO DOKU (Neu)
   docs_workflow: "https://docs.openvino.ai/2024/documentation/openvino-ir-format.html"
 
 # --- AMD ROCm (Radeon GPUs) ---

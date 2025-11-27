@@ -1,116 +1,50 @@
 version: '3.8'
 
-# LLM Cross-Compiler Framework - Docker Compose Configuration
-# DIREKTIVE: Goldstandard, professionell, vollständige Container-Orchestrierung
-
 services:
-  # ============================================================================
-  # ROCKCHIP TARGET CONTAINER
-  # ============================================================================
   rockchip-builder:
     build:
       context: .
       dockerfile: targets/Rockchip/dockerfile
       args:
         BUILD_DATE: ${BUILD_DATE:-}
-        VCS_REF: ${VCS_REF:-}
         VERSION: ${VERSION:-1.0.0}
-        LLAMA_CPP_COMMIT: ${LLAMA_CPP_COMMIT:-b3626}
-        BUILD_JOBS: ${BUILD_JOBS:-4}
     image: llm-framework/rockchip:${VERSION:-latest}
     container_name: llm-rockchip-builder
     hostname: rockchip-builder
-    
-    # Environment configuration
     environment:
       - BUILD_CACHE_DIR=/build-cache
-      - LLAMA_CPP_PATH=/usr/src/llama.cpp
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - DEBUG=${DEBUG:-0}
-      - BUILD_JOBS=${BUILD_JOBS:-4}
       - TARGET_ARCH=aarch64
-      - TARGET_SOC_FAMILY=rockchip
-    
-    # Volume mounts
     volumes:
       - build_cache:/build-cache
       - ${MODELS_DIR:-./models}:/build-cache/models:ro
       - ${OUTPUT_DIR:-./output}:/build-cache/output
-      - ${CONFIG_DIR:-./configs}:/build-cache/configs:ro
       - ./targets/Rockchip/modules:/app/modules:ro
-      - ./logs:/build-cache/logs
-    
-    deploy:
-      resources:
-        limits:
-          cpus: '${CPU_LIMIT:-4.0}'
-          memory: ${MEMORY_LIMIT:-8G}
-    
-    healthcheck:
-      test: ["CMD", "python3", "-c", "import torch; print('OK')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    
     networks:
       - llm-framework
-    
     security_opt:
       - no-new-privileges:true
-    read_only: false
-    tmpfs:
-      - /tmp:rw,size=2G,mode=1777
-    
     command: ["interactive"]
     tty: true
-    stdin_open: true
 
-  # ============================================================================
-  # ORCHESTRATOR SERVICE (GUI + API)
-  # ============================================================================
   orchestrator:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
-      args:
-        BUILD_DATE: ${BUILD_DATE:-}
-        VERSION: ${VERSION:-1.0.0}
     image: llm-framework/orchestrator:${VERSION:-latest}
     container_name: llm-orchestrator
-    hostname: orchestrator
-    
     environment:
       - DOCKER_HOST=unix:///var/run/docker.sock
-      - FRAMEWORK_VERSION=${VERSION:-1.0.0}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-      - GUI_ENABLED=${GUI_ENABLED:-true}
-      - API_ENABLED=${API_ENABLED:-true}
-      - API_PORT=8000
-      - WEB_PORT=3000
-    
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - build_cache:/build-cache
       - ${OUTPUT_DIR:-./output}:/output
-      - ${MODELS_DIR:-./models}:/models:ro
-      - ${CONFIG_DIR:-./configs}:/configs:ro
-      - ./orchestrator/config:/app/config:ro
-      - ./orchestrator/gui:/app/gui:ro
-    
     ports:
-      - "${API_PORT:-8000}:8000"
-      - "${WEB_PORT:-3000}:3000"
-      - "${VNC_PORT:-5900}:5900"
-    
+      - "8000:8000"
     networks:
       - llm-framework
-    
     depends_on:
       - rockchip-builder
 
-  # ============================================================================
-  # MONITORING SERVICE (CTOP)
-  # ============================================================================
   ctop:
     image: quay.io/vektorlab/ctop:latest
     container_name: llm-monitor
@@ -121,13 +55,28 @@ services:
       - CTOP_FILTER=llm-
     networks:
       - llm-framework
-    # Interaktiver Modus für CLI-Nutzung
     stdin_open: true
     tty: true
 
-# ============================================================================
-# NETWORKS & VOLUMES
-# ============================================================================
+  # --- NEU: TRIVY SCANNER (Aus Integration Plan) ---
+  trivy-scanner:
+    image: aquasec/trivy:latest
+    container_name: llm-trivy-scanner
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - trivy_cache:/root/.cache/
+    command: 
+      - image
+      - --exit-code
+      - "1"
+      - --severity
+      - HIGH,CRITICAL
+      - llm-framework/rockchip:latest
+    depends_on:
+      - rockchip-builder
+    networks:
+      - llm-framework
+
 networks:
   llm-framework:
     driver: bridge
@@ -135,7 +84,5 @@ networks:
 volumes:
   build_cache:
     driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${CACHE_DIR:-./cache}
+  trivy_cache:  # NEU
+    driver: local

@@ -10,15 +10,18 @@ Enthält Templates für Dockerfile, target.yml und build.sh.
 """
 
 import os
+import shutil
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import yaml
 
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.helpers import ensure_directory
 
 class ModuleGenerator:
-    """Generates file structure and content for new hardware targets."""
+    """
+    Generates file structure and content for new hardware targets.
+    """
     
     def __init__(self, targets_dir: Path):
         self.logger = get_logger(__name__)
@@ -33,8 +36,12 @@ class ModuleGenerator:
     def generate_module(self, data: Dict[str, Any]) -> Path:
         """
         Generate a complete module from configuration data.
+        
         Args:
-            data: Dictionary containing configuration keys (module_name, architecture, sdk, etc.)
+            data: Dictionary containing configuration keys (module_name, architecture, etc.)
+        
+        Returns:
+            Path: Path to the created module directory
         """
         module_slug = data["module_name"].lower().replace(" ", "_")
         target_dir = self.targets_dir / module_slug
@@ -47,19 +54,7 @@ class ModuleGenerator:
         ensure_directory(target_dir / "scripts")
         
         # 2. Generate Files via Template Processing
-        
-        # INTELLIGENTE DOCKERFILE WAHL
-        # Wenn SDK "cuda" ist oder das Base-OS "nvidia" enthält, nutzen wir das GPU-Template
-        sdk = data.get("sdk", "").lower()
-        base_os = data.get("base_os", "").lower()
-        
-        if "cuda" in sdk or "nvidia" in base_os:
-            self.logger.info("Detected GPU Target. Using Dockerfile.gpu template.")
-            self._process_template("Dockerfile.gpu", target_dir, data, target_filename="Dockerfile")
-        else:
-            self.logger.info("Using Standard CPU Dockerfile template.")
-            self._process_template("Dockerfile", target_dir, data)
-
+        self._process_template("Dockerfile", target_dir, data)
         self._process_template("target.yml", target_dir, data)
         self._process_template("modules/config_module.sh", target_dir, data)
         self._process_template("modules/source_module.sh", target_dir, data)
@@ -68,13 +63,16 @@ class ModuleGenerator:
         self._write_build_script(target_dir, data)
         
         # Optional: Spezialisierte Module kopieren (falls im Template vorhanden)
+        # Dies erlaubt es uns, rkllm_module.sh etc. im Template Ordner zu pflegen und automatisch zu verteilen
         self._process_template("modules/rknn_module.sh", target_dir, data)
         self._process_template("modules/rkllm_module.sh", target_dir, data)
+        self._process_template("modules/benchmark_module.sh", target_dir, data)
         
         # 3. Helper Scripts
         self._write_profile_script(target_dir, data)
         
         # 4. Copy Python Scripts (Static Helpers)
+        # Kopiert Helfer wie export_rkllm.py aus dem Template in das neue Modul
         self._copy_scripts(target_dir)
         
         # 5. Create Placeholder Modules (if templates are missing or needed)
@@ -83,14 +81,13 @@ class ModuleGenerator:
         self.logger.info("Module generation completed successfully.")
         return target_dir
 
-    def _process_template(self, filename: str, target_dir: Path, data: Dict[str, Any], target_filename: str = None):
+    def _process_template(self, filename: str, target_dir: Path, data: Dict[str, Any]):
         """Reads a template, replaces placeholders, and writes it to target_dir."""
         src = self.template_dir / filename
-        # Wenn target_filename gesetzt ist, nutzen wir diesen Namen für die Zieldatei (z.B. Dockerfile.gpu -> Dockerfile)
-        dst_name = target_filename if target_filename else filename
-        dst = target_dir / dst_name
+        dst = target_dir / filename
         
         if not src.exists():
+            # Optional template missing is okay
             return
 
         content = src.read_text(encoding="utf-8")
@@ -108,6 +105,7 @@ class ModuleGenerator:
             "[Hersteller]": "Community",
             "debian:bookworm-slim": data.get("base_os", "debian:bookworm-slim"),
             "{packages_str}": packages_str,
+            # Inject Scripts / Logic Blocks
             "# [SDK_SETUP_COMMANDS]": data.get("setup_commands", ""),
             "[QUANTIZATION_LOGIC]": data.get("quantization_logic", ""),
             "# [PACKAGING_COMMANDS]": data.get("packaging_commands", "cp -r build/* $OUTPUT_DIR/"),
@@ -140,6 +138,7 @@ class ModuleGenerator:
                 config["metadata"]["name"] = data["module_name"]
                 config["metadata"]["architecture_family"] = data["architecture"]
                 config["metadata"]["description"] = data.get("description", "")
+                config["metadata"]["sdk"] = data.get("sdk", "none")
             
             # Update Docker
             if "docker" in config:
@@ -159,13 +158,13 @@ class ModuleGenerator:
         Generiert das intelligente build.sh Skript.
         Hier landet die Logik von Ditto (oder der Default-Case).
         """
-        # Prüfe erst, ob ein Template existiert
+        # Prüfe erst, ob ein Template existiert (Vorrang)
         src = self.template_dir / "modules/build.sh"
         if src.exists():
             self._process_template("modules/build.sh", target_dir, data)
             return
 
-        # Fallback Generator Code
+        # Fallback Generator Code (falls Template fehlt)
         quant_logic = data.get("quantization_logic", "")
         if not quant_logic:
             quant_logic = """
@@ -221,6 +220,9 @@ echo "Generated $OUTPUT_FILE"
             ensure_directory(dst_scripts)
             for item in src_scripts.glob("*.py"):
                 shutil.copy2(item, dst_scripts / item.name)
+                # Set permissions just in case
+                try: os.chmod(dst_scripts / item.name, 0o755)
+                except: pass
 
     def _write_standard_modules(self, target_dir: Path):
         """Write standard templates for other modules if not handled by templates"""

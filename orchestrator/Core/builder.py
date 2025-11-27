@@ -25,6 +25,8 @@ import yaml
 import docker
 from docker.models.containers import Container
 from docker.models.images import Image
+# WICHTIG: Für GPU Support
+from docker.types import DeviceRequest
 
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
@@ -91,6 +93,8 @@ class BuildConfiguration:
     enable_hadolint: bool = True
     poetry_version: str = "latest"
     model_task: str = "LLM" 
+    # NEU: GPU Support
+    use_gpu: bool = False
 
 @dataclass
 class BuildProgress:
@@ -244,10 +248,10 @@ class BuildEngine:
             # Build Image
             image = self._build_docker_image(config, prog, df_path)
             
-            # NEW: Security Scan of the built image
+            # Scan
             self._scan_image_security(image.tags[0], prog)
             
-            # Run Build Modules
+            # Run Build Modules (WITH GPU LOGIC)
             self._execute_build_modules(config, prog, image, target_path)
             
             # Artifacts
@@ -317,41 +321,18 @@ class BuildEngine:
             raise RuntimeError(f"Image build failed: {e}")
 
     def _scan_image_security(self, image_tag: str, progress: BuildProgress):
-        """Runs Trivy scan on the newly built image."""
         progress.add_log(f"Scanning image {image_tag} for vulnerabilities...")
         try:
-            # Wir nutzen einen flüchtigen Container für den Scan
-            # Mountet trivy_cache (muss auf Host existieren oder von Orchestrator verwaltet werden)
-            # Hinweis: In einer Docker-in-Docker Umgebung muss der Socket durchgereicht sein
-            scan_cmd = [
-                "image", "--exit-code", "1", "--severity", "HIGH,CRITICAL", image_tag
-            ]
-            
-            # Wir nutzen die Low-Level API um den Stream zu bekommen oder run()
-            # Verwenden von subprocess hier ist einfacher wenn docker client verfügbar ist
-            # Aber wir wollen den Output im Log.
-            
-            # Nutzung von self.docker_client um trivy container zu starten
+            scan_cmd = ["image", "--exit-code", "1", "--severity", "HIGH,CRITICAL", image_tag]
             log_stream = self.docker_client.containers.run(
-                "aquasec/trivy:latest",
-                command=scan_cmd,
-                volumes={
-                    '/var/run/docker.sock': {'bind': '/var/run/docker.sock', 'mode': 'ro'},
-                    'trivy_cache': {'bind': '/root/.cache/', 'mode': 'rw'}
-                },
-                remove=True,
-                stream=True
+                "aquasec/trivy:latest", command=scan_cmd,
+                volumes={'/var/run/docker.sock': {'bind': '/var/run/docker.sock', 'mode': 'ro'}, 'trivy_cache': {'bind': '/root/.cache/', 'mode': 'rw'}},
+                remove=True, stream=True
             )
-            
-            for line in log_stream:
-                progress.add_log(f"TRIVY: {line.decode().strip()}")
-                
+            for line in log_stream: progress.add_log(f"TRIVY: {line.decode().strip()}")
             progress.add_log("Security scan passed.")
-            
         except docker.errors.ContainerError as e:
-            # Exit code 1 means vulnerabilities found
             progress.add_warning(f"Security vulnerabilities found! Check logs.")
-            # Optional: raise RuntimeError("Security check failed") if strict mode
         except Exception as e:
             progress.add_warning(f"Security scan failed to run: {e}")
 
@@ -381,9 +362,16 @@ class BuildEngine:
                 url = v['url'] if isinstance(v, dict) else v
                 env[f"{key}_REPO_OVERRIDE"] = url
 
+        # GPU PASSTHROUGH LOGIC
+        device_requests = []
+        if config.use_gpu:
+            progress.add_log("Enabling GPU Passthrough (NVIDIA)...")
+            device_requests = [DeviceRequest(count=-1, capabilities=[['gpu']])]
+
         container = self.docker_client.containers.create(
             image=image.id, command=["pipeline", "/build-cache/models", config.model_source, config.quantization or "Q4_K_M"], 
-            volumes=vols, environment=env, name=f"llm-build-{config.build_id}", user="llmbuilder"
+            volumes=vols, environment=env, name=f"llm-build-{config.build_id}", user="llmbuilder",
+            device_requests=device_requests # GPU HIER!
         )
         with self._lock: self._active_containers[config.build_id] = container
         container.start()

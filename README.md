@@ -6,21 +6,23 @@
 [![Poetry](https://img.shields.io/badge/poetry-1.5+-60A5FA.svg)](https://python-poetry.org/)
 [![Platform](https://img.shields.io/badge/platform-win%20%7C%20linux%20%7C%20mac-lightgrey)]()
 [![Status](https://img.shields.io/badge/status-production%20ready-green)]()
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)]()
 
 **Professionelles modulares Framework für die Cross-Compilation von Large Language Models auf Edge-Hardware**
 
-Eliminiert die Komplexität der Cross-Kompilierung und Quantisierung von LLMs für fragmentierte Edge-Hardware (CPUs, GPUs, NPUs). Community-driven, Docker-basiert, production-ready.
+Ein GUI-basiertes LLM Deployment Framework, das beliebige LLMs automatisiert optimieren & quantisieren kann. Perfekt optimiert für jede CPU, GPU oder NPU.
 
 ---
 
-## 🌟 Status: Production Ready
+## 🌟 Status: Production Ready (v1.2.0)
 
 Das Framework wurde einem umfassenden **Enterprise-Grade Sicherheits- und Architektur-Audit** unterzogen:
 
-* ✅ **Sicherheit:** Container-Isolation, geschützter Docker-Socket, Input-Validierung, Trivy-Scanning
+* ✅ **Sicherheit:** Container-Isolation mit Socket Proxy, geschützter Docker-Socket, Input-Validierung, Trivy-Scanning
 * ✅ **Modularität:** Klare Trennung zwischen Orchestrator (Management), Builder (Ausführung) und Target-Modulen
-* ✅ **AI-Integration:** "Ditto"-Agent für vollautomatische Generierung neuer Hardware-Module
-* ✅ **Stabilität:** Erfüllt Enterprise-Standards für Production-Deployments
+* ✅ **AI-Integration:** "Ditto"-Agent (v1.2) für vollautomatische Generierung neuer Hardware-Module
+* ✅ **Multi-Provider Support:** Ollama, OpenAI, Anthropic und weitere AI-Provider
+* ✅ **GPU-Ready:** NVIDIA GPU Passthrough für beschleunigte Builds
 
 ---
 
@@ -30,13 +32,15 @@ Wir lösen ein Problem, das jeder kennt, aber niemand angeht: Die saubere, repro
 
 Das **LLM Cross-Compiler Framework** ist keine einfache "Installations-Anleitung", sondern eine Docker-basierte Fertigungsstraße. Es verwandelt Source-Code (HuggingFace, llama.cpp, Vosk) vollautomatisch in optimierte Binaries für dein Zielsystem.
 
-### ✨ Was es leistet (v1.1.0)
+### ✨ Was es leistet (v1.2.0)
 
 * ✅ Vollständige Cross-Compilation für **Rockchip RK3566/RK3588** (inkl. NPU-Support via RKNN)
 * ✅ **Windows-Installer & GUI** für einfache Bedienung ohne Kommandozeilen-Frust
 * ✅ **Single-Source-of-Truth** Architektur für reproduzierbare Builds
 * ✅ **Auto-Update** & **Smart-Sync** Technologie für nahtlose Updates
 * ✅ **AI-Wizard "Ditto"** erkennt Hardware automatisch und generiert optimierte Module
+* ✅ **Security Hardening** mit Socket Proxy und automatischem Image-Scanning
+* ✅ **NVIDIA GPU Support** für beschleunigte Quantisierung und Compilation
 
 ---
 
@@ -50,7 +54,8 @@ Das **LLM Cross-Compiler Framework** ist keine einfache "Installations-Anleitung
 | 🤖 **AI Auto-Discovery** | "Ditto"-Agent analysiert Hardware-Profil und konfiguriert Module automatisch (Flags, SDKs, Docker-Images) |
 | ⚡ **Live Monitoring** | Echtzeit-Anzeige von Build-Logs und Fortschritt |
 | 🔧 **Hardware-Optimiert** | Automatische CPU/GPU/NPU-Erkennung mit optimierten Compiler-Flags (NEON, AVX, CUDA) |
-| 🔒 **Security First** | Integrierter Trivy-Scanner prüft jedes Image nach dem Build |
+| 🔒 **Security First** | Socket Proxy Protection + Trivy-Scanner prüft jedes Image nach dem Build |
+| 🌐 **Multi-Provider AI** | Ollama, OpenAI, Anthropic, Google, Azure für AI-Wizard |
 | 🌍 **Community Hub** | Integrierter "App Store" zum Herunterladen neuer Hardware-Targets |
 | 📦 **Auto-Packaging** | Erstellt fertige Deployment-Pakete inkl. Test-Skripten für das Zielgerät |
 
@@ -303,13 +308,14 @@ Die `community/` Directory enthält von der Community beigesteuerte Hardware-Tar
 
 ## 📊 Status & Roadmap
 
-### Current Status (v1.1.0)
+### Current Status (v1.2.0)
 
 - ✅ **Framework Core** - GUI, CLI, Docker-Management
 - ✅ **Rockchip Target** - Production-ready für RK3566/3588
 - ✅ **AI-Wizard "Ditto"** - Automatische Hardware-Erkennung & Modul-Generierung
-- ✅ **Auto-Update System** - Smart-Sync Technologie
-- ✅ **Security Audit** - Enterprise-Grade Sicherheitsstandards
+- ✅ **Security Hardening** - Socket Proxy, Trivy-Scanner, Input-Validierung
+- ✅ **Multi-Provider AI** - Ollama, OpenAI, Anthropic, Google, Azure
+- ✅ **NVIDIA GPU Passthrough** - GPU-beschleunigte Builds
 
 ### Roadmap
 
@@ -317,9 +323,9 @@ Die `community/` Directory enthält von der Community beigesteuerte Hardware-Tar
 |-------------|--------|---------|----------|
 | v1.0.0 (MVP) | ✅ Abgeschlossen | - | Rockchip RK3566/88, GUI, Docker-Core |
 | v1.1.0 | ✅ Abgeschlossen | - | Auto-Updater, AI-Wizard, Smart Sync |
-| v1.2.0 | 📋 In Planung | Q1 2026 | NVIDIA Jetson (CUDA/TensorRT), Raspberry Pi, Performance Benchmarking |
+| v1.2.0 | ✅ Abgeschlossen | - | Security Hardening, Multi-Provider AI, NVIDIA GPU Support |
 | v1.3.0 | 📋 In Planung | Q2 2026 | Intel NPU (OpenVINO), Hailo NPU, Auto-Optimization Engine |
-| v2.0.0 | 📋 In Planung | Q3 2026 | Cloud Build Support, Model Zoo Integration, Advanced Profiling Tools |
+| v2.0.0 | 📋 In Planung | Q3 2026 | Cloud Build Support (AWS/Azure), Model Zoo Integration |
 
 ---
 
@@ -393,9 +399,9 @@ Dieses Projekt ist lizenziert unter der **MIT License** - siehe die [LICENSE](LI
 
 ## 🙏 Danksagung
 
-- **[Ditto for LLM Conversion](https://github.com/Smilez1985/ditto4-LLMconversion)** - AI-Agent für automatische Hardware-Modul-Generierung
 - **[llama.cpp](https://github.com/ggerganov/llama.cpp)** - Das Herzstück der Inferenz
 - **[Hugging Face](https://huggingface.co/)** - Für das Modell-Ökosystem
+- **[Ditto](https://github.com/yoheinakajima/ditto)** - AI-Agent Framework für automatische Hardware-Modul-Generierung (entwickelt von [@yoheinakajima](https://github.com/yoheinakajima))
 - **[Radxa Community](https://forum.radxa.com/)** - Für den Support bei der RK3566 Integration
 - **[Docker](https://www.docker.com/)** - Containerization Platform
 - **[PySide6](https://doc.qt.io/qtforpython-6/)** - Professional GUI Framework

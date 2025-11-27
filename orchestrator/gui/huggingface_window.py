@@ -7,7 +7,7 @@ DIREKTIVE: Goldstandard, GUI.
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLineEdit, QPushButton, QTableWidget, QTableWidgetItem, 
-    QHeaderView, QLabel, QMessageBox, QComboBox
+    QHeaderView, QLabel, QMessageBox, QComboBox, QDialog, QListWidget
 )
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QIcon, QColor
@@ -17,37 +17,60 @@ from orchestrator.gui.dialogs import AskTokenDialog
 class SearchWorker(QThread):
     finished = Signal(list)
     error = Signal(str)
-
     def __init__(self, manager, query):
-        super().__init__()
-        self.manager = manager
-        self.query = query
-
+        super().__init__(); self.manager = manager; self.query = query
     def run(self):
-        try:
-            results = self.manager.search_huggingface_models(self.query)
-            self.finished.emit(results)
-        except Exception as e:
-            self.error.emit(str(e))
+        try: self.finished.emit(self.manager.search_huggingface_models(self.query))
+        except Exception as e: self.error.emit(str(e))
+
+class FileListWorker(QThread):
+    finished = Signal(list)
+    error = Signal(str)
+    def __init__(self, manager, repo_id, token=None):
+        super().__init__(); self.manager = manager; self.repo_id = repo_id; self.token = token
+    def run(self):
+        try: self.finished.emit(self.manager.list_repo_files(self.repo_id, self.token))
+        except Exception as e: self.error.emit(str(e))
 
 class DownloadWorker(QThread):
     finished = Signal(str)
     error = Signal(str)
-
     def __init__(self, manager, repo_id, filename, token=None):
-        super().__init__()
-        self.manager = manager
-        self.repo_id = repo_id
-        self.filename = filename
-        self.token = token
-
+        super().__init__(); self.manager = manager; self.repo_id = repo_id; self.filename = filename; self.token = token
     def run(self):
         try:
-            path = self.manager.download_file(self.repo_id, self.filename, self.token)
-            if path: self.finished.emit(path)
+            p = self.manager.download_file(self.repo_id, self.filename, self.token)
+            if p: self.finished.emit(p)
             else: self.error.emit("Download returned None")
-        except Exception as e:
-            self.error.emit(str(e))
+        except Exception as e: self.error.emit(str(e))
+
+class FileSelectionDialog(QDialog):
+    def __init__(self, repo_id, files, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Select File from {repo_id}")
+        self.resize(500, 400)
+        self.selected_file = None
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Available Files:"))
+        
+        self.list_widget = QListWidget()
+        # Filter recommendation: show GGUF/Bin first
+        priority_files = sorted([f for f in files if f.endswith('.gguf') or f.endswith('.bin')])
+        other_files = sorted([f for f in files if f not in priority_files])
+        self.list_widget.addItems(priority_files + other_files)
+        
+        layout.addWidget(self.list_widget)
+        
+        btn = QPushButton("Download Selected")
+        btn.clicked.connect(self.accept_selection)
+        layout.addWidget(btn)
+
+    def accept_selection(self):
+        item = self.list_widget.currentItem()
+        if item:
+            self.selected_file = item.text()
+            self.accept()
 
 class HuggingFaceWindow(QMainWindow):
     def __init__(self, framework_manager, parent=None):
@@ -56,25 +79,22 @@ class HuggingFaceWindow(QMainWindow):
         self.model_manager = framework_manager.model_manager
         self.setWindowTitle("Hugging Face Model Hub Browser")
         self.resize(900, 600)
-        self.all_results = [] # Cache for filtering
+        self.all_results = [] 
 
         central = QWidget()
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
-        # --- Search Bar ---
         hbox = QHBoxLayout()
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Search models (e.g. 'llama-3', 'mistral')...")
         self.search_edit.returnPressed.connect(self.start_search)
         hbox.addWidget(self.search_edit)
-
         self.search_btn = QPushButton("Search")
         self.search_btn.clicked.connect(self.start_search)
         hbox.addWidget(self.search_btn)
         layout.addLayout(hbox)
         
-        # --- Filter Bar ---
         filter_box = QHBoxLayout()
         filter_box.addWidget(QLabel("Filter:"))
         self.filter_combo = QComboBox()
@@ -84,24 +104,19 @@ class HuggingFaceWindow(QMainWindow):
         filter_box.addStretch()
         layout.addLayout(filter_box)
 
-        # --- Results Table ---
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Model ID", "Downloads", "Likes", "Access"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.cellDoubleClicked.connect(self.on_download_request)
         layout.addWidget(self.table)
-
-        self.status_label = QLabel("Ready")
-        layout.addWidget(self.status_label)
+        self.status_label = QLabel("Ready"); layout.addWidget(self.status_label)
 
     def start_search(self):
         query = self.search_edit.text()
         if not query: return
-        
         self.status_label.setText("Searching...")
         self.search_btn.setEnabled(False)
         self.table.setRowCount(0)
-        
         self.worker = SearchWorker(self.model_manager, query)
         self.worker.finished.connect(self.on_search_finished)
         self.worker.error.connect(self.on_search_error)
@@ -118,20 +133,13 @@ class HuggingFaceWindow(QMainWindow):
         self.search_btn.setEnabled(True)
         
     def apply_filter(self):
-        """Filters the cached results based on dropdown selection."""
         mode = self.filter_combo.currentText()
         filtered = []
-        
         for m in self.all_results:
             is_gated = m.get("gated", False)
-            
-            if mode == "Free Models Only" and is_gated:
-                continue
-            if mode == "Gated Models Only" and not is_gated:
-                continue
-            
+            if mode == "Free Models Only" and is_gated: continue
+            if mode == "Gated Models Only" and not is_gated: continue
             filtered.append(m)
-            
         self.populate_table(filtered)
 
     def populate_table(self, models):
@@ -139,23 +147,12 @@ class HuggingFaceWindow(QMainWindow):
         for m in models:
             row = self.table.rowCount()
             self.table.insertRow(row)
-            
-            # ID
             self.table.setItem(row, 0, QTableWidgetItem(m["id"]))
-            # Stats
             self.table.setItem(row, 1, QTableWidgetItem(str(m["downloads"])))
             self.table.setItem(row, 2, QTableWidgetItem(str(m["likes"])))
-            
-            # Access Status (Lock Icon)
             gated = m.get("gated", False)
-            status_text = "🔒 Gated" if gated else "✅ Free"
-            item = QTableWidgetItem(status_text)
-            if gated:
-                item.setForeground(QColor("orange"))
-                item.setToolTip("Authentication required. Double click to enter token.")
-            else:
-                item.setForeground(QColor("green"))
-            
+            item = QTableWidgetItem("🔒 Gated" if gated else "✅ Free")
+            item.setForeground(QColor("orange") if gated else QColor("green"))
             self.table.setItem(row, 3, item)
 
     def on_download_request(self, row, col):
@@ -164,27 +161,25 @@ class HuggingFaceWindow(QMainWindow):
         is_gated = "🔒" in access_item.text()
         
         token = None
-        
         if is_gated:
-            # Show Token Dialog
             dlg = AskTokenDialog(model_id, self)
-            if dlg.exec():
-                token = dlg.token
-            else:
-                return # Cancelled
-                
-        self.download_model(model_id, token)
+            if dlg.exec(): token = dlg.token
+            else: return
+        
+        # Step 1: List Files
+        self.status_label.setText(f"Listing files for {model_id}...")
+        self.list_worker = FileListWorker(self.model_manager, model_id, token)
+        self.list_worker.finished.connect(lambda files: self.show_file_selection(model_id, files, token))
+        self.list_worker.error.connect(lambda e: QMessageBox.critical(self, "Error", f"Failed to list files:\n{e}"))
+        self.list_worker.start()
 
-    def download_model(self, model_id, token):
-        # For MVP, assume we download a default config or GGUF file
-        # In a real app, we would list files in repo first
-        filename = "config.json" # Placeholder default
-        
-        reply = QMessageBox.question(self, "Download", f"Download '{filename}' from {model_id}?\n(This is a demo action)")
-        if reply == QMessageBox.No: return
-        
-        self.status_label.setText(f"Downloading {model_id}...")
-        
+    def show_file_selection(self, model_id, files, token):
+        dlg = FileSelectionDialog(model_id, files, self)
+        if dlg.exec() and dlg.selected_file:
+            self.download_file(model_id, dlg.selected_file, token)
+
+    def download_file(self, model_id, filename, token):
+        self.status_label.setText(f"Downloading {filename}...")
         self.dl_worker = DownloadWorker(self.model_manager, model_id, filename, token)
         self.dl_worker.finished.connect(lambda p: QMessageBox.information(self, "Success", f"Saved to: {p}"))
         self.dl_worker.error.connect(lambda e: QMessageBox.critical(self, "Error", f"Download failed:\n{e}"))

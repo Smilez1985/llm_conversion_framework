@@ -1,9 +1,39 @@
 version: '3.8'
 
+# LLM Cross-Compiler Framework - Docker Compose Configuration
+# DIREKTIVE: Goldstandard, Modular Infrastructure.
+# STATUS: PRODUCTION READY (Dynamic Builds via Orchestrator)
+
 services:
   # ============================================================================
-  # ORCHESTRATOR SERVICE
-  # Needs GPU access to passthrough to builder containers if needed
+  # DOCKER SOCKET PROXY (Security Layer)
+  # ============================================================================
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: llm-socket-proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - BUILD=1
+      - CONTAINERS=1
+      - IMAGES=1
+      - EXEC=1       
+      - NETWORKS=1
+      - VOLUMES=1
+      - EVENTS=0
+      - PING=1
+      - VERSION=1
+      - INFO=1
+      - AUTH=0
+      - SECRETS=0
+      - SWARM=0
+      - SYSTEM=0
+    networks:
+      - llm-framework
+    restart: unless-stopped
+
+  # ============================================================================
+  # ORCHESTRATOR SERVICE (Management Node)
   # ============================================================================
   orchestrator:
     build:
@@ -17,17 +47,8 @@ services:
     container_name: llm-orchestrator
     hostname: orchestrator
     
-    # OPTIONAL GPU SUPPORT
-    # Requires 'nvidia-container-toolkit' on host
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    
     environment:
+      # SECURITY: Use Proxy instead of raw socket
       - DOCKER_HOST=tcp://socket-proxy:2375
       - FRAMEWORK_VERSION=${VERSION:-1.0.0}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -59,34 +80,7 @@ services:
       - socket-proxy
 
   # ============================================================================
-  # DOCKER SOCKET PROXY (Security Layer)
-  # ============================================================================
-  socket-proxy:
-    image: tecnativa/docker-socket-proxy
-    container_name: llm-socket-proxy
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    environment:
-      - BUILD=1
-      - CONTAINERS=1
-      - IMAGES=1
-      - EXEC=1       
-      - NETWORKS=1
-      - VOLUMES=1
-      - EVENTS=0
-      - PING=1
-      - VERSION=1
-      - INFO=1
-      - AUTH=0
-      - SECRETS=0
-      - SWARM=0
-      - SYSTEM=0
-    networks:
-      - llm-framework
-    restart: unless-stopped
-
-  # ============================================================================
-  # MONITORING & SECURITY
+  # MONITORING SERVICE (CTOP)
   # ============================================================================
   ctop:
     image: quay.io/vektorlab/ctop:latest
@@ -101,6 +95,9 @@ services:
     stdin_open: true
     tty: true
 
+  # ============================================================================
+  # INFRASTRUCTURE SECURITY SCAN (TRIVY)
+  # ============================================================================
   trivy-infra-scanner:
     image: aquasec/trivy:latest
     container_name: llm-infra-scanner

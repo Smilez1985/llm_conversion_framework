@@ -53,11 +53,9 @@ class DittoCoder:
         """Liest Doku-Text aus der SSOT URL (Flattened Config Support)."""
         if not self.config_manager: return ""
         
-        # Die Config ist flach: 'nvidia_jetson.docs_workflow'
         sources = self.config_manager.get("source_repositories", {})
         url = ""
         
-        # Suche nach passendem Key
         doc_key_suffix = "docs_workflow"
         
         for key, val in sources.items():
@@ -102,7 +100,7 @@ class DittoCoder:
         
         doc_context = self._fetch_documentation(sdk_hint)
 
-        # 2. System Prompt (ERWEITERT für Quantization Logic & Best Practices)
+        # 2. System Prompt (ERWEITERT für Quantization Logic)
         system_prompt = """
         You are 'Ditto', an expert Embedded Systems Engineer.
         Analyze the hardware probe and generate a JSON configuration to fill the framework templates.
@@ -127,21 +125,12 @@ class DittoCoder:
         CRITICAL RULES for 'quantization_logic':
         - Generate ONLY the case content lines (cases and commands).
         - Do not wrap in 'case ... esac', just the body.
-        - BEST PRACTICE: Do NOT invent raw conversion commands if a helper script likely exists.
-        - Prefer calling standard helper scripts located in /app/modules/ if the SDK matches.
-        - Known Helpers:
-          - Rockchip LLM: /app/modules/rkllm_module.sh
-          - Rockchip NN:  /app/modules/rknn_module.sh
-        
-        Example for Rockchip (RK3588):
-        "w8a8"|"INT8")
-            echo "Delegating to RKLLM Module..."
-            if [ -f /app/modules/rkllm_module.sh ]; then
-                /app/modules/rkllm_module.sh
-            else
-                echo "Fallback: Raw Conversion"
-                # Raw commands here only as fallback
-            fi ;;
+        - Example for RKNN:
+        "INT8"|"i8")
+            echo "Converting to INT8..."
+            rknn-llm-convert --i8 $MODEL_SOURCE ;;
+        "FP16")
+            echo "Keeping FP16..." ;;
         """
 
         user_prompt = f"""
@@ -156,7 +145,7 @@ class DittoCoder:
             kwargs = {
                 "model": self.litellm_model,
                 "messages": [
-                    {"role": "system", "content": system_prompt.replace("{doc_context}", doc_context)},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
                 "temperature": 0.1

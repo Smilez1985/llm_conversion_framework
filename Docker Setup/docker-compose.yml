@@ -121,6 +121,7 @@ services:
       - CTOP_FILTER=llm-
     networks:
       - llm-framework
+    # Interaktiver Modus für CLI-Nutzung
     stdin_open: true
     tty: true
 

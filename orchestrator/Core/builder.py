@@ -25,7 +25,7 @@ import yaml
 import docker
 from docker.models.containers import Container
 from docker.models.images import Image
-from docker.types import DeviceRequest # Wichtig für GPU
+from docker.types import DeviceRequest 
 
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
@@ -154,6 +154,7 @@ class BuildEngine:
         try:
             self.docker_client.ping()
             try:
+                # SECURITY: List args instead of shell=True
                 subprocess.run(["docker", "buildx", "version"], capture_output=True, check=True)
             except Exception:
                 self.logger.warning("Docker BuildX not available")
@@ -241,10 +242,17 @@ class BuildEngine:
 
             self._prepare_build_environment(config, prog, target_path)
             df_path = self._generate_dockerfile(config, prog, target_path)
+            
+            # Build Image
             image = self._build_docker_image(config, prog, df_path)
             
+            # Scan
             self._scan_image_security(image.tags[0], prog)
+            
+            # Run Build Modules
             self._execute_build_modules(config, prog, image, target_path)
+            
+            # Artifacts
             self._extract_artifacts(config, prog)
             
             if config.cleanup_after_build: self.cleanup_build(bid)
@@ -327,6 +335,7 @@ class BuildEngine:
         progress.current_stage = "Running modules"
         progress.progress_percent = 60
         build_temp = self.cache_dir / "builds" / config.build_id
+        
         vols = {
             str(build_temp / "output"): {"bind": "/build-cache/output", "mode": "rw"},
             str(self.cache_dir / "models"): {"bind": "/build-cache/models", "mode": "rw"},
@@ -347,7 +356,7 @@ class BuildEngine:
                 key = k.split('.')[-1].upper() if '.' in k else k.upper()
                 url = v['url'] if isinstance(v, dict) else v
                 env[f"{key}_REPO_OVERRIDE"] = url
-        
+
         # GPU Support Logic
         device_requests = []
         if config.use_gpu:
@@ -361,8 +370,10 @@ class BuildEngine:
         )
         with self._lock: self._active_containers[config.build_id] = container
         container.start()
+        
         for line in container.logs(stream=True, follow=True):
             progress.add_log(f"CONT: {line.decode().strip()}")
+            
         res = container.wait(timeout=config.build_timeout)
         if res['StatusCode'] != 0:
             raise RuntimeError(f"Container failed: {container.logs().decode()}")

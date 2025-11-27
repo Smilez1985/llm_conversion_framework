@@ -56,19 +56,18 @@ class DittoCoder:
         url = ""
         
         # Suche nach passendem Key
-        search_key_part = f"{sdk_name}_" # z.B. "nvidia_"
-        doc_key_suffix = ".docs_workflow"
+        doc_key_suffix = "docs_workflow"
         
         for key, val in sources.items():
-            # Check 1: Key enthält SDK Name (z.B. 'nvidia_jetson.docs_workflow')
-            # Check 2: Key endet auf .docs_workflow
-            if sdk_name.lower() in key.lower() and key.endswith(doc_key_suffix):
-                url = val
-                break
+            if sdk_name.lower() in key.lower():
+                if isinstance(val, dict) and doc_key_suffix in val:
+                    url = val[doc_key_suffix]
+                    break
+                elif key.endswith(doc_key_suffix) and isinstance(val, str):
+                    url = val
+                    break
         
-        if not url or not url.startswith("http"): 
-            self.logger.debug(f"No docs found for SDK: {sdk_name}")
-            return ""
+        if not url or not url.startswith("http"): return ""
         
         try:
             self.logger.info(f"Fetching docs from {url}...")
@@ -102,7 +101,7 @@ class DittoCoder:
         # Doku laden
         doc_context = self._fetch_documentation(sdk_hint)
 
-        # 2. System Prompt
+        # 2. System Prompt (ERWEITERT für Quantization Logic)
         system_prompt = """
         You are 'Ditto', an expert Embedded Systems Engineer.
         Your task is to analyze a raw 'hardware_probe.sh' output and extract configuration values 
@@ -116,7 +115,13 @@ class DittoCoder:
         3. Generate 'cpu_flags' (GCC) tailored to the specific CPU core found in probe.
         4. Suggest a 'base_os' Docker image (e.g. 'nvidia/cuda:...' if CUDA found).
         
-        Documentation Context for Workflow:
+        BUILD SCRIPT LOGIC:
+        You must generate the Bash 'case' statement content for the 'quantization_logic' field.
+        This logic will be injected into 'build.sh'.
+        It must handle cases like "INT8", "INT4", "FP16".
+        Use the provided DOCUMENTATION CONTEXT to find the correct conversion commands.
+        
+        Documentation Context:
         {doc_context}
         
         Return a JSON object with exactly these keys:
@@ -127,7 +132,8 @@ class DittoCoder:
             "base_os": "docker_image",
             "cpu_flags": "gcc_flags",
             "cmake_flags": "cmake_flags",
-            "packages": "space_separated_apt_packages"
+            "packages": "space_separated_apt_packages",
+            "quantization_logic": "bash case content (strings only)"
         }
         """
 
@@ -167,9 +173,11 @@ class DittoCoder:
 
     def save_module(self, module_name: str, config: Dict[str, Any], targets_dir: Path):
         """
-        Uses ModuleGenerator to create the module files on disk.
+        Nutzt den ModuleGenerator, um das Modul physisch zu erstellen.
         """
-        # Prepare data for generator
+        from orchestrator.Core.module_generator import ModuleGenerator
+        
+        # Daten für den Generator aufbereiten
         packages = config.get("packages", "")
         if isinstance(packages, str):
             packages = packages.split()
@@ -183,6 +191,7 @@ class DittoCoder:
             "packages": packages,
             "cpu_flags": config.get("cpu_flags", ""),
             "cmake_flags": config.get("cmake_flags", ""),
+            "quantization_logic": config.get("quantization_logic", ""), # Hier übergeben wir die Logik
             "setup_commands": "# Auto-generated setup by Ditto",
             "detection_commands": "lscpu",
             "supported_boards": [module_name]

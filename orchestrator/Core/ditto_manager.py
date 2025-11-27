@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Ditto Manager (AI Hardware Agent)
-DIREKTIVE: Goldstandard. Pre-Fetch Docs & Smart Prompts.
+DIREKTIVE: Goldstandard. Secured & Isolated.
 """
 
 import json
@@ -21,18 +21,21 @@ from orchestrator.Core.module_generator import ModuleGenerator
 
 class DittoCoder:
     """
-    AI Agent that analyzes hardware probe dumps and generates
-    optimized build configurations using LLMs.
-    Supports ALL providers via litellm abstraction.
+    AI Agent that analyzes hardware probe dumps.
+    SECURED: Enforces Local LLM usage in strict mode to prevent data leakage.
     """
     
-    def __init__(self, provider: str = "OpenAI", model: str = "gpt-4o", 
+    def __init__(self, provider: str = "Ollama (Local)", model: str = "llama3", 
                  api_key: Optional[str] = None, base_url: Optional[str] = None,
                  config_manager = None):
         self.logger = get_logger(__name__)
+        self.config_manager = config_manager
+        
+        # Security Check
+        self._enforce_security_policy(provider)
+        
         self.provider = provider
         self.base_url = base_url
-        self.config_manager = config_manager
         self.litellm_model = self._format_model_name(provider, model)
         
         if api_key:
@@ -43,19 +46,31 @@ class DittoCoder:
         self.framework_root = Path(__file__).parent.parent.parent
         self.template_dir = self.framework_root / "targets" / "_template"
 
+    def _enforce_security_policy(self, provider: str):
+        """Prevents Data Leakage to Cloud APIs if Security Level is STRICT."""
+        security_level = os.environ.get("AI_SECURITY_LEVEL", "STRICT")
+        
+        if security_level == "STRICT":
+            allowed = ["Ollama", "Local", "Compatible"]
+            is_safe = any(safe in provider for safe in allowed)
+            
+            if not is_safe:
+                raise SecurityError(
+                    f"Security Alert: Cloud AI Provider '{provider}' blocked by policy (STRICT mode). "
+                    "Use a local LLM (Ollama) or set AI_SECURITY_LEVEL=LOOSE to allow data egress."
+                )
+
     def _format_model_name(self, provider: str, model: str) -> str:
-        """Formatiert den Modellnamen für litellm."""
         if "Ollama" in provider: return f"ollama/{model}"
         if "Google" in provider: return f"gemini/{model}"
         return model
 
     def _fetch_documentation(self, sdk_name: str) -> str:
-        """Liest Doku-Text aus der SSOT URL (Flattened Config Support)."""
+        """Fetches docs from SSOT. (Safe: only GET public URLs)"""
         if not self.config_manager: return ""
         
         sources = self.config_manager.get("source_repositories", {})
         url = ""
-        
         doc_key_suffix = "docs_workflow"
         
         for key, val in sources.items():
@@ -73,41 +88,29 @@ class DittoCoder:
             self.logger.info(f"Fetching docs from {url}...")
             resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
-                return resp.text[:15000] # Limit context
-        except Exception as e:
-            self.logger.warning(f"Doc fetch failed: {e}")
+                return resp.text[:15000]
+        except: pass
         return ""
 
     def generate_module_content(self, probe_file: Path) -> Dict[str, Any]:
-        """
-        Analysiert die Probe-Datei und generiert die Modul-Konfiguration.
-        """
-        if not completion:
-            raise RuntimeError("Missing dependency: pip install litellm")
+        if not completion: raise RuntimeError("Missing litellm")
+        if not probe_file.exists(): raise FileNotFoundError("Probe file missing")
 
-        if not probe_file.exists():
-            raise FileNotFoundError(f"Probe file not found: {probe_file}")
-
-        # 1. Hardware Daten lesen
         probe_data = probe_file.read_text(encoding="utf-8", errors="ignore")
         
-        # SDK Hint für Doku-Suche
         sdk_hint = "generic"
-        if "nvidia" in probe_data.lower() or "tegra" in probe_data.lower(): sdk_hint = "nvidia"
-        elif "rockchip" in probe_data.lower() or "rk3" in probe_data.lower(): sdk_hint = "rockchip"
-        elif "hailo" in probe_data.lower(): sdk_hint = "hailo"
-        elif "intel" in probe_data.lower(): sdk_hint = "intel"
+        if "nvidia" in probe_data.lower(): sdk_hint = "nvidia"
+        elif "rockchip" in probe_data.lower(): sdk_hint = "rockchip"
         
         doc_context = self._fetch_documentation(sdk_hint)
 
-        # 2. System Prompt (ERWEITERT für Quantization Logic)
         system_prompt = """
         You are 'Ditto', an expert Embedded Systems Engineer.
-        Analyze the hardware probe and generate a JSON configuration to fill the framework templates.
+        Analyze the hardware probe and generate a JSON configuration.
         
         TASKS:
         1. Analyze Hardware (Arch, CPU Flags, NPU).
-        2. Generate Bash Code blocks for 'build.sh' based on the SDK documentation provided.
+        2. Generate Bash Code blocks for 'build.sh'.
         
         REQUIRED JSON STRUCTURE:
         {
@@ -118,19 +121,13 @@ class DittoCoder:
             "packages": ["list", "of", "packages"],
             "cpu_flags": "GCC Flags",
             "cmake_flags": "CMake Flags",
-            "setup_commands": "Bash code for Dockerfile setup (optional)",
-            "quantization_logic": "Bash CASE block content for build.sh"
+            "setup_commands": "Bash code for Dockerfile setup",
+            "quantization_logic": "Bash CASE block content"
         }
         
-        CRITICAL RULES for 'quantization_logic':
-        - Generate ONLY the case content lines (cases and commands).
-        - Do not wrap in 'case ... esac', just the body.
-        - Example for RKNN:
-        "INT8"|"i8")
-            echo "Converting to INT8..."
-            rknn-llm-convert --i8 $MODEL_SOURCE ;;
-        "FP16")
-            echo "Keeping FP16..." ;;
+        For 'quantization_logic':
+        - PREFER calling existing helper scripts (e.g. /app/modules/rkllm_module.sh) over raw code.
+        - Generate ONLY the case body.
         """
 
         user_prompt = f"""
@@ -139,46 +136,28 @@ class DittoCoder:
         Generate JSON.
         """
 
-        # 3. LLM Call
         try:
-            # Parameter dynamisch aufbauen
-            kwargs = {
-                "model": self.litellm_model,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                "temperature": 0.1
-            }
-            
-            if self.api_key and self.api_key != "sk-dummy":
-                kwargs["api_key"] = self.api_key
-            
-            if self.base_url:
-                kwargs["api_base"] = self.base_url
-                
-            kwargs["response_format"] = { "type": "json_object" }
-
-            response = completion(**kwargs)
-            
+            response = completion(
+                model=self.litellm_model,
+                messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+                response_format={ "type": "json_object" },
+                temperature=0.1,
+                api_base=self.base_url
+            )
             content = response.choices[0].message.content
             if "```" in content:
                 import re
                 match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
                 if match: content = match.group(1).strip()
-
             return json.loads(content)
-            
         except Exception as e:
             self.logger.error(f"AI Analysis failed: {e}")
             raise e
 
     def save_module(self, module_name: str, config: Dict[str, Any], targets_dir: Path):
-        """Wrapper um den ModuleGenerator aufzurufen."""
-        
+        from orchestrator.Core.module_generator import ModuleGenerator
         packages = config.get("packages", "")
-        if isinstance(packages, str):
-            packages = packages.split()
+        if isinstance(packages, str): packages = packages.split()
             
         gen_data = {
             "module_name": module_name,
@@ -189,7 +168,7 @@ class DittoCoder:
             "packages": packages,
             "cpu_flags": config.get("cpu_flags", ""),
             "cmake_flags": config.get("cmake_flags", ""),
-            "quantization_logic": config.get("quantization_logic", ""), # Hier übergeben wir die Logik
+            "quantization_logic": config.get("quantization_logic", ""),
             "setup_commands": "# Auto-generated setup by Ditto",
             "detection_commands": "lscpu",
             "supported_boards": [module_name]
@@ -197,3 +176,6 @@ class DittoCoder:
         
         generator = ModuleGenerator(targets_dir)
         return generator.generate_module(gen_data)
+
+class SecurityError(Exception):
+    pass

@@ -48,26 +48,32 @@ class DittoCoder:
         return model
 
     def _fetch_documentation(self, sdk_name: str) -> str:
-        """Liest Doku-Text aus der SSOT URL."""
+        """Liest Doku-Text aus der SSOT URL (Flattened Config Support)."""
         if not self.config_manager: return ""
         
+        # Die Config ist flach: 'nvidia_jetson.docs_workflow'
         sources = self.config_manager.get("source_repositories", {})
         url = ""
         
-        # Suche in SSOT nach docs_workflow
+        # Suche nach passendem Key
+        search_key_part = f"{sdk_name}_" # z.B. "nvidia_"
+        doc_key_suffix = ".docs_workflow"
+        
         for key, val in sources.items():
-            # key z.B. "nvidia_jetson", sdk_name "nvidia"
-            if sdk_name.lower() in key.lower() and isinstance(val, dict):
-                url = val.get("docs_workflow", "")
+            # Check 1: Key enthält SDK Name (z.B. 'nvidia_jetson.docs_workflow')
+            # Check 2: Key endet auf .docs_workflow
+            if sdk_name.lower() in key.lower() and key.endswith(doc_key_suffix):
+                url = val
                 break
         
-        if not url or not url.startswith("http"): return ""
+        if not url or not url.startswith("http"): 
+            self.logger.debug(f"No docs found for SDK: {sdk_name}")
+            return ""
         
         try:
             self.logger.info(f"Fetching docs from {url}...")
             resp = requests.get(url, timeout=10)
             if resp.status_code == 200:
-                # Simpler Text-Extract
                 return resp.text[:15000] # Limit context
         except Exception as e:
             self.logger.warning(f"Doc fetch failed: {e}")
@@ -88,9 +94,10 @@ class DittoCoder:
         
         # SDK Hint für Doku-Suche
         sdk_hint = "generic"
-        if "nvidia" in probe_data.lower(): sdk_hint = "nvidia"
-        elif "rockchip" in probe_data.lower(): sdk_hint = "rockchip"
+        if "nvidia" in probe_data.lower() or "tegra" in probe_data.lower(): sdk_hint = "nvidia"
+        elif "rockchip" in probe_data.lower() or "rk3" in probe_data.lower(): sdk_hint = "rockchip"
         elif "hailo" in probe_data.lower(): sdk_hint = "hailo"
+        elif "intel" in probe_data.lower(): sdk_hint = "intel"
         
         # Doku laden
         doc_context = self._fetch_documentation(sdk_hint)

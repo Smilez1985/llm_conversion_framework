@@ -19,13 +19,11 @@ import requests
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.helpers import ensure_directory
 
-# Enums removed for modularity - using strings
-
 @dataclass
 class ModelMetadata:
     name: str
-    source: str # "huggingface", "local"
-    format: str # "gguf", "onnx", etc.
+    source: str
+    format: str
     model_type: str = ""
     size_bytes: int = 0
     
@@ -46,12 +44,31 @@ class ModelManager:
         return True
 
     def search_huggingface_models(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """Search HF Hub via API"""
         try:
             from huggingface_hub import HfApi
             api = HfApi()
-            models = api.list_models(search=query, limit=limit, sort="downloads", direction=-1)
-            return [{"id": m.modelId, "downloads": m.downloads, "likes": m.likes} for m in models]
+            models = api.list_models(
+                search=query, 
+                limit=limit, 
+                sort="downloads", 
+                direction=-1,
+                expand=["gated", "downloads", "likes"] 
+            )
+            
+            results = []
+            for m in models:
+                is_gated = getattr(m, "gated", False)
+                if is_gated not in [False, None]: is_gated = True
+                else: is_gated = False
+                    
+                results.append({
+                    "id": m.modelId,
+                    "downloads": m.downloads,
+                    "likes": m.likes,
+                    "gated": is_gated
+                })
+            return results
+
         except ImportError:
             self.logger.error("huggingface_hub not installed")
             return []
@@ -59,8 +76,35 @@ class ModelManager:
             self.logger.error(f"HF Search failed: {e}")
             return []
 
+    def list_repo_files(self, repo_id: str, token: Optional[str] = None) -> List[str]:
+        """Fetches file list from a repository."""
+        try:
+            from huggingface_hub import HfApi
+            api = HfApi(token=token)
+            files = api.list_repo_files(repo_id=repo_id)
+            return files
+        except Exception as e:
+            self.logger.error(f"Failed to list files for {repo_id}: {e}")
+            return []
+
+    def download_file(self, repo_id: str, filename: str, token: Optional[str] = None) -> Optional[str]:
+        try:
+            from huggingface_hub import hf_hub_download
+            self.logger.info(f"Downloading {filename} from {repo_id}...")
+            
+            path = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                cache_dir=str(self.models_dir),
+                token=token
+            )
+            self.logger.info(f"Download successful: {path}")
+            return path
+        except Exception as e:
+            self.logger.error(f"Download failed: {e}")
+            return None
+
     def _detect_model_format(self, model_path: Path) -> str:
-        """Detect format based on file extension"""
         if not model_path.exists(): return "unknown"
         if model_path.is_dir():
             if (model_path / "config.json").exists(): return "huggingface"

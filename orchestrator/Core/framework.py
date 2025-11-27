@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Core Framework Manager
-DIRECTIVE: Gold standard, complete, professionally written.
+DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 """
 
 import os
@@ -72,13 +72,19 @@ class FrameworkConfig:
 class FrameworkManager:
     def __init__(self, config: Optional[Union[Dict[str, Any], FrameworkConfig]] = None):
         self.logger = get_logger(__name__)
-        self.config = config or FrameworkConfig()
         self._lock = threading.Lock()
         self._initialized = False
         self._shutdown_event = threading.Event()
-        self.info = FrameworkInfo("1.0.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
+        if isinstance(config, dict):
+            known = FrameworkConfig.__annotations__.keys()
+            self.config = FrameworkConfig(**{k:v for k,v in config.items() if k in known})
+        elif isinstance(config, FrameworkConfig): self.config = config
+        else: self.config = FrameworkConfig()
+        
+        # UPDATE: Version bump to 1.2.0
+        self.info = FrameworkInfo("1.2.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
         self._components = {}; self._event_queue = queue.Queue(); self._build_counter = 0; self._active_builds = {}
-        self.logger.info("Framework Manager initialized")
+        self.logger.info(f"Framework Manager initialized (v{self.info.version})")
 
     def initialize(self) -> bool:
         with self._lock:
@@ -148,6 +154,7 @@ class FrameworkManager:
         with self._lock:
             if bid in self._active_builds:
                 j = self._active_builds[bid]
+                # Handle both dict and object access
                 if hasattr(j, 'status'): j.status = stat; j.progress = prog or j.progress
                 else: j['status'] = stat; j['progress'] = prog or j['progress']
 
@@ -157,5 +164,11 @@ class FrameworkManager:
                 s = getattr(j, 'status', None) or j.get('status')
                 if s == "queued": return asdict(j) if hasattr(j, 'id') else j
         return None
+
+    def get_info(self):
+        # Update dynamic info
+        self.info.targets_count = len(list(Path(self.config.targets_dir).glob("*")))
+        self.info.active_builds = len(self._active_builds)
+        return self.info
 
     def shutdown(self): self._initialized = False

@@ -33,12 +33,6 @@ class ModuleGenerator:
     def generate_module(self, data: Dict[str, Any]) -> Path:
         """
         Generate a complete module from configuration data.
-        
-        Args:
-            data: Dictionary containing configuration keys (module_name, architecture, etc.)
-        
-        Returns:
-            Path: Path to the created module directory
         """
         module_slug = data["module_name"].lower().replace(" ", "_")
         target_dir = self.targets_dir / module_slug
@@ -50,23 +44,42 @@ class ModuleGenerator:
         ensure_directory(target_dir / "modules")
         ensure_directory(target_dir / "scripts")
         
-        # 2. Generate Files via Template Processing
+        # 2. Generate Base Files
         self._process_template("Dockerfile", target_dir, data)
         self._process_template("target.yml", target_dir, data)
         self._process_template("modules/config_module.sh", target_dir, data)
         self._process_template("modules/source_module.sh", target_dir, data)
+        self._process_template("modules/build.sh", target_dir, data)
         
-        # NEU: Das Build-Skript Template verarbeiten (mit Quantisierungslogik)
-        self._write_build_script(target_dir, data)
+        # 3. Intelligent Module Inclusion (Conditional Copying)
+        self._include_hardware_modules(target_dir, data)
         
-        # Profile Script generieren
+        # 4. Helper Scripts
         self._write_profile_script(target_dir, data)
-        
-        # 3. Create Placeholder Modules (if templates are missing or needed)
         self._write_standard_modules(target_dir)
         
         self.logger.info("Module generation completed successfully.")
         return target_dir
+
+    def _include_hardware_modules(self, target_dir: Path, data: Dict[str, Any]):
+        """
+        Kopiert hardware-spezifische Skripte NUR wenn nötig.
+        Entscheidet anhand von SDK oder Name.
+        """
+        sdk = data.get("sdk", "").lower()
+        name = data.get("module_name", "").lower()
+        
+        # --- ROCKCHIP LOGIK ---
+        # Wir kopieren RKNN/RKLLM nur, wenn es wirklich ein Rockchip Board ist.
+        if "rockchip" in sdk or "rknn" in sdk or "rk3" in name:
+            self.logger.info("Detected Rockchip Architecture -> Injecting RKNN/RKLLM modules")
+            self._process_template("modules/rknn_module.sh", target_dir, data)
+            self._process_template("modules/rkllm_module.sh", target_dir, data)
+            
+        # --- NVIDIA LOGIK (Platzhalter für Zukunft) ---
+        # elif "cuda" in sdk or "jetson" in name or "nvidia" in name:
+        #     self.logger.info("Detected NVIDIA Architecture -> Injecting TensorRT modules")
+        #     self._process_template("modules/tensorrt_module.sh", target_dir, data)
 
     def _process_template(self, filename: str, target_dir: Path, data: Dict[str, Any]):
         """Reads a template, replaces placeholders, and writes it to target_dir."""
@@ -74,26 +87,22 @@ class ModuleGenerator:
         dst = target_dir / filename
         
         if not src.exists():
-            # Wenn Template fehlt, nicht abstürzen, sondern loggen (oder ignorieren bei optionalen Files)
-            # self.logger.warning(f"Template {filename} not found in {self.template_dir}")
+            # Optional logging, manche Templates existieren evtl. noch nicht
             return
 
         content = src.read_text(encoding="utf-8")
         
-        # Data Preparation for Templates
         packages = data.get("packages", [])
         if isinstance(packages, str): packages = packages.split()
         packages_str = " \\\n        ".join(packages)
         
-        # Replacement Map
         replacements = {
             "[MODULE_NAME]": data.get("module_name", "Unknown"),
             "[Hardware-Familie]": data.get("module_name", "Unknown"),
             "[IHRE_ARCHITEKTUR]": data.get("architecture", "aarch64"),
             "[Hersteller]": "Community",
-            "debian:bookworm-slim": data.get("base_os", "debian:bookworm-slim"), # Replace default if different
+            "debian:bookworm-slim": data.get("base_os", "debian:bookworm-slim"),
             "{packages_str}": packages_str,
-            # Inject Scripts / Logic Blocks
             "# [SDK_SETUP_COMMANDS]": data.get("setup_commands", ""),
             "[QUANTIZATION_LOGIC]": data.get("quantization_logic", ""),
             "# [PACKAGING_COMMANDS]": data.get("packaging_commands", "cp -r build/* $OUTPUT_DIR/"),
@@ -104,50 +113,38 @@ class ModuleGenerator:
         for key, value in replacements.items():
             content = content.replace(key, str(value))
             
-        # Write File
         if dst.suffix == ".yml":
             self._update_yaml_config(content, dst, data)
         else:
             with open(dst, "w", encoding="utf-8") as f:
                 f.write(content)
             
-        # Permissions
         if dst.suffix == ".sh":
             try: os.chmod(dst, 0o755)
             except: pass
 
     def _update_yaml_config(self, template_content: str, dst: Path, data: Dict[str, Any]):
-        """Parst das YAML-Template, updated Werte und schreibt es sauber zurück."""
         try:
             config = yaml.safe_load(template_content)
-            
-            # Update Metadata
             if "metadata" in config:
                 config["metadata"]["name"] = data["module_name"]
                 config["metadata"]["architecture_family"] = data["architecture"]
-                config["metadata"]["description"] = data.get("description", "")
+                config["metadata"]["sdk"] = data["sdk"]
             
-            # Update Docker
             if "docker" in config:
                 safe_name = data["module_name"].lower().replace(" ", "-")
                 config["docker"]["image_name"] = f"llm-framework/{safe_name}"
             
             with open(dst, "w", encoding="utf-8") as f:
                 yaml.dump(config, f, sort_keys=False)
-        except Exception as e:
-            self.logger.error(f"Failed to process YAML template: {e}")
-            # Fallback: Raw write
+        except Exception:
             with open(dst, "w", encoding="utf-8") as f:
                 f.write(template_content)
 
     def _write_build_script(self, target_dir: Path, data: Dict[str, Any]):
-        """
-        NEU: Generiert das intelligente build.sh Skript.
-        Hier landet die Logik von Ditto (oder der Default-Case).
-        """
+        """Generiert das intelligente build.sh Skript."""
         quant_logic = data.get("quantization_logic", "")
         if not quant_logic:
-            # Fallback Default Logic
             quant_logic = """
     "FP16")
         echo ">> Default FP16 Build (No Quantization)"
@@ -161,12 +158,6 @@ class ModuleGenerator:
         content = f'''#!/bin/bash
 # build.sh for {data["module_name"]}
 # Generated by LLM Cross-Compiler Framework (Ditto/Wizard)
-#
-# Environment Variables:
-# $MODEL_SOURCE    - Path to input model
-# $QUANTIZATION    - Target Quantization (e.g. Q4_K_M, INT8)
-# $OUTPUT_DIR      - Destination for artifacts
-# $BUILD_JOBS      - Number of parallel jobs
 
 set -euo pipefail
 
@@ -189,11 +180,8 @@ echo "=== Build Completed ==="
         self._write_script(target_dir / "modules" / "build.sh", content)
 
     def _write_profile_script(self, target_dir: Path, data: Dict[str, Any]):
-        """Generate generate_profile.sh"""
         content = f'''#!/bin/bash
-# Hardware Profile Generator for {data["module_name"]}
-# Run on target hardware
-
+# Hardware Profile Generator
 OUTPUT_FILE="target_hardware_config.txt"
 echo "# Profile for {data['module_name']}" > "$OUTPUT_FILE"
 {data.get("detection_commands", "lscpu >> $OUTPUT_FILE")}
@@ -202,19 +190,13 @@ echo "Generated $OUTPUT_FILE"
         self._write_script(target_dir / "generate_profile.sh", content)
 
     def _write_standard_modules(self, target_dir: Path):
-        """Write standard templates for other modules if not handled by templates"""
-        # Falls keine Templates da waren, erzeugen wir Placeholders
-        # convert und target werden oft durch build.sh ersetzt, aber wir lassen sie da
+        # Placeholder creation if not handled by templates
         if not (target_dir / "modules/convert_module.sh").exists():
-             self._write_script(target_dir / "modules" / "convert_module.sh", "#!/bin/bash\n# Placeholder\n")
+             self._write_script(target_dir / "modules/convert_module.sh", "#!/bin/bash\n# Placeholder\n")
         if not (target_dir / "modules/target_module.sh").exists():
              self._write_script(target_dir / "modules" / "target_module.sh", "#!/bin/bash\n# Placeholder\n")
 
     def _write_script(self, path: Path, content: str):
-        """Write content to file and make executable"""
-        with open(path, "w") as f:
-            f.write(content)
-        try:
-            os.chmod(path, 0o755)
-        except:
-            pass
+        with open(path, "w") as f: f.write(content)
+        try: os.chmod(path, 0o755)
+        except: pass

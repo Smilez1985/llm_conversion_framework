@@ -23,6 +23,7 @@ class DittoCoder:
     """
     AI Agent that analyzes hardware probe dumps and generates
     optimized build configurations using LLMs.
+    Supports ALL providers via litellm abstraction.
     """
     
     def __init__(self, provider: str = "OpenAI", model: str = "gpt-4o", 
@@ -30,32 +31,45 @@ class DittoCoder:
                  config_manager = None):
         self.logger = get_logger(__name__)
         self.provider = provider
+        self.model = model
+        self.api_key = api_key
         self.base_url = base_url
         self.config_manager = config_manager
+        
+        # Modell-String für litellm formatieren
         self.litellm_model = self._format_model_name(provider, model)
         
-        if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
-            if "Anthropic" in provider: os.environ["ANTHROPIC_API_KEY"] = api_key
-            if "Google" in provider: os.environ["GEMINI_API_KEY"] = api_key
-            
         self.framework_root = Path(__file__).parent.parent.parent
         self.template_dir = self.framework_root / "targets" / "_template"
 
     def _format_model_name(self, provider: str, model: str) -> str:
-        if "Ollama" in provider: return f"ollama/{model}"
-        if "Google" in provider: return f"gemini/{model}"
-        return model
+        """Formatiert den Modellnamen für litellm."""
+        # Mapping für gängige Provider-Präfixe
+        provider_prefixes = {
+            "Ollama": "ollama",
+            "Google": "gemini", # oder vertex_ai
+            "Anthropic": "anthropic",
+            "Mistral": "mistral",
+            "OpenAI": "openai" # oft optional, aber sauberer
+        }
+        
+        # Suche nach passendem Prefix (Case Insensitive Match im Provider Namen)
+        for key, prefix in provider_prefixes.items():
+            if key.lower() in provider.lower():
+                # Wenn das Modell den Prefix noch nicht hat, fügen wir ihn hinzu
+                if not model.startswith(f"{prefix}/"):
+                    return f"{prefix}/{model}"
+                return model
+                
+        return model # Fallback (z.B. LocalAI oder Custom)
 
     def _fetch_documentation(self, sdk_name: str) -> str:
-        """Liest Doku-Text aus der SSOT URL (Flattened Config Support)."""
+        """Liest Doku-Text aus der SSOT URL."""
         if not self.config_manager: return ""
         
-        # Die Config ist flach: 'nvidia_jetson.docs_workflow'
         sources = self.config_manager.get("source_repositories", {})
         url = ""
         
-        # Suche nach passendem Key
         doc_key_suffix = "docs_workflow"
         
         for key, val in sources.items():
@@ -93,91 +107,91 @@ class DittoCoder:
         
         # SDK Hint für Doku-Suche
         sdk_hint = "generic"
-        if "nvidia" in probe_data.lower() or "tegra" in probe_data.lower(): sdk_hint = "nvidia"
-        elif "rockchip" in probe_data.lower() or "rk3" in probe_data.lower(): sdk_hint = "rockchip"
+        if "nvidia" in probe_data.lower(): sdk_hint = "nvidia"
+        elif "rockchip" in probe_data.lower(): sdk_hint = "rockchip"
         elif "hailo" in probe_data.lower(): sdk_hint = "hailo"
         elif "intel" in probe_data.lower(): sdk_hint = "intel"
         
-        # Doku laden
         doc_context = self._fetch_documentation(sdk_hint)
 
-        # 2. System Prompt (ERWEITERT für Quantization Logic)
+        # 2. System Prompt
         system_prompt = """
         You are 'Ditto', an expert Embedded Systems Engineer.
-        Your task is to analyze a raw 'hardware_probe.sh' output and extract configuration values 
-        for the LLM Cross-Compiler Framework.
+        Analyze the hardware probe and generate a JSON configuration to fill the framework templates.
         
-        Analyze the hardware flags (neon, avx, cuda, npu) and suggest the optimal build configuration.
+        TASKS:
+        1. Analyze Hardware (Arch, CPU Flags, NPU).
+        2. Generate Bash Code blocks for 'build.sh'.
         
-        CRITICAL RULES:
-        1. Identify Architecture (aarch64, x86_64, armv7l).
-        2. Identify SDK (CUDA, RKNN, Hailo).
-        3. Generate 'cpu_flags' (GCC) tailored to the specific CPU core found in probe.
-        4. Suggest a 'base_os' Docker image (e.g. 'nvidia/cuda:...' if CUDA found).
-        
-        BUILD SCRIPT LOGIC:
-        You must generate the Bash 'case' statement content for the 'quantization_logic' field.
-        This logic will be injected into 'build.sh'.
-        It must handle cases like "INT8", "INT4", "FP16".
-        Use the provided DOCUMENTATION CONTEXT to find the correct conversion commands.
-        
-        Documentation Context:
-        {doc_context}
-        
-        Return a JSON object with exactly these keys:
+        REQUIRED JSON STRUCTURE:
         {
-            "module_name": "Suggested Name",
-            "architecture": "arch",
-            "sdk": "sdk_name",
-            "base_os": "docker_image",
-            "cpu_flags": "gcc_flags",
-            "cmake_flags": "cmake_flags",
-            "packages": "space_separated_apt_packages",
-            "quantization_logic": "bash case content (strings only)"
+            "module_name": "Str",
+            "architecture": "aarch64|x86_64",
+            "sdk": "Str",
+            "base_os": "Docker Image Name",
+            "packages": ["list", "of", "packages"],
+            "cpu_flags": "GCC Flags",
+            "cmake_flags": "CMake Flags",
+            "setup_commands": "Bash code for Dockerfile setup (optional)",
+            "quantization_logic": "Bash CASE block content for build.sh"
         }
+        
+        For 'quantization_logic', generate ONLY the case content lines.
+        Example for RKNN:
+        "INT8"|"i8")
+            echo "Converting to INT8..."
+            rknn-llm-convert --i8 $MODEL_SOURCE ;;
+        "FP16")
+            echo "Keeping FP16..." ;;
         """
 
         user_prompt = f"""
-        --- INPUT: target_hardware_config.txt ---
-        {probe_data[:8000]}
-        
-        Based on this probe, generate the optimal configuration JSON.
+        CONTEXT: {doc_context[:2000]}...
+        PROBE DATA: {probe_data[:8000]}
+        Generate JSON.
         """
 
         # 3. LLM Call
         try:
-            response = completion(
-                model=self.litellm_model,
-                messages=[
-                    {"role": "system", "content": system_prompt.replace("{doc_context}", doc_context)},
+            # Parameter dynamisch aufbauen
+            kwargs = {
+                "model": self.litellm_model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt}
                 ],
-                response_format={ "type": "json_object" },
-                temperature=0.1,
-                api_base=self.base_url
-            )
+                "temperature": 0.1
+            }
+            
+            # API Key explizit übergeben (sicherer als os.environ global zu setzen)
+            if self.api_key and self.api_key != "sk-dummy":
+                kwargs["api_key"] = self.api_key
+            
+            # Base URL (für LocalAI / Ollama)
+            if self.base_url:
+                kwargs["api_base"] = self.base_url
+                
+            # JSON Mode Support Check (Ollama unterstützt es oft, OpenAI immer)
+            # Wir setzen es sicherheitshalber
+            kwargs["response_format"] = { "type": "json_object" }
+
+            response = completion(**kwargs)
             
             content = response.choices[0].message.content
-            # Clean Markdown
             if "```" in content:
                 import re
                 match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
                 if match: content = match.group(1).strip()
 
-            config = json.loads(content)
-            return config
+            return json.loads(content)
             
         except Exception as e:
             self.logger.error(f"AI Analysis failed: {e}")
             raise e
 
     def save_module(self, module_name: str, config: Dict[str, Any], targets_dir: Path):
-        """
-        Nutzt den ModuleGenerator, um das Modul physisch zu erstellen.
-        """
-        from orchestrator.Core.module_generator import ModuleGenerator
+        """Wrapper um den ModuleGenerator aufzurufen."""
         
-        # Daten für den Generator aufbereiten
         packages = config.get("packages", "")
         if isinstance(packages, str):
             packages = packages.split()
@@ -191,7 +205,7 @@ class DittoCoder:
             "packages": packages,
             "cpu_flags": config.get("cpu_flags", ""),
             "cmake_flags": config.get("cmake_flags", ""),
-            "quantization_logic": config.get("quantization_logic", ""), # Hier übergeben wir die Logik
+            "quantization_logic": config.get("quantization_logic", ""),
             "setup_commands": "# Auto-generated setup by Ditto",
             "detection_commands": "lscpu",
             "supported_boards": [module_name]

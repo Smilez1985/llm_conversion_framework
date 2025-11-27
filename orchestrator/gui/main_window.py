@@ -232,17 +232,22 @@ class MainOrchestrator(QMainWindow):
         c_layout.addWidget(QLabel("Target:"))
         c_layout.addWidget(self.target_combo)
         
-        # NEU: Task Auswahl
+        # Task Auswahl
         self.task_combo = QComboBox()
         self.task_combo.addItems(["LLM", "VOICE", "VLM"])
         c_layout.addWidget(QLabel("Task:"))
         c_layout.addWidget(self.task_combo)
         
-        # NEU: Quantisierung
+        # Quantisierung
         self.quant_combo = QComboBox()
         self.quant_combo.addItems(["Q4_K_M", "Q8_0", "INT4", "INT8", "FP16"])
         c_layout.addWidget(QLabel("Quant:"))
         c_layout.addWidget(self.quant_combo)
+        
+        # NEU: GPU Checkbox
+        self.chk_use_gpu = QCheckBox("Use GPU")
+        self.chk_use_gpu.setToolTip("Enables GPU Passthrough (requires NVIDIA Toolkit)")
+        c_layout.addWidget(self.chk_use_gpu)
         
         self.chk_auto_bench = QCheckBox("Auto-Benchmark")
         self.chk_auto_bench.setChecked(True)
@@ -311,10 +316,11 @@ class MainOrchestrator(QMainWindow):
             "target": self.target_combo.currentText(),
             "task": self.task_combo.currentText(),
             "quantization": self.quant_combo.currentText(),
-            "auto_benchmark": self.chk_auto_bench.isChecked()
+            "auto_benchmark": self.chk_auto_bench.isChecked(),
+            "use_gpu": self.chk_use_gpu.isChecked() # NEU
         }
         
-        self.log(f"Starting build for {cfg['target']} ({cfg['task']}) with {cfg['quantization']}...")
+        self.log(f"Starting build for {cfg['target']} ({cfg['task']}) with {cfg['quantization']} [GPU: {cfg['use_gpu']}]...")
         self.start_btn.setEnabled(False)
         
         # Start via DockerManager

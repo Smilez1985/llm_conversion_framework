@@ -59,26 +59,52 @@ class LocalizationManager(QObject):
             "wiz.title": "Module Creation Wizard",
             "wiz.intro.title": "Welcome",
             "wiz.intro.text": "This wizard helps you create a new hardware target definition.\nPlease choose how to proceed.",
-            "wiz.grp.ai": "✨ AI Auto-Discovery (Recommended)",
-            "wiz.lbl.ai_info": "Upload 'target_hardware_config.txt'. Ditto will analyze it.",
-            "wiz.btn.import_std": "⚡ Standard Import",
-            "wiz.btn.import_ai": "🤖 AI Auto-Discovery",
-            "wiz.btn.config_ai": "⚙️ Configure AI",
-            "wiz.page.hardware": "Hardware Info",
-            "wiz.page.docker": "Docker Env",
+            "wiz.grp.import": "📂 Import Hardware Probe",
+            "wiz.btn.import_std": "⚡ Standard Import (Rule-Based)",
+            "wiz.btn.import_ai": "🤖 AI Auto-Discovery (Ditto)",
+            "wiz.btn.config_ai": "⚙️ Configure AI Agent",
+            "wiz.status.waiting": "Waiting for input...",
+            "wiz.lbl.manual": "Or simply click 'Next' to configure everything manually.",
+            
+            "wiz.page.hardware": "Hardware Information",
+            "wiz.page.hardware.sub": "Define the target architecture",
+            "wiz.lbl.name": "Module Name:",
+            "wiz.lbl.arch": "Architecture:",
+            "wiz.lbl.sdk": "SDK / Backend:",
+            
+            "wiz.page.docker": "Docker Environment",
+            "wiz.page.docker.sub": "Configure the build container",
+            "wiz.lbl.base_os": "Base OS:",
+            "wiz.rad.debian": "Debian 12 (Bookworm) - Recommended",
+            "wiz.rad.ubuntu": "Ubuntu 22.04 LTS - Recommended for CUDA",
+            "wiz.rad.custom": "Custom Base Image",
+            "wiz.lbl.packages": "System Packages (space separated):",
+            
             "wiz.page.flags": "Compiler Flags",
-            "wiz.page.summary": "Summary",
+            "wiz.page.flags.sub": "Set default optimization flags",
+            "wiz.lbl.cpu_flags": "CPU Flags (GCC):",
+            "wiz.lbl.cmake_flags": "CMake Flags:",
+            
+            "wiz.page.summary": "Summary & Generation",
+            "wiz.page.summary.sub": "Review settings before generation",
             
             # Dialogs
             "dlg.lang.title": "Select Language / Sprache wählen",
             "dlg.lang.info": "Please select your preferred interface language.",
             "dlg.token.title": "Authentication Required",
             "dlg.token.info": "The model is gated. Please enter your Hugging Face Token.",
+            "dlg.source.title": "Add New Source Repository",
+            "dlg.ai.title": "Configure AI Agent (Ditto)",
             
             # Messages
             "msg.success": "Success",
             "msg.failed": "Failed",
-            "msg.restart_required": "Restart might be required for some changes."
+            "msg.restart_required": "Restart might be required for some changes.",
+            "msg.import_success": "Import Successful",
+            "msg.ai_ready": "AI Ready",
+            "msg.ai_thinking": "🤖 Ditto is thinking...",
+            "msg.ai_complete": "✅ Analysis complete!",
+            "msg.module_created": "Module created at:"
         },
         "de": {
             # General
@@ -119,26 +145,52 @@ class LocalizationManager(QObject):
             "wiz.title": "Modul-Erstellungs-Assistent",
             "wiz.intro.title": "Willkommen",
             "wiz.intro.text": "Dieser Assistent hilft beim Erstellen eines neuen Hardware-Ziels.\nBitte wählen Sie das Vorgehen.",
-            "wiz.grp.ai": "✨ AI Auto-Erkennung (Empfohlen)",
-            "wiz.lbl.ai_info": "Laden Sie 'target_hardware_config.txt' hoch. Ditto analysiert sie.",
-            "wiz.btn.import_std": "⚡ Standard Import",
-            "wiz.btn.import_ai": "🤖 AI Auto-Discovery",
+            "wiz.grp.import": "📂 Hardware Probe Importieren",
+            "wiz.btn.import_std": "⚡ Standard Import (Regel-Basiert)",
+            "wiz.btn.import_ai": "🤖 AI Auto-Discovery (Ditto)",
             "wiz.btn.config_ai": "⚙️ AI Konfigurieren",
-            "wiz.page.hardware": "Hardware Infos",
+            "wiz.status.waiting": "Warte auf Eingabe...",
+            "wiz.lbl.manual": "Oder klicken Sie 'Weiter' für manuelle Konfiguration.",
+            
+            "wiz.page.hardware": "Hardware Informationen",
+            "wiz.page.hardware.sub": "Zielarchitektur definieren",
+            "wiz.lbl.name": "Modul Name:",
+            "wiz.lbl.arch": "Architektur:",
+            "wiz.lbl.sdk": "SDK / Backend:",
+            
             "wiz.page.docker": "Docker Umgebung",
+            "wiz.page.docker.sub": "Build-Container konfigurieren",
+            "wiz.lbl.base_os": "Basis OS:",
+            "wiz.rad.debian": "Debian 12 (Bookworm) - Empfohlen",
+            "wiz.rad.ubuntu": "Ubuntu 22.04 LTS - Für CUDA",
+            "wiz.rad.custom": "Benutzerdefiniert",
+            "wiz.lbl.packages": "System Pakete (leerzeichengetrennt):",
+            
             "wiz.page.flags": "Compiler Flags",
+            "wiz.page.flags.sub": "Optimierungs-Flags setzen",
+            "wiz.lbl.cpu_flags": "CPU Flags (GCC):",
+            "wiz.lbl.cmake_flags": "CMake Flags:",
+            
             "wiz.page.summary": "Zusammenfassung",
+            "wiz.page.summary.sub": "Einstellungen vor Generierung prüfen",
             
             # Dialogs
             "dlg.lang.title": "Sprache wählen / Select Language",
             "dlg.lang.info": "Bitte wählen Sie Ihre bevorzugte Sprache.",
             "dlg.token.title": "Authentifizierung erforderlich",
             "dlg.token.info": "Das Modell ist geschützt. Bitte Hugging Face Token eingeben.",
+            "dlg.source.title": "Neues Quell-Repository hinzufügen",
+            "dlg.ai.title": "AI Agent Konfigurieren (Ditto)",
             
             # Messages
             "msg.success": "Erfolg",
             "msg.failed": "Fehlgeschlagen",
-            "msg.restart_required": "Neustart für einige Änderungen erforderlich."
+            "msg.restart_required": "Neustart für einige Änderungen erforderlich.",
+            "msg.import_success": "Import Erfolgreich",
+            "msg.ai_ready": "AI Bereit",
+            "msg.ai_thinking": "🤖 Ditto denkt nach...",
+            "msg.ai_complete": "✅ Analyse abgeschlossen!",
+            "msg.module_created": "Modul erstellt in:"
         }
     }
 

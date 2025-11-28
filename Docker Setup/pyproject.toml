@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "llm-conversion-framework"
-version = "1.2.0"
+version = "1.3.0"
 description = "Universal LLM Cross-Compiler for Edge Hardware (Rockchip, NVIDIA, etc.)"
 authors = ["Smilez1985 <contact@framework.org>"]
 license = "MIT"
@@ -14,8 +14,11 @@ pyyaml = "^6.0.1"
 requests = "^2.31.0"
 pyside6 = "^6.6.0"
 huggingface-hub = "^0.20.0"
+# NEU: Für Ditto AI Agent
 litellm = "^1.0.0"
+# NEU: Für CLI Output
 rich = "^13.7.0"
+# NEU: Für Hardware Probe Helper
 psutil = "^5.9.0"
 
 [tool.poetry.group.dev.dependencies]

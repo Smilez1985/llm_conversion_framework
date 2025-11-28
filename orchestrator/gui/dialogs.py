@@ -1,118 +1,260 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Model Manager
-DIREKTIVE: Goldstandard, Modular & Data-Driven.
+LLM Cross-Compiler Framework - Dialogs
+DIREKTIVE: Goldstandard, GUI-Komponenten, Internationalisierung.
 """
 
-import os
-import sys
-import json
-import logging
-import shutil
-from pathlib import Path
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
-from datetime import datetime
-import time
-
 import requests
-from orchestrator.utils.logging import get_logger
-from orchestrator.utils.helpers import ensure_directory
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
+    QComboBox, QLineEdit, QLabel, QPushButton, QApplication,
+    QGroupBox, QRadioButton, QButtonGroup, QStackedWidget, QWidget,
+    QTextEdit, QMessageBox
+)
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 
-@dataclass
-class ModelMetadata:
-    name: str
-    source: str
-    format: str
-    model_type: str = ""
-    size_bytes: int = 0
+# Import Localization Helper
+try:
+    from orchestrator.utils.localization import tr
+except ImportError:
+    # Fallback if localization module is missing during dev
+    def tr(key): return key
+
+class AddSourceDialog(QDialog):
+    """Dialog to add a new source repository to project_sources.yml"""
     
-    @property
-    def size_gb(self) -> float:
-        return self.size_bytes / (1024 ** 3)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("dlg.source.title"))
+        self.setMinimumWidth(500)
+        self._init_ui()
 
-class ModelManager:
-    def __init__(self, framework_manager):
-        self.framework_manager = framework_manager
-        self.logger = get_logger(__name__)
-        self.config = framework_manager.config
-        self.models_dir = Path(framework_manager.info.installation_path) / self.config.models_dir
-        ensure_directory(self.models_dir)
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
         
-    def initialize(self) -> bool:
-        self.logger.info("Model Manager initialized")
-        return True
-
-    def search_huggingface_models(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
-        """
-        Searches Hugging Face Hub.
-        Fetches 'gated' status explicitly.
-        """
-        try:
-            from huggingface_hub import HfApi
-            api = HfApi()
-            # 'expand' is crucial to get full model info including gated status
-            models = api.list_models(
-                search=query, 
-                limit=limit, 
-                sort="downloads", 
-                direction=-1,
-                expand=["gated", "downloads", "likes"] 
-            )
-            
-            results = []
-            for m in models:
-                # Safe attribute access using getattr
-                is_gated = getattr(m, "gated", False)
-                # Sometimes it returns "auto" or "manual", which counts as True
-                if is_gated not in [False, None]:
-                    is_gated = True
-                else:
-                    is_gated = False
-                    
-                results.append({
-                    "id": m.modelId,
-                    "downloads": m.downloads,
-                    "likes": m.likes,
-                    "gated": is_gated
-                })
-            return results
-
-        except ImportError:
-            self.logger.error("huggingface_hub not installed")
-            return []
-        except Exception as e:
-            self.logger.error(f"HF Search failed: {e}")
-            return []
-
-    def download_file(self, repo_id: str, filename: str, token: Optional[str] = None) -> Optional[str]:
-        """Downloads a specific file from HF Hub, supporting auth tokens."""
-        try:
-            from huggingface_hub import hf_hub_download
-            self.logger.info(f"Downloading {filename} from {repo_id}...")
-            
-            path = hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                cache_dir=str(self.models_dir),
-                token=token
-            )
-            self.logger.info(f"Download successful: {path}")
-            return path
-        except Exception as e:
-            self.logger.error(f"Download failed: {e}")
-            return None
-
-    def _detect_model_format(self, model_path: Path) -> str:
-        if not model_path.exists(): return "unknown"
-        if model_path.is_dir():
-            if (model_path / "config.json").exists(): return "huggingface"
-            return "directory"
+        form = QFormLayout()
+        self.section_edit = QComboBox()
+        self.section_edit.addItems(["core", "rockchip_npu", "nvidia_jetson", "hailo_ai", "intel_npu", "models", "custom"])
+        self.section_edit.setEditable(True)
+        form.addRow(tr("dlg.source.category"), self.section_edit)
         
-        s = model_path.suffix.lower()
-        if s == ".gguf": return "gguf"
-        if s == ".onnx": return "onnx"
-        if s == ".tflite": return "tflite"
-        if s in [".pt", ".pth", ".bin"]: return "pytorch"
-        if s == ".safetensors": return "safetensors"
-        return "unknown"
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("e.g., my_special_tool")
+        form.addRow(tr("dlg.source.name"), self.name_edit)
+        
+        self.url_edit = QLineEdit()
+        self.url_edit.setPlaceholderText("https://github.com/username/repo.git")
+        form.addRow(tr("dlg.source.url"), self.url_edit)
+        
+        layout.addLayout(form)
+        
+        self.status_label = QLabel("")
+        layout.addWidget(self.status_label)
+        
+        btns = QHBoxLayout()
+        self.test_btn = QPushButton(tr("dlg.source.btn_test"))
+        self.test_btn.clicked.connect(self.test_url)
+        btns.addWidget(self.test_btn)
+        
+        self.save_btn = QPushButton(tr("btn.save"))
+        self.save_btn.clicked.connect(self.accept)
+        self.save_btn.setEnabled(False)
+        btns.addWidget(self.save_btn)
+        
+        layout.addLayout(btns)
+        
+    def test_url(self):
+        url = self.url_edit.text().strip()
+        if not url:
+            self.status_label.setText(tr("dlg.source.err_url_empty"))
+            self.status_label.setStyleSheet("color: orange")
+            return
+            
+        self.status_label.setText(tr("dlg.source.testing"))
+        self.status_label.setStyleSheet("color: black")
+        QApplication.processEvents()
+        
+        try:
+            test_url = url[:-4] if url.endswith('.git') else url
+            response = requests.head(test_url, timeout=5, allow_redirects=True)
+            
+            if response.status_code < 400:
+                self.status_label.setText(tr("dlg.source.success"))
+                self.status_label.setStyleSheet("color: green")
+                self.save_btn.setEnabled(True)
+            else:
+                self.status_label.setText(f"{tr('dlg.source.err_status')}: {response.status_code}")
+                self.status_label.setStyleSheet("color: red")
+        except Exception as e:
+            self.status_label.setText(f"{tr('dlg.source.err_connect')}: {str(e)}")
+            self.status_label.setStyleSheet("color: red")
+
+    def get_data(self):
+        return {
+            "section": self.section_edit.currentText(),
+            "name": self.name_edit.text(),
+            "url": self.url_edit.text()
+        }
+
+
+class AIConfigurationDialog(QDialog):
+    """Dialog to configure AI Provider and Model for Ditto."""
+    
+    PROVIDERS = {
+        "OpenAI": ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
+        "Anthropic": ["claude-3-opus-20240229", "claude-3-sonnet-20240229", "claude-3-haiku-20240307"],
+        "Google VertexAI": ["gemini-1.5-pro", "gemini-1.0-pro"],
+        "Mistral": ["mistral-large-latest", "mistral-medium", "mistral-small"],
+        "Ollama (Local)": ["llama3", "mistral", "gemma", "codellama"],
+        "LocalAI / OpenAI Compatible": ["local-model"]
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("dlg.ai.title"))
+        self.setMinimumWidth(500)
+        self._init_ui()
+        
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        form = QFormLayout()
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(self.PROVIDERS.keys())
+        self.provider_combo.currentTextChanged.connect(self._update_models)
+        form.addRow(tr("dlg.ai.provider"), self.provider_combo)
+        
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        form.addRow(tr("dlg.ai.model"), self.model_combo)
+        
+        layout.addLayout(form)
+        
+        self.stack = QStackedWidget()
+        
+        # Page 1: API Key
+        self.page_cloud = QWidget()
+        cloud_layout = QFormLayout(self.page_cloud)
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.Password)
+        self.api_key_edit.setPlaceholderText("sk-...")
+        cloud_layout.addRow(tr("dlg.ai.api_key"), self.api_key_edit)
+        self.stack.addWidget(self.page_cloud)
+        
+        # Page 2: Local URL
+        self.page_local = QWidget()
+        local_layout = QFormLayout(self.page_local)
+        self.base_url_edit = QLineEdit()
+        self.base_url_edit.setText("http://localhost:11434")
+        local_layout.addRow(tr("dlg.ai.base_url"), self.base_url_edit)
+        self.stack.addWidget(self.page_local)
+        
+        layout.addWidget(self.stack)
+        
+        self._update_models(self.provider_combo.currentText())
+        
+        btns = QHBoxLayout()
+        self.btn_cancel = QPushButton(tr("btn.cancel"))
+        self.btn_cancel.clicked.connect(self.reject)
+        btns.addWidget(self.btn_cancel)
+        
+        self.btn_ok = QPushButton(tr("btn.save"))
+        self.btn_ok.setStyleSheet("background-color: #6a0dad; color: white; font-weight: bold;")
+        self.btn_ok.clicked.connect(self.accept)
+        btns.addWidget(self.btn_ok)
+        
+        layout.addLayout(btns)
+
+    def _update_models(self, provider):
+        self.model_combo.clear()
+        models = self.PROVIDERS.get(provider, [])
+        self.model_combo.addItems(models)
+        if "Local" in provider or "Compatible" in provider:
+            self.stack.setCurrentWidget(self.page_local)
+        else:
+            self.stack.setCurrentWidget(self.page_cloud)
+
+    def get_config(self):
+        provider = self.provider_combo.currentText()
+        model = self.model_combo.currentText()
+        config = {"provider": provider, "model": model}
+        if self.stack.currentWidget() == self.page_cloud:
+            config["api_key"] = self.api_key_edit.text()
+            config["base_url"] = None
+        else:
+            config["api_key"] = "sk-dummy"
+            config["base_url"] = self.base_url_edit.text()
+        return config
+
+class AskTokenDialog(QDialog):
+    """Dialog to ask for Hugging Face Token for gated models."""
+    
+    def __init__(self, model_id, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(tr("dlg.token.title"))
+        self.setMinimumWidth(450)
+        self.token = None
+        
+        layout = QVBoxLayout(self)
+        
+        lbl = QLabel(tr("dlg.token.info").format(model=model_id))
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
+        
+        # Link Button
+        link_btn = QPushButton(tr("dlg.token.get_key"))
+        link_btn.setFlat(True)
+        link_btn.setStyleSheet("color: #4da6ff; text-align: left; font-weight: bold;")
+        link_btn.setCursor(Qt.PointingHandCursor)
+        link_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl("https://huggingface.co/settings/tokens")))
+        layout.addWidget(link_btn)
+        
+        form = QFormLayout()
+        self.token_edit = QTextEdit()
+        self.token_edit.setPlaceholderText("Paste your HF_TOKEN here...")
+        self.token_edit.setMaximumHeight(60)
+        form.addRow(tr("dlg.token.label"), self.token_edit)
+        layout.addLayout(form)
+        
+        btns = QHBoxLayout()
+        self.cancel_btn = QPushButton(tr("btn.cancel"))
+        self.cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(self.cancel_btn)
+        
+        self.ok_btn = QPushButton(tr("dlg.token.btn_auth"))
+        self.ok_btn.setStyleSheet("background-color: #2ea043; color: white; font-weight: bold;")
+        self.ok_btn.clicked.connect(self.save_and_accept)
+        btns.addWidget(self.ok_btn)
+        
+        layout.addLayout(btns)
+        
+    def save_and_accept(self):
+        text = self.token_edit.toPlainText().strip()
+        if text:
+            self.token = text
+            self.accept()
+        else:
+            self.token_edit.setPlaceholderText(tr("dlg.token.err_empty"))
+
+class LanguageSelectionDialog(QDialog):
+    """Startup dialog to select language."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Language / Sprache wählen")
+        self.selected_lang = "en"
+        
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Please select your language:\nBitte wählen Sie Ihre Sprache:"))
+        
+        btn_en = QPushButton("🇺🇸 English")
+        btn_en.clicked.connect(lambda: self.select("en"))
+        layout.addWidget(btn_en)
+        
+        btn_de = QPushButton("🇩🇪 Deutsch")
+        btn_de.clicked.connect(lambda: self.select("de"))
+        layout.addWidget(btn_de)
+        
+    def select(self, lang):
+        self.selected_lang = lang
+        self.accept()

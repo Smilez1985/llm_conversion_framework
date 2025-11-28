@@ -1,9 +1,10 @@
 # Zentrale Quellen für das LLM Cross-Compiler Framework
 # Status: Verifiziert & Community-Ready & Secured
 #
-# Diese Datei ist die "Single Source of Truth".
+# Diese Datei ist die "Single Source of Truth" (SSOT).
 # Der Orchestrator lädt diese Links und injiziert sie als Umgebungsvariablen
-# in die Docker-Container.
+# in die Docker-Container. Ditto (AI) nutzt die 'docs_workflow' Links,
+# um Build-Strategien zu lernen.
 
 # --- BUILD TOOLS (Security Pinned) ---
 build_tools:
@@ -24,39 +25,47 @@ core:
 
 # --- ROCKCHIP (RK3566 / RK3588) ---
 rockchip_npu:
-  # RKNN-Toolkit2 (Vision / Audio / Generic)
+  # LLM-spezifische NPU Inferenz (nur RK3588/RK3576)
+  rkllm_toolkit:
+    url: "https://github.com/airockchip/rknn-llm.git"
+    commit: "6f21a93" # Pinned Stable
+    # Doku für Ditto: Erklärt Quantisierung (w8a8, w4a16) und Export
+    docs_workflow: "https://github.com/airockchip/rknn-llm/blob/main/README.md"
+
+  # Generelles NPU Toolkit (Vision/Audio - RK3566/RK3588)
   rknn_toolkit2: 
     url: "https://github.com/airockchip/rknn-toolkit2.git"
     commit: "e5d3c12" # Pinned Stable
     docs_workflow: "https://github.com/airockchip/rknn-toolkit2/tree/master/doc"
   
-  # RKLLM-Toolkit (LLM Specific - Only for RK3588/RK3576)
-  rkllm_toolkit:
-    url: "https://github.com/airockchip/rknn-llm.git"
-    commit: "6f21a93" # Pinned Stable
-    docs_workflow: "https://github.com/airockchip/rknn-llm/blob/main/README.md"
-
   # Model Zoo
   rknn_model_zoo: "https://github.com/airockchip/rknn_model_zoo"
 
 # --- NVIDIA JETSON (Orin / Xavier / Nano) ---
 nvidia_jetson:
-  tensorrt_llm: "https://github.com/NVIDIA/TensorRT-LLM.git"
+  tensorrt_llm: 
+    url: "https://github.com/NVIDIA/TensorRT-LLM.git"
+    commit: "v0.9.0" # Pinned Release Tag recommended
   jetson_inference: "https://github.com/dusty-nv/jetson-inference"
   jetson_containers: "https://github.com/dusty-nv/jetson-containers"
+  # Doku für Ditto: Erklärt TRT Engine Building & Quantisierung
   docs_workflow: "https://nvidia.github.io/TensorRT-LLM/architecture/workflow.html"
 
 # --- HAILO AI (Raspberry Pi 5 + Hailo-8 / 8L) ---
 hailo_ai:
-  hailort: "https://github.com/hailo-ai/hailort.git"
+  hailort: 
+    url: "https://github.com/hailo-ai/hailort.git"
+    commit: "v4.17.0"
   tappas: "https://github.com/hailo-ai/tappas"
   hailo_rpi5_examples: "https://github.com/hailo-ai/hailo-rpi5-examples"
+  # Doku für Ditto: Erklärt HEF Conversion (HuggingFace -> Hailo)
   docs_workflow: "https://github.com/hailo-ai/hailo_model_zoo/blob/master/docs/public_models/HAILO8/HAILO8_inference_guide.rst"
 
 # --- INTEL NPU (Core Ultra / Meteor Lake) ---
 intel_npu:
   openvino: "https://github.com/openvinotoolkit/openvino"
   linux_npu_driver: "https://github.com/intel/linux-npu-driver"
+  # Doku für Ditto: Erklärt OpenVINO IR Export & NPU Plugin
   docs_workflow: "https://docs.openvino.ai/2024/documentation/openvino-ir-format.html"
 
 # --- AMD ROCm (Radeon GPUs) ---

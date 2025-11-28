@@ -10,7 +10,7 @@
     - Auto-Elevation to Administrator
     - Resilient Networking (Ping Loop)
     - Secure Downloads (SHA256 Verification)
-    - Native API Access (Kernel32)
+    - Native API Access (Kernel32) via C#
     
 .NOTES
     File Name      : hardware_probe.ps1
@@ -39,7 +39,7 @@ $ErrorActionPreference = "Stop"
 $OutputFile = "target_hardware_config.txt"
 
 # ============================================================================
-# UTILITY FUNCTIONS (GOLD STANDARD)
+# UTILITY FUNCTIONS
 # ============================================================================
 
 function Log-Output {
@@ -53,6 +53,7 @@ function Wait-For-Internet {
     param ([int]$TimeoutSeconds = 300)
     $startTime = Get-Date
     
+    Log-Output "Checking connectivity..."
     while ($true) {
         if ((Get-Date) - $startTime -gt (New-TimeSpan -Seconds $TimeoutSeconds)) {
             throw "Timeout waiting for Internet connection."
@@ -70,53 +71,13 @@ function Wait-For-Internet {
     }
 }
 
-function Get-FileHashString {
-    param ([string]$Path)
-    $hash = Get-FileHash -Path $Path -Algorithm SHA256
-    return $hash.Hash.ToLower()
-}
-
-function Download-Secure {
-    param (
-        [Parameter(Mandatory=$true)] [string]$Url,
-        [Parameter(Mandatory=$true)] [string]$Destination,
-        [string]$ExpectedHash = ""
-    )
-    
-    Write-Host "Downloading $(Split-Path $Destination -Leaf)..." -ForegroundColor Cyan
-    
-    # 1. Network Check
-    Wait-For-Internet
-    
-    try {
-        # Download
-        Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing
-        
-        # 2. Security Check (Hash)
-        if ($ExpectedHash -ne "") {
-            $actualHash = Get-FileHashString -Path $Destination
-            if ($actualHash -ne $ExpectedHash.ToLower()) {
-                Remove-Item $Destination -Force
-                throw "Security Alert: Hash mismatch for $Destination.`nExpected: $ExpectedHash`nActual:   $actualHash"
-            }
-            Write-Host "✅ Hash Verified ($actualHash)" -ForegroundColor Green
-        }
-    } catch {
-        Write-Error "Download failed: $_"
-        if (Test-Path $Destination) { Remove-Item $Destination -Force }
-        throw
-    }
-}
-
 function Check-Dependency {
     param ([string]$Name, [string]$CommandName)
-    
     if (Get-Command $CommandName -ErrorAction SilentlyContinue) {
         Log-Output "DEPENDENCY_$($Name.ToUpper())=INSTALLED"
         return $true
     } else {
         Log-Output "DEPENDENCY_$($Name.ToUpper())=MISSING"
-        Write-Warning "Missing Dependency: $Name"
         return $false
     }
 }
@@ -136,7 +97,6 @@ Add-Content -Path $OutputFile -Value "# User: $env:USERNAME (Admin)"
 # ============================================================================
 # 1. NATIVE API BRIDGE (C# Injection for CPU Flags)
 # ============================================================================
-# This allows us to query IsProcessorFeaturePresent directly from Kernel32
 $Kernel32Code = @"
 using System;
 using System.Runtime.InteropServices;
@@ -169,7 +129,6 @@ $cpu = Get-CimInstance Win32_Processor
 Log-Output "Name=$($cpu.Name.Trim())"
 Log-Output "Architecture=$($env:PROCESSOR_ARCHITECTURE)"
 Log-Output "Cores=$($cpu.NumberOfCores)"
-Log-Output "LogicalProcessors=$($cpu.NumberOfLogicalProcessors)"
 
 # Feature Flags
 $hasNeon = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_ARM_NEON_INSTRUCTIONS_AVAILABLE)
@@ -178,7 +137,7 @@ $hasAvx2 = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_AVX2_INS
 $hasAvx512 = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_AVX512F_INSTRUCTIONS_AVAILABLE)
 $hasFp16 = $false 
 
-# Heuristic for FP16 (ARMv8.2+ implies FP16 often, AVX512 implies it on x86)
+# Heuristic for FP16
 if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -and $hasNeon) { $hasFp16 = $true }
 if ($hasAvx512) { $hasFp16 = $true }
 
@@ -201,7 +160,6 @@ Log-Output "[ACCELERATORS]"
 if (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue) {
     try {
         Log-Output "GPU_VENDOR=NVIDIA"
-        # Parse CSV output safe
         $gpuinfo = nvidia-smi --query-gpu=name --format=csv,noheader
         if ($gpuinfo -is [array]) { $gpuinfo = $gpuinfo[0] }
         Log-Output "GPU_MODEL=$gpuinfo"
@@ -216,7 +174,7 @@ if (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue) {
 # 2. NPU Detection via PnP
 $npuFound = $false
 
-# Intel NPU (Meteor Lake / Core Ultra)
+# Intel NPU
 $intelNpu = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -like "*Intel(R) AI Boost*" -or $_.InstanceId -like "*INTC1085*" }
 if ($intelNpu) {
     Log-Output "NPU_VENDOR=Intel"
@@ -225,7 +183,7 @@ if ($intelNpu) {
     $npuFound = $true
 }
 
-# Hailo NPU (PCIe)
+# Hailo NPU
 $hailoNpu = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like "*VEN_1E60*" }
 if ($hailoNpu) {
     Log-Output "NPU_VENDOR=Hailo"
@@ -234,7 +192,7 @@ if ($hailoNpu) {
     $npuFound = $true
 }
 
-# Rockchip (USB Maskrom/ADB Mode)
+# Rockchip (USB Mode)
 $rkNpu = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like "*VID_2207*" }
 if ($rkNpu) {
     Log-Output "NPU_VENDOR=Rockchip"
@@ -256,5 +214,4 @@ Check-Dependency "Git" "git"
 Check-Dependency "Python" "python"
 
 Write-Host "`n✅ Probing complete. Config written to $OutputFile" -ForegroundColor Green
-Write-Host "You can now import this file in the Module Wizard."
 Start-Sleep -Seconds 2

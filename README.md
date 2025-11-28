@@ -96,7 +96,7 @@ Das Framework unterstützt zwei primäre Betriebsmodi:
 **Ideal für:** Entwicklung, GUI-Nutzung und Tests
 ```powershell
 # Automatischer Installer (lädt Dependencies, erstellt Desktop-Shortcuts)
-python scripts/setup_windows.py
+scripts/setup_windows.exe
 ```
 
 Nach der Installation:

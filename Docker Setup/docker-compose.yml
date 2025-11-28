@@ -1,12 +1,13 @@
 version: '3.8'
 
 # LLM Cross-Compiler Framework - Docker Compose Configuration
-# DIREKTIVE: Goldstandard, Modular Infrastructure.
-# STATUS: PRODUCTION READY (Dynamic Builds via Orchestrator)
+# DIREKTIVE: Goldstandard, Modular Infrastructure, Security Hardened.
+# STATUS: PRODUCTION READY
 
 services:
   # ============================================================================
   # DOCKER SOCKET PROXY (Security Layer)
+  # Isolates the Docker Daemon from the Orchestrator to prevent breakout attacks.
   # ============================================================================
   socket-proxy:
     image: tecnativa/docker-socket-proxy
@@ -14,12 +15,14 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
+      # Allow only necessary operations for building and running containers
       - BUILD=1
       - CONTAINERS=1
       - IMAGES=1
       - EXEC=1       
       - NETWORKS=1
       - VOLUMES=1
+      # DENY dangerous operations explicitly
       - EVENTS=0
       - PING=1
       - VERSION=1
@@ -27,46 +30,59 @@ services:
       - AUTH=0
       - SECRETS=0
       - SWARM=0
-      - SYSTEM=0
+      - SYSTEM=0     # Blocks 'docker system prune' etc.
     networks:
       - llm-framework
     restart: unless-stopped
+    # Security Context
+    security_opt:
+      - no-new-privileges:true
 
   # ============================================================================
   # ORCHESTRATOR SERVICE (Management Node)
+  # The central brain. Talks to Docker only via the Proxy.
   # ============================================================================
   orchestrator:
     build:
-      context: .
+      context: ..
       dockerfile: orchestrator/Dockerfile
       args:
         USER_ID: ${UID:-1000}
         GROUP_ID: ${GID:-1000}
-        VERSION: ${VERSION:-1.0.0}
-    image: llm-framework/orchestrator:${VERSION:-latest}
+        VERSION: ${VERSION:-1.2.0}
+    image: llm-framework/orchestrator:${VERSION:-1.2.0}
     container_name: llm-orchestrator
     hostname: orchestrator
     
     environment:
-      # SECURITY: Use Proxy instead of raw socket
+      # SECURITY: Use Proxy instead of raw socket mount
       - DOCKER_HOST=tcp://socket-proxy:2375
-      - FRAMEWORK_VERSION=${VERSION:-1.0.0}
+      
+      # Framework Configuration
+      - FRAMEWORK_VERSION=${VERSION:-1.2.0}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - AI_SECURITY_LEVEL=${AI_SECURITY_LEVEL:-STRICT} 
       - GUI_ENABLED=${GUI_ENABLED:-true}
       - API_ENABLED=${API_ENABLED:-true}
       - API_PORT=8000
       - WEB_PORT=3000
+      
+      # User Mapping
       - PUID=${UID:-1000}
       - PGID=${GID:-1000}
     
     volumes:
+      # Data Persistence
       - build_cache:/build-cache
-      - ${OUTPUT_DIR:-./output}:/output
-      - ${MODELS_DIR:-./models}:/models:ro
-      - ${CONFIG_DIR:-./configs}:/configs:ro
-      - ./orchestrator/config:/app/config:ro
-      - ./orchestrator/gui:/app/gui:ro
+      
+      # Host Mappings (Configurable via ENV)
+      - ${OUTPUT_DIR:-../output}:/output
+      - ${MODELS_DIR:-../models}:/models:ro
+      - ${CONFIG_DIR:-../configs}:/configs:ro
+      
+      # Development Hot-Reload (Optional)
+      - ../orchestrator/config:/app/config:ro
+      - ../orchestrator/gui:/app/gui:ro
     
     ports:
       - "${API_PORT:-8000}:8000"
@@ -81,12 +97,14 @@ services:
 
   # ============================================================================
   # MONITORING SERVICE (CTOP)
+  # Interactive container monitoring.
   # ============================================================================
   ctop:
     image: quay.io/vektorlab/ctop:latest
     container_name: llm-monitor
     restart: unless-stopped
     volumes:
+      # CTOP requires raw socket for stats reading (ReadOnly)
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - CTOP_FILTER=llm-
@@ -97,6 +115,7 @@ services:
 
   # ============================================================================
   # INFRASTRUCTURE SECURITY SCAN (TRIVY)
+  # Scans the Orchestrator image for vulnerabilities on startup.
   # ============================================================================
   trivy-infra-scanner:
     image: aquasec/trivy:latest
@@ -107,15 +126,18 @@ services:
     command: 
       - image
       - --exit-code
-      - "0" 
+      - "0" # Non-blocking for infra scan (logging only)
       - --severity
       - HIGH,CRITICAL
-      - llm-framework/orchestrator:${VERSION:-latest}
+      - llm-framework/orchestrator:${VERSION:-1.2.0}
     depends_on:
       - orchestrator
     networks:
       - llm-framework
 
+# ============================================================================
+# NETWORK & VOLUMES
+# ============================================================================
 networks:
   llm-framework:
     driver: bridge
@@ -123,5 +145,9 @@ networks:
 volumes:
   build_cache:
     driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${CACHE_DIR:-../cache}
   trivy_cache:
     driver: local

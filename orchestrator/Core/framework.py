@@ -75,15 +75,23 @@ class FrameworkManager:
         self._lock = threading.Lock()
         self._initialized = False
         self._shutdown_event = threading.Event()
+        
         if isinstance(config, dict):
             known = FrameworkConfig.__annotations__.keys()
             self.config = FrameworkConfig(**{k:v for k,v in config.items() if k in known})
-        elif isinstance(config, FrameworkConfig): self.config = config
-        else: self.config = FrameworkConfig()
+        elif isinstance(config, FrameworkConfig): 
+            self.config = config
+        else: 
+            self.config = FrameworkConfig()
         
-        # UPDATE: Version bump to 1.2.0
-        self.info = FrameworkInfo("1.2.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
-        self._components = {}; self._event_queue = queue.Queue(); self._build_counter = 0; self._active_builds = {}
+        # UPDATE: Version 1.3.0
+        self.info = FrameworkInfo("1.3.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
+        
+        self._components = {}
+        self._event_queue = queue.Queue()
+        self._build_counter = 0
+        self._active_builds = {}
+        
         self.logger.info(f"Framework Manager initialized (v{self.info.version})")
 
     def initialize(self) -> bool:
@@ -98,7 +106,8 @@ class FrameworkManager:
                 self._initialized = True
                 return True
             except Exception as e:
-                self.logger.error(f"Init failed: {e}"); return False
+                self.logger.error(f"Init failed: {e}")
+                return False
 
     def _validate_system_requirements(self):
         req = SystemRequirements()
@@ -118,21 +127,20 @@ class FrameworkManager:
                 with open(src_file, 'r') as f:
                     data = yaml.safe_load(f)
                     if data:
-                        flat = {}
-                        for s, i in data.items():
-                            if isinstance(i, dict):
-                                for k, v in i.items(): flat[f"{s}.{k}"] = v
-                            else: flat[s] = i
-                        self.config.source_repositories = flat
+                        # Flatten nested dict for simple env var access (core.llama_cpp.url -> CORE_LLAMA_CPP_URL)
+                        # Aber wir behalten die Struktur im Memory für Ditto!
+                        self.config.source_repositories = data
             except Exception as e: self.logger.warning(f"Sources load failed: {e}")
 
     def _initialize_docker(self):
         try:
-            c = docker.from_env(); c.ping()
+            c = docker.from_env()
+            c.ping()
             self.register_component("docker_client", c)
             self.info.docker_available = True
         except Exception as e:
-            self.logger.error(f"Docker init failed: {e}"); self.info.docker_available = False
+            self.logger.error(f"Docker init failed: {e}")
+            self.info.docker_available = False
 
     def register_component(self, n, c):
         with self._lock: self._components[n] = c
@@ -167,7 +175,10 @@ class FrameworkManager:
 
     def get_info(self):
         # Update dynamic info
-        self.info.targets_count = len(list(Path(self.config.targets_dir).glob("*")))
+        try:
+            targets = list(Path(self.config.targets_dir).glob("*"))
+            self.info.targets_count = len([t for t in targets if t.is_dir() and not t.name.startswith('_')])
+        except: pass
         self.info.active_builds = len(self._active_builds)
         return self.info
 

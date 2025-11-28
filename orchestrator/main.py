@@ -1,64 +1,79 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Application Entry Point
-DIREKTIVE: Goldstandard.
-           Nur noch Bootstrap-Logik. GUI ist ausgelagert.
+LLM Cross-Compiler Framework - Main Entry Point
+DIREKTIVE: Goldstandard, Startup Logic, I18n.
 """
 
 import sys
 import os
-import subprocess
+import yaml
 from pathlib import Path
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
-# Import der ausgelagerten GUI-Klasse
+# Adjust path to ensure modules are found
+current_dir = Path(__file__).resolve().parent
+root_dir = current_dir.parent
+sys.path.insert(0, str(root_dir))
+
 from orchestrator.gui.main_window import MainOrchestrator
+from orchestrator.gui.dialogs import LanguageSelectionDialog
+from orchestrator.utils.localization import get_instance as get_i18n
+from orchestrator.Core.config_manager import ConfigManager
 
-# ============================================================================
-# STARTUP LOGIC
-# ============================================================================
-
-def find_repo_root() -> Path:
-    """Findet das Root-Verzeichnis (Entwicklung oder Frozen EXE)."""
-    if getattr(sys, 'frozen', False):
-        return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
-
-def run_startup_git_pull(base_dir: Path):
-    """Silent Git Pull beim Start (Best Effort)."""
-    if not (base_dir / ".git").exists():
-        return
-    try:
-        subprocess.run(
-            ["git", "pull"], cwd=base_dir, capture_output=True, timeout=5,
-            creationflags=0x08000000 if sys.platform == 'win32' else 0
-        )
-    except Exception:
-        pass
-
-# ============================================================================
-# MAIN
-# ============================================================================
-
-if __name__ == "__main__":
-    # 1. Pfade bestimmen
-    BASE_DIR = find_repo_root()
-    
-    # 2. Arbeitsverzeichnis setzen (Wichtig für relative Pfade in Configs)
-    try:
-        os.chdir(BASE_DIR)
-    except Exception as e:
-        print(f"CRITICAL: Failed to set CWD to {BASE_DIR}: {e}")
-        sys.exit(1)
-
-    # 3. Silent Update Check
-    run_startup_git_pull(BASE_DIR)
-
-    # 4. App Starten
+def main():
     app = QApplication(sys.argv)
+    app.setApplicationName("LLM Cross-Compiler")
     
-    # GUI initialisieren und Root-Pfad übergeben
-    window = MainOrchestrator(app_root=BASE_DIR)
+    # Determine App Root
+    # If running as script: orchestrator/main.py -> parent is orchestrator -> parent is root
+    app_root = Path(__file__).resolve().parent.parent
+    
+    # 1. Load Config (Lightweight) to check Language
+    # We use a temporary ConfigManager instance just for reading the language preference
+    config_dir = app_root / "configs"
+    cfg_mgr = ConfigManager(config_dir=config_dir)
+    cfg_mgr.load_configuration()
+    
+    language = cfg_mgr.get("language")
+    
+    # 2. First Run / Language Selection
+    if not language:
+        # Initialize I18n with default English for the dialog
+        get_i18n("en")
+        
+        dlg = LanguageSelectionDialog()
+        if dlg.exec() == QDialog.Accepted:
+            language = dlg.selected_lang
+            
+            # Persist Language Selection
+            # Wir schreiben direkt in die User-Config, um die Einstellung zu merken
+            try:
+                config_file = config_dir / "config.yml"
+                data = {}
+                
+                if config_file.exists():
+                    with open(config_file, 'r') as f:
+                        data = yaml.safe_load(f) or {}
+                
+                data["language"] = language
+                
+                with open(config_file, 'w') as f:
+                    yaml.dump(data, f)
+                    
+            except Exception as e:
+                print(f"Warning: Could not save language preference: {e}")
+        else:
+            # User cancelled
+            sys.exit(0)
+    
+    # 3. Initialize Global Localization
+    get_i18n(language)
+    
+    # 4. Start Main GUI
+    window = MainOrchestrator(app_root)
     window.show()
     
     sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()

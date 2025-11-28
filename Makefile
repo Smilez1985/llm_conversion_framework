@@ -1,5 +1,6 @@
 # LLM Cross-Compiler Framework - Makefile
 # Enterprise CI/CD Entry Point for Linux/Headless
+# DIREKTIVE: Goldstandard.
 
 # Detect User ID for Docker Mapping to fix permission issues on Linux
 UID := $(shell id -u)
@@ -34,6 +35,7 @@ up: setup
 
 gui: setup
 	@echo "Starting Orchestrator (GUI)..."
+	# Allow local docker user to access X11 for GUI (Linux specific)
 	xhost +local:docker || true
 	UID=$(UID) GID=$(GID) GUI_ENABLED=true docker-compose -f "Docker Setup/docker-compose.yml" up -d orchestrator
 

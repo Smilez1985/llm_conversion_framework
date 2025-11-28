@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Configuration Manager
-DIRECTIVE: Gold standard, complete, professionally written.
+DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 """
 
 import os
@@ -140,8 +140,8 @@ class ConfigManager:
 
     def _initialize_core_schemas(self):
         schemas = [
-            ConfigSchema("targets_dir", str, True, "targets", "Directory for target definitions"),
-            ConfigSchema("models_dir", str, True, "models", "Directory for model storage"),
+            ConfigSchema("targets_dir", str, True, "targets", "Target definitions dir"),
+            ConfigSchema("models_dir", str, True, "models", "Model storage dir"),
             ConfigSchema("output_dir", str, True, "output", "Output dir"),
             ConfigSchema("cache_dir", str, True, "cache", "Cache dir"),
             ConfigSchema("logs_dir", str, True, "logs", "Logs dir"),
@@ -277,7 +277,7 @@ class ConfigManager:
         with self._lock:
             for key, val in self.config_values.items():
                 if val.is_secret and not include_secrets: result[k] = "***HIDDEN***"
-                else: result[k] = v.value
+                else: result[key] = val.value
         return result
 
 if __name__ == "__main__":

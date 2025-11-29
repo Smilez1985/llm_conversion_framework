@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Target Manager
-DIRECTIVE: Gold standard, complete, professionally written.
+DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 """
 
 import os
@@ -18,6 +18,7 @@ from datetime import datetime
 from enum import Enum
 
 import yaml
+# FIX: TargetArch entfernt, da wir jetzt Strings nutzen
 from orchestrator.Core.builder import ModelFormat
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.helpers import ensure_directory, check_command_exists
@@ -44,31 +45,9 @@ class ToolchainInfo:
     path: str = ""
     cc: str = ""
     cxx: str = ""
-    ar: str = ""
-    strip: str = ""
-    objcopy: str = ""
     cmake_toolchain_file: str = ""
-    cmake_system_name: str = ""
-    cmake_system_processor: str = ""
     env_vars: Dict[str, str] = field(default_factory=dict)
     available: bool = False
-    validation_errors: List[str] = field(default_factory=list)
-
-@dataclass
-class HardwareProfile:
-    name: str
-    target_arch: str
-    cpu_architecture: str = ""
-    cpu_features: List[str] = field(default_factory=list)
-    cpu_cores: int = 4
-    memory_mb: int = 4096
-    cflags: List[str] = field(default_factory=list)
-    cxxflags: List[str] = field(default_factory=list)
-    optimization_level: str = "O3"
-    
-    def __post_init__(self):
-        if not self.cflags and "rk3566" in str(self.target_arch).lower():
-            self.cflags = ["-march=armv8-a+crc+crypto", "-mtune=cortex-a55", "-O3"]
 
 @dataclass
 class TargetConfiguration:
@@ -82,17 +61,9 @@ class TargetConfiguration:
     modules_dir: str = ""
     configs_dir: str = ""
     available_modules: List[str] = field(default_factory=list)
-    required_modules: List[str] = field(default_factory=lambda: ["source_module.sh", "config_module.sh", "convert_module.sh", "target_module.sh"])
-    toolchain: Optional[ToolchainInfo] = None
-    hardware_profiles: List[HardwareProfile] = field(default_factory=list)
-    default_profile: Optional[str] = None
     docker_image: str = ""
-    docker_build_args: Dict[str, str] = field(default_factory=dict)
-    supported_formats: List[ModelFormat] = field(default_factory=list)
-    supported_quantizations: List[str] = field(default_factory=list)
-    validation_errors: List[str] = field(default_factory=list)
-    last_validated: Optional[datetime] = None
-
+    supported_formats: List[str] = field(default_factory=list)
+    
 @dataclass
 class TargetRegistry:
     targets: Dict[str, TargetConfiguration] = field(default_factory=dict)
@@ -129,24 +100,33 @@ class TargetManager:
 
     def _discover_targets(self):
         if not self.targets_dir.exists(): return
+        
+        self.registry.targets.clear()
+        
         for td in self.targets_dir.iterdir():
-            if not td.is_dir() or td.name.startswith('_'): continue
+            # Ignoriere _template und hidden files
+            if not td.is_dir() or td.name.startswith('_') or td.name.startswith('.'): continue
+            
             try:
                 cfg = self._load_target_configuration(td)
-                if cfg: self.registry.targets[cfg.name] = cfg
+                if cfg: 
+                    self.registry.targets[cfg.name] = cfg
+                    self.logger.debug(f"Loaded target: {cfg.name}")
             except Exception as e:
                 self.logger.error(f"Failed to load {td.name}: {e}")
 
     def _load_target_configuration(self, target_dir: Path) -> Optional[TargetConfiguration]:
         yml = target_dir / "target.yml"
         if not yml.exists(): return None
+        
         try:
             with open(yml, 'r') as f: data = yaml.safe_load(f)
             meta = data.get('metadata', {})
             
             config = TargetConfiguration(
-                name=target_dir.name,
+                name=target_dir.name, # Folder name as ID
                 target_arch=meta.get('architecture_family', 'unknown'),
+                status=TargetStatus.AVAILABLE,
                 version=meta.get('version', '1.0.0'),
                 maintainer=meta.get('maintainer', 'Community'),
                 description=meta.get('description', ''),
@@ -160,10 +140,6 @@ class TargetManager:
             
             d_cfg = data.get('docker', {})
             config.docker_image = d_cfg.get('image_name', '')
-            
-            feats = data.get('features', {})
-            config.supported_formats = feats.get('formats', [])
-            config.supported_quantizations = feats.get('quantizations', [])
             
             return config
         except Exception as e:
@@ -181,32 +157,8 @@ class TargetManager:
 
     def refresh_targets(self) -> bool:
         try:
-            self.registry = TargetRegistry()
             self._discover_targets()
             return True
         except Exception as e:
             self.logger.error(f"Refresh failed: {e}")
             return False
-
-    def detect_rk3566_hardware(self) -> Dict[str, Any]:
-        res = {"is_rk3566": False, "confidence": "none"}
-        try:
-            files = ["/proc/device-tree/compatible", "/sys/firmware/devicetree/base/compatible"]
-            for f in files:
-                if Path(f).exists():
-                    with open(f, 'rb') as c:
-                        if 'rk3566' in c.read().decode('utf-8', errors='ignore').lower():
-                            res["is_rk3566"] = True
-                            res["confidence"] = "high"
-                            break
-        except: pass
-        return res
-
-    def generate_rk3566_build_flags(self) -> List[str]:
-        return ["-march=armv8-a+crc+crypto", "-mtune=cortex-a55", "-O3"]
-
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
-
-def create_target_manager(framework_manager) -> Target

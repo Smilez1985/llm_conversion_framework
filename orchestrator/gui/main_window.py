@@ -379,11 +379,8 @@ class MainOrchestrator(QMainWindow):
         
         self.sources_table = QTableWidget(0, 3)
         self.sources_table.setHorizontalHeaderLabels(["Category", "Key", "Repository URL"])
-        self.sources_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.sources_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.sources_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.sources_table.setAlternatingRowColors(True)
         layout.addWidget(self.sources_table)
+        layout.addWidget(QLabel("Loaded from configs/project_sources.yml"))
 
     def load_sources_to_table(self):
         try:
@@ -429,9 +426,9 @@ class MainOrchestrator(QMainWindow):
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, cache_dir / "target_hardware_config.txt")
                 self.log(f"Import: {path}")
-                QMessageBox.information(self, "Success", "Profile imported.")
+                QMessageBox.information(self, tr("msg.success"), tr("msg.import_success"))
             except Exception as e:
-                QMessageBox.critical(self, "Error", str(e))
+                QMessageBox.critical(self, tr("status.error"), str(e))
 
     def open_community_hub(self):
         try:
@@ -473,13 +470,43 @@ class MainOrchestrator(QMainWindow):
         if not self.model_name.text(): 
             return QMessageBox.warning(self, tr("status.error"), "Model name required")
         
+        # 1. Dataset Check (Goldstandard Logic)
+        quant = self.quant_combo.currentText()
+        model_path = self.model_name.text()
+        dataset_path = None
+        
+        # Prüfen ob Quantisierung ein Dataset braucht (Heuristik: Alles außer FP16 und GGUF Qx)
+        needs_dataset = "INT" in quant or "W8" in quant or "W4" in quant
+        
+        # Falls lokaler Pfad, suche automatisch
+        if needs_dataset and os.path.exists(model_path):
+             potential_ds = os.path.join(model_path, "dataset.txt")
+             if os.path.exists(potential_ds):
+                 self.log(f"Auto-detected dataset: {potential_ds}")
+                 dataset_path = potential_ds
+        
+        # Falls benötigt aber nicht gefunden -> Fragen
+        if needs_dataset and not dataset_path:
+             reply = QMessageBox.question(self, tr("grp.build_config"), 
+                                          f"Quantization '{quant}' usually requires a calibration dataset (dataset.txt).\n"
+                                          "Do you want to select one?", 
+                                          QMessageBox.Yes | QMessageBox.No)
+             if reply == QMessageBox.Yes:
+                 ds_file, _ = QFileDialog.getOpenFileName(self, "Select Calibration Dataset", "", "Text (*.txt);;All (*)")
+                 if ds_file:
+                     dataset_path = ds_file
+                 else:
+                     self.log("Warning: Proceeding without dataset (Hybrid Mode).")
+        
+        # Build Config zusammenstellen
         cfg = {
-            "model_name": self.model_name.text(),
+            "model_name": model_path,
             "target": self.target_combo.currentText(),
             "task": self.task_combo.currentText(),
-            "quantization": self.quant_combo.currentText(),
+            "quantization": quant,
             "auto_benchmark": self.chk_auto_bench.isChecked(),
-            "use_gpu": self.chk_use_gpu.isChecked()
+            "use_gpu": self.chk_use_gpu.isChecked(),
+            "dataset_path": dataset_path # Pass dataset path
         }
         
         self.log(f"Building {cfg['target']} ({cfg['task']}) Quant: {cfg['quantization']} GPU: {cfg['use_gpu']}")

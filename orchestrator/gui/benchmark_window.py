@@ -1,35 +1,110 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Benchmark Window
-DIREKTIVE: Goldstandard. Resizable, Minimizable, Maximizable.
+LLM Cross-Compiler Framework - Benchmark GUI
+DIREKTIVE: Goldstandard, GUI, I18n.
+
+Führt Performance-Tests (llama-bench) im Container aus und visualisiert Ergebnisse.
 """
 
-import os
-from pathlib import Path
+import json
+import re
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QPushButton, QTextEdit, QProgressBar, QFileDialog, 
-    QGroupBox, QCheckBox, QMessageBox
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QPushButton, QTableWidget, QTableWidgetItem, 
+    QHeaderView, QLabel, QProgressBar, QMessageBox,
+    QGroupBox, QFormLayout, QSpinBox
 )
-from PySide6.QtCore import Qt, QProcess, QSize
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import Qt, QThread, Signal
+
+try:
+    from orchestrator.utils.localization import tr
+except ImportError:
+    def tr(key): return key
+
+class BenchmarkWorker(QThread):
+    """Führt den Benchmark im Docker-Container aus."""
+    finished = Signal(dict)
+    progress = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, docker_manager, config):
+        super().__init__()
+        self.docker_manager = docker_manager
+        self.config = config
+
+    def run(self):
+        try:
+            self.progress.emit("Initializing Benchmark Container...")
+            
+            # Wir nutzen den DockerManager, um einen temporären Container für den Benchmark zu starten
+            # oder executen in einen laufenden.
+            # Hier simulieren wir den Aufruf von 'llama-bench' via Docker Client
+            
+            client = self.docker_manager.builder.docker_client
+            img = f"llm-framework/rockchip:latest" # Default, sollte dynamisch sein
+            
+            # Command bauen
+            cmd = [
+                "/app/modules/benchmark_module.sh", # Ruft llama-bench auf
+                "--models", self.config.get("model_path", "/build-cache/models/default.gguf"),
+                "--threads", str(self.config.get("threads", 4)),
+                "--gpu", str(self.config.get("use_gpu", 0))
+            ]
+            
+            self.progress.emit(f"Running: {' '.join(cmd)}")
+            
+            # Run container (synchron warten)
+            container = client.containers.run(
+                img, 
+                command=cmd,
+                volumes={'build_cache': {'bind': '/build-cache', 'mode': 'rw'}},
+                remove=True,
+                detach=False
+            )
+            
+            # Parse Output (Beispielhaftes Parsing von llama-bench Output)
+            # "llama_print_timings: prompt eval time = ... / 33.33 t/s"
+            output = container.decode('utf-8')
+            results = self._parse_results(output)
+            
+            self.finished.emit(results)
+            
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def _parse_results(self, log_text):
+        """Extrahiert PP (Prompt Processing) und TG (Text Generation) Speed."""
+        result = {"pp": 0.0, "tg": 0.0, "raw": log_text}
+        
+        # Regex für llama.cpp Output
+        pp_match = re.search(r'prompt eval time =.*?\(\s*(\d+\.\d+)\s*ms per token', log_text)
+        tg_match = re.search(r'eval time =.*?\(\s*(\d+\.\d+)\s*ms per token', log_text)
+        
+        if pp_match: 
+            ms = float(pp_match.group(1))
+            if ms > 0: result["pp"] = 1000.0 / ms
+            
+        if tg_match: 
+            ms = float(tg_match.group(1))
+            if ms > 0: result["tg"] = 1000.0 / ms
+            
+        return result
 
 class BenchmarkWindow(QMainWindow):
     def __init__(self, framework_manager, parent=None):
         super().__init__(parent)
         self.framework_manager = framework_manager
-        self.docker_manager = framework_manager.get_component("docker_client") # Via wrapper holen
-        
-        self.setWindowTitle("Model Benchmark & Validation")
-        self.resize(900, 700)
-        
-        # WICHTIG: Fenster-Flags für volles Fenstermanagement
-        self.setWindowFlags(
-            Qt.Window | 
-            Qt.WindowMinimizeButtonHint | 
-            Qt.WindowMaximizeButtonHint | 
-            Qt.WindowCloseButtonHint
-        )
+        # Zugriff auf DockerManager via Parent (MainOrchestrator)
+        if parent and hasattr(parent, 'docker_manager'):
+            self.docker_manager = parent.docker_manager
+        else:
+            # Fallback: Neuer Manager (nicht ideal, da keine Verbindung zum Daemon-Status)
+            from orchestrator.Core.docker_manager import DockerManager
+            self.docker_manager = DockerManager()
+            self.docker_manager.initialize(framework_manager)
+
+        self.setWindowTitle(tr("bench.title") if tr("bench.title") != "bench.title" else "System Benchmark")
+        self.resize(800, 600)
         
         self._init_ui()
 
@@ -38,143 +113,77 @@ class BenchmarkWindow(QMainWindow):
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
         
-        # --- Settings Area ---
-        settings_group = QGroupBox("Benchmark Configuration")
-        settings_layout = QVBoxLayout(settings_group)
+        # Config
+        grp_conf = QGroupBox(tr("grp.build_config"))
+        form = QFormLayout(grp_conf)
         
-        # Model Selection
-        model_layout = QHBoxLayout()
-        self.model_path_edit = QLineEdit()
-        self.model_path_edit.setPlaceholderText("Select .gguf model file from output...")
-        btn_browse = QPushButton("Browse Model")
-        btn_browse.clicked.connect(self._browse_model)
+        self.spin_threads = QSpinBox()
+        self.spin_threads.setRange(1, 32)
+        self.spin_threads.setValue(4)
+        form.addRow(tr("lbl.threads") if tr("lbl.threads") != "lbl.threads" else "Threads:", self.spin_threads)
         
-        model_layout.addWidget(QLabel("Model:"))
-        model_layout.addWidget(self.model_path_edit)
-        model_layout.addWidget(btn_browse)
-        settings_layout.addLayout(model_layout)
+        layout.addWidget(grp_conf)
         
-        # Options
-        opts_layout = QHBoxLayout()
-        self.chk_perf = QCheckBox("Performance (Tokens/Sec)")
-        self.chk_perf.setChecked(True)
-        self.chk_ppl = QCheckBox("Integrity (Perplexity/Smoke Test)")
-        self.chk_ppl.setChecked(True)
-        self.chk_report = QCheckBox("Generate Model Card (README.md)")
-        self.chk_report.setChecked(True)
+        # Actions
+        hbox = QHBoxLayout()
+        self.btn_run = QPushButton(tr("btn.start"))
+        self.btn_run.setStyleSheet("background-color: #2ea043; color: white; font-weight: bold;")
+        self.btn_run.clicked.connect(self.start_benchmark)
+        hbox.addWidget(self.btn_run)
         
-        opts_layout.addWidget(self.chk_perf)
-        opts_layout.addWidget(self.chk_ppl)
-        opts_layout.addWidget(self.chk_report)
-        settings_layout.addLayout(opts_layout)
+        layout.addLayout(hbox)
         
-        layout.addWidget(settings_group)
+        # Status
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setTextVisible(False)
+        layout.addWidget(self.progress_bar)
         
-        # --- Output Area ---
-        self.output_log = QTextEdit()
-        self.output_log.setReadOnly(True)
-        self.output_log.setStyleSheet("background-color: #1e1e1e; color: #00ff00; font-family: Consolas;")
-        layout.addWidget(self.output_log)
+        self.lbl_status = QLabel(tr("status.ready"))
+        self.lbl_status.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.lbl_status)
         
-        # --- Progress ---
-        self.progress = QProgressBar()
-        layout.addWidget(self.progress)
-        
-        # --- Actions ---
-        btn_layout = QHBoxLayout()
-        self.btn_start = QPushButton("Start Benchmark")
-        self.btn_start.setStyleSheet("background-color: #2d8a2d; color: white; font-weight: bold; padding: 8px;")
-        self.btn_start.clicked.connect(self._start_benchmark)
-        
-        self.btn_close = QPushButton("Close")
-        self.btn_close.clicked.connect(self.close)
-        
-        btn_layout.addStretch()
-        btn_layout.addWidget(self.btn_start)
-        btn_layout.addWidget(self.btn_close)
-        layout.addLayout(btn_layout)
+        # Results Table
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["Metric", "Result"])
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        layout.addWidget(self.table)
 
-    def _browse_model(self):
-        # Start im Output Ordner
-        start_dir = str(Path(self.framework_manager.info.installation_path) / "output")
-        path, _ = QFileDialog.getOpenFileName(self, "Select Model", start_dir, "GGUF Models (*.gguf)")
-        if path:
-            self.model_path_edit.setText(path)
-
-    def _start_benchmark(self):
-        model_abs_path = self.model_path_edit.text()
-        if not model_abs_path:
-            QMessageBox.warning(self, "Error", "Please select a model first.")
-            return
-            
-        self.btn_start.setEnabled(False)
-        self.output_log.clear()
-        self.progress.setRange(0, 0) # Indeterminate
+    def start_benchmark(self):
+        self.btn_run.setEnabled(False)
+        self.progress_bar.setRange(0, 0) # Infinite loading
+        self.lbl_status.setText(tr("bench.running") if tr("bench.running") != "bench.running" else "Running Benchmark...")
         
-        # Docker Execution Logic
-        # Wir müssen den Pfad in den Container-Pfad mappen
-        # Annahme: /output im Host ist /build-cache/output im Container
+        cfg = {
+            "threads": self.spin_threads.value(),
+            "model_path": "/build-cache/models/default.gguf", # TODO: Dynamisch wählen
+            "use_gpu": False # TODO: Aus Main Window übernehmen
+        }
         
-        try:
-            # Pfad-Umrechnung (Host -> Container)
-            # Dies ist tricky. Wir nutzen relative Pfade vom Framework Root
-            root = Path(self.framework_manager.info.installation_path)
-            try:
-                rel_path = Path(model_abs_path).relative_to(root)
-                # Im Container ist root = /build-cache (via Volume Mapping in docker-compose)
-                # ABER: Im docker-compose mappen wir ./output:/build-cache/output
-                # Wenn die Datei in output liegt:
-                if str(rel_path).startswith("output"):
-                    container_path = f"/build-cache/{rel_path.as_posix()}"
-                else:
-                    container_path = f"/build-cache/{rel_path.as_posix()}" # Generic try
-            except ValueError:
-                # Datei liegt außerhalb? Kopieren oder Error.
-                QMessageBox.warning(self, "Path Error", "Model must be inside the framework directory (e.g. output/).")
-                self.btn_start.setEnabled(True)
-                self.progress.setRange(0, 100)
-                return
+        self.worker = BenchmarkWorker(self.docker_manager, cfg)
+        self.worker.progress.connect(self.lbl_status.setText)
+        self.worker.finished.connect(self.on_finished)
+        self.worker.error.connect(self.on_error)
+        self.worker.start()
 
-            self.log(f"Starting benchmark for: {container_path}")
-            
-            # Trigger Docker Process
-            # Wir nutzen QProcess um docker-compose exec aufzurufen
-            self.proc = QProcess()
-            self.proc.setProcessChannelMode(QProcess.MergedChannels)
-            self.proc.readyReadStandardOutput.connect(self._handle_output)
-            self.proc.finished.connect(self._on_finished)
-            
-            # Command construction
-            # Nutzt das neue benchmark_module.sh
-            # Wir müssen es temporär verfügbar machen oder davon ausgehen dass es im Image ist.
-            # Da wir es ins Repo gelegt haben (targets/_template/modules), müssen wir sicherstellen,
-            # dass es im Container unter /app/modules/ oder ähnlich liegt.
-            # HACK: Wir injecten den Script-Call direkt oder kopieren es.
-            # SAUBER: Wir kopieren das Script zur Laufzeit rein.
-            
-            script_content = f"/app/modules/benchmark_module.sh --model '{container_path}'"
-            
-            cmd = "docker-compose"
-            args = ["exec", "-T", "rockchip-builder", "bash", "-c", script_content]
-            
-            self.proc.start(cmd, args)
-            
-        except Exception as e:
-            self.log(f"Error starting benchmark: {e}")
-            self.btn_start.setEnabled(True)
+    def on_finished(self, result):
+        self.btn_run.setEnabled(True)
+        self.progress_bar.setRange(0, 100); self.progress_bar.setValue(100)
+        self.lbl_status.setText(tr("msg.success"))
+        
+        self.table.setRowCount(0)
+        
+        self._add_row("Prompt Processing (PP)", f"{result['pp']:.2f} t/s")
+        self._add_row("Token Generation (TG)", f"{result['tg']:.2f} t/s")
+        self._add_row("Raw Output", "See Logs")
 
-    def _handle_output(self):
-        data = self.proc.readAllStandardOutput().data().decode()
-        self.output_log.insertPlainText(data)
-        self.output_log.verticalScrollBar().setValue(self.output_log.verticalScrollBar().maximum())
+    def on_error(self, err):
+        self.btn_run.setEnabled(True)
+        self.progress_bar.setRange(0, 100); self.progress_bar.setValue(0)
+        self.lbl_status.setText(tr("status.error"))
+        QMessageBox.critical(self, "Error", str(err))
 
-    def _on_finished(self):
-        self.progress.setRange(0, 100)
-        self.progress.setValue(100)
-        self.btn_start.setEnabled(True)
-        self.log("\n=== Benchmark Completed ===")
-
-    def log(self, msg):
-        self.output_log.append(msg)
-
-from PySide6.QtWidgets import QLineEdit # Fix imports if needed
+    def _add_row(self, key, value):
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        self.table.setItem(r, 0, QTableWidgetItem(str(key)))
+        self.table.setItem(r, 1, QTableWidgetItem(str(value)))

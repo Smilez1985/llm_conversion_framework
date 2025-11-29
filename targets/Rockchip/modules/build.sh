@@ -26,7 +26,16 @@ if [[ "$QUANT" == "FP16" ]] || [[ "$QUANT" == *"Original"* ]]; then
     echo ">> Fallback to CPU conversion (GGUF F16)."
     
     # Standard GGUF Conversion (Safe Fallback)
-    python3 /usr/src/llama.cpp/convert-hf-to-gguf.py "$MODEL_SOURCE" --outfile "$OUTPUT_DIR/model-f16.gguf" --outtype f16
+    if [ -f "/usr/src/llama.cpp/convert-hf-to-gguf.py" ]; then
+         python3 /usr/src/llama.cpp/convert-hf-to-gguf.py "$MODEL_SOURCE" --outfile "$OUTPUT_DIR/model-f16.gguf" --outtype f16
+    else
+         echo "Error: llama.cpp conversion script not found."
+         exit 1
+    fi
+    
+    # Packaging for CPU
+    cd "$OUTPUT_DIR" && tar -czf "rockchip_cpu_deployment.tar.gz" *
+    echo "Done."
     exit 0
 fi
 
@@ -35,10 +44,20 @@ if [[ "$BOARD" == *"rk3588"* ]] || [[ "$BOARD" == *"RK3588"* ]]; then
     # === RK3588 (Strong NPU) ===
     if [ "$TASK" == "LLM" ]; then
         echo ">> Strategy: RK3588 detected. Using RKLLM-Toolkit."
-        /app/modules/rkllm_module.sh
+        if [ -f "/app/modules/rkllm_module.sh" ]; then
+            /app/modules/rkllm_module.sh
+        else
+             echo "Error: rkllm_module.sh not found."
+             exit 1
+        fi
     else
         echo ">> Strategy: Non-LLM task ($TASK). Using RKNN-Toolkit2."
-        /app/modules/rknn_module.sh
+        if [ -f "/app/modules/rknn_module.sh" ]; then
+            /app/modules/rknn_module.sh
+        else
+             echo "Error: rknn_module.sh not found."
+             exit 1
+        fi
     fi
 
 elif [[ "$BOARD" == *"rk3566"* ]] || [[ "$BOARD" == *"RK3566"* ]]; then
@@ -48,21 +67,48 @@ elif [[ "$BOARD" == *"rk3566"* ]] || [[ "$BOARD" == *"RK3566"* ]]; then
         # Auto-Quantize to Q8_0 or chosen quant if supported by llama.cpp
         # Map RKNN quants (i8) to GGUF quants (q8_0) if needed
         GGUF_TYPE="q8_0" # Default for CPU inference
-        if [[ "$QUANT" == "Q4"* ]]; then GGUF_TYPE="q4_k_m"; fi
         
-        python3 /usr/src/llama.cpp/convert-hf-to-gguf.py "$MODEL_SOURCE" --outfile "$OUTPUT_DIR/model.gguf" --outtype "$GGUF_TYPE"
+        if [[ "$QUANT" == "Q4"* ]]; then GGUF_TYPE="q4_k_m"; fi
+        if [[ "$QUANT" == "Q8"* ]]; then GGUF_TYPE="q8_0"; fi
+        if [[ "$QUANT" == "INT4" ]]; then GGUF_TYPE="q4_k_m"; fi
+        if [[ "$QUANT" == "INT8" ]]; then GGUF_TYPE="q8_0"; fi
+        
+        echo ">> Converting to GGUF format: $GGUF_TYPE"
+        
+        if [ -f "/usr/src/llama.cpp/convert-hf-to-gguf.py" ]; then
+             python3 /usr/src/llama.cpp/convert-hf-to-gguf.py "$MODEL_SOURCE" --outfile "$OUTPUT_DIR/model.gguf" --outtype "$GGUF_TYPE"
+        else
+             echo "Error: llama.cpp conversion script not found."
+             exit 1
+        fi
     else
         echo ">> Strategy: Voice/Vision task. Using RKNN-Toolkit2 for NPU acceleration."
-        /app/modules/rknn_module.sh
+        if [ -f "/app/modules/rknn_module.sh" ]; then
+            /app/modules/rknn_module.sh
+        else
+             echo "Error: rknn_module.sh not found."
+             exit 1
+        fi
     fi
 
 else
     # === GENERIC / UNKNOWN ===
     echo ">> Unknown Rockchip Board '$BOARD'. Defaulting to CPU/GGUF."
-    python3 /usr/src/llama.cpp/convert-hf-to-gguf.py "$MODEL_SOURCE" --outfile "$OUTPUT_DIR/model.gguf"
+    if [ -f "/usr/src/llama.cpp/convert-hf-to-gguf.py" ]; then
+         python3 /usr/src/llama.cpp/convert-hf-to-gguf.py "$MODEL_SOURCE" --outfile "$OUTPUT_DIR/model.gguf"
+    else
+         echo "Error: llama.cpp conversion script not found."
+         exit 1
+    fi
 fi
 
 # --- PACKAGING ---
 echo "=== Packaging ==="
-cd "$OUTPUT_DIR" && tar -czf "rockchip_deployment.tar.gz" *
+if [ -d "$OUTPUT_DIR" ]; then
+    cd "$OUTPUT_DIR" && tar -czf "rockchip_deployment.tar.gz" *
+    echo "Artifacts packaged."
+else
+    echo "Error: Output directory not found."
+    exit 1
+fi
 echo "Done."

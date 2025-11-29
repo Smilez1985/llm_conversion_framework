@@ -2,410 +2,168 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Docker](https://img.shields.io/badge/docker-20.10+-0db7ed.svg)](https://docs.docker.com/get-docker/)
-[![Poetry](https://img.shields.io/badge/poetry-1.5+-60A5FA.svg)](https://python-poetry.org/)
-[![Platform](https://img.shields.io/badge/platform-win%20%7C%20linux%20%7C%20mac-lightgrey)]()
-[![Status](https://img.shields.io/badge/status-production%20ready-green)]()
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)]()
+[![Docker](https://img.shields.io/badge/docker-20.10+-blue.svg)](https://docs.docker.com/get-docker/)
+[![Status](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)]()
 
-**Professionelles modulares Framework für die Cross-Compilation von Large Language Models auf Edge-Hardware**
+> **Note:** For documentation in German, see [README-de.md](README-de.md).
 
-Ein GUI-basiertes LLM Deployment Framework, das beliebige LLMs automatisiert optimieren & quantisieren kann. Perfekt optimiert für jede CPU, GPU oder NPU.
+**Professional Modular Framework for Cross-Compiling Large Language Models on Edge Hardware**
 
----
-
-## 🌟 Status: Production Ready (v1.2.0)
-
-Das Framework wurde einem umfassenden **Enterprise-Grade Sicherheits- und Architektur-Audit** unterzogen:
-
-* ✅ **Sicherheit:** Container-Isolation mit Socket Proxy, geschützter Docker-Socket, Input-Validierung, Trivy-Scanning
-* ✅ **Modularität:** Klare Trennung zwischen Orchestrator (Management), Builder (Ausführung) und Target-Modulen
-* ✅ **AI-Integration:** "Ditto"-Agent (v1.2) für vollautomatische Generierung neuer Hardware-Module
-* ✅ **Multi-Provider Support:** Ollama, OpenAI, Anthropic und weitere AI-Provider
-* ✅ **GPU-Ready:** NVIDIA GPU Passthrough für beschleunigte Builds
+A GUI-based LLM Deployment Framework capable of automating the optimization & quantization of any LLM. Perfectly optimized for any CPU, GPU, or NPU (Rockchip, NVIDIA, etc.).
 
 ---
 
-## 📖 Über das Projekt
+## 🌟 Status: Production Ready (v1.3.0)
 
-Wir lösen ein Problem, das jeder kennt, aber niemand angeht: Die saubere, reproduzierbare Kompilierung von LLMs und NPU-Tools für unterschiedliche Hardware-Architekturen.
+The framework has undergone a comprehensive security and architectural audit. It meets enterprise standards regarding modularity, security (Trivy scanning, socket proxy), and stability.
 
-Das **LLM Cross-Compiler Framework** ist keine einfache "Installations-Anleitung", sondern eine Docker-basierte Fertigungsstraße. Es verwandelt Source-Code (HuggingFace, llama.cpp, Vosk) vollautomatisch in optimierte Binaries für dein Zielsystem.
-
-### ✨ Was es leistet (v1.2.0)
-
-* ✅ Vollständige Cross-Compilation für **Rockchip RK3566/RK3588** (inkl. NPU-Support via RKNN)
-* ✅ **Windows-Installer & GUI** für einfache Bedienung ohne Kommandozeilen-Frust
-* ✅ **Single-Source-of-Truth** Architektur für reproduzierbare Builds
-* ✅ **Auto-Update** & **Smart-Sync** Technologie für nahtlose Updates
-* ✅ **AI-Wizard "Ditto"** erkennt Hardware automatisch und generiert optimierte Module
-* ✅ **Security Hardening** mit Socket Proxy und automatischem Image-Scanning
-* ✅ **NVIDIA GPU Support** für beschleunigte Quantisierung und Compilation
+* **Security:** Containers are isolated (Socket Proxy), Docker socket is protected, inputs are sanitized.
+* **Modularity:** Clean separation between Orchestrator (Management), Builder (Execution), and Target Modules.
+* **AI-Integration:** Optional "Ditto" agent (v1.2) for fully automated generation of new hardware modules.
+* **I18n:** Full support for English and German interfaces.
 
 ---
 
-## 🎯 Features
+## 🗺️ Roadmap
 
-| Feature | Beschreibung |
-|---------|--------------|
-| 🏗️ **Multi-Arch Support** | ARM, x86_64, RISC-V mit automatischer Hardware-Erkennung |
-| 🐳 **Docker-Native** | Isolierte Build-Umgebungen mit Multi-Stage Builds (Keine Dependency-Hölle auf dem Host) |
-| 🎨 **Profi-GUI** | PySide6 Interface mit integriertem **5-Schritt Module Creation Wizard** |
-| 🤖 **AI Auto-Discovery** | "Ditto"-Agent analysiert Hardware-Profil und konfiguriert Module automatisch (Flags, SDKs, Docker-Images) |
-| ⚡ **Live Monitoring** | Echtzeit-Anzeige von Build-Logs und Fortschritt |
-| 🔧 **Hardware-Optimiert** | Automatische CPU/GPU/NPU-Erkennung mit optimierten Compiler-Flags (NEON, AVX, CUDA) |
-| 🔒 **Security First** | Socket Proxy Protection + Trivy-Scanner prüft jedes Image nach dem Build |
-| 🌐 **Multi-Provider AI** | Ollama, OpenAI, Anthropic, Google, Azure für AI-Wizard |
-| 🌍 **Community Hub** | Integrierter "App Store" zum Herunterladen neuer Hardware-Targets |
-| 📦 **Auto-Packaging** | Erstellt fertige Deployment-Pakete inkl. Test-Skripten für das Zielgerät |
+**v1.3.0** (Current)
+- ✅ AI Wizard (Ditto Integration) with Auto-Discovery
+- ✅ Security Hardening (Socket Proxy, Trivy Scanner)
+- ✅ Multi-Provider AI Support (Ollama, OpenAI, Anthropic)
+- ✅ NVIDIA GPU Passthrough Support
+- ✅ Internationalization (DE/EN)
+
+**v1.4.0** (Q2 2026)
+- 🎯 Intel NPU Support (OpenVINO) Full Integration
+- 🎯 Hailo NPU Support Full Integration
+- 🎯 Auto-Optimization Engine (Grid Search for Quantization)
+
+**v2.0.0** (Q3 2026)
+- 🎯 Cloud Build Support (AWS/Azure integration)
+- 🎯 Model Zoo Integration (One-Click Deploy)
 
 ---
 
-## 🚀 Quick Start
+## 📊 Performance Expectations
 
-### Voraussetzungen
-
-**Windows:**
-- Docker Desktop (20.10+) mit WSL2
-- Python (3.10+)
-- Git
-
-**Linux:**
-- Docker Engine (`docker-ce`) - Kein Docker Desktop notwendig!
-- Python (3.10+) oder Poetry (1.5+)
-- Git
-
-> **⚠️ WICHTIG für Windows-Nutzer: Docker Desktop & WSL2**
->
-> Das Framework nutzt Docker Desktop mit WSL2 für alle Build-Prozesse. Dies ist eine **zwingende Voraussetzung**.
->
-> 1. Aktiviere **WSL2** (Windows Subsystem for Linux 2) über die PowerShell
-> 2. Installiere das [WSL2 Linux-Kernel-Update-Paket](https://wslstore.blob.core.windows.net/wslupdate/wsl_update_x64.msi)
-> 3. Installiere [Docker Desktop für Windows](https://docs.docker.com/desktop/install/windows-install/)
-> 4. Stelle in den Docker-Einstellungen sicher, dass die **WSL2-Integration** aktiviert ist
->
-> Das Framework prüft automatisch, ob Docker läuft, bevor die Installation fortgesetzt wird.
+| Model        | Hardware | Quantization | RAM Usage | Speed (tokens/s) |
+| :---         | :---     | :---         | :---      | :---             |
+| Granite-350M | RK3566   | Q4_K_M       | ~200MB    | 8-15             |
+| Llama-2-7B   | RK3588   | Q4_K_M       | ~4GB      | 5-10             |
+| Mistral-7B   | RTX 4090 | INT4 (AWQ)   | ~5GB      | 100+             |
 
 ---
 
 ## 📥 Installation & Deployment
 
-Das Framework unterstützt zwei primäre Betriebsmodi:
+The framework supports two primary operating modes:
 
 ### A. Windows (Workstation / Laptop)
-**Ideal für:** Entwicklung, GUI-Nutzung und Tests
-```powershell
-# Automatischer Installer (lädt Dependencies, erstellt Desktop-Shortcuts)
-scripts/setup_windows.exe
-```
+Ideal for development, GUI usage, and testing.
 
-Nach der Installation:
-1. Starte **"LLM-Builder"** vom Desktop
-2. Die GUI führt dich durch den Setup-Prozess
-
----
+* **Requirements:** Docker Desktop, WSL2.
+* **Setup:**
+    ```powershell
+    # Starts the automated installer (handles dependencies, creates shortcuts)
+    python scripts/setup_windows.py
+    ```
+* Simply launch the created desktop shortcut `LLM-Builder`.
 
 ### B. Linux (Server / Headless / Cloud)
-**Optimiert für:** CI/CD-Pipelines, Build-Server (AWS, Hetzner) oder lokale Linux-Maschinen. Läuft ressourcenschonend ohne GUI.
-```bash
-# Repository klonen
-git clone https://github.com/Smilez1985/llm_conversion_framework.git
-cd llm_conversion_framework
+Optimized for CI/CD pipelines, build servers (AWS, Hetzner), or local Linux machines. Runs efficiently without a GUI.
 
-# Setup (prüft Voraussetzungen, installiert Docker bei Bedarf)
-make setup
-
-# Orchestrator im Hintergrund starten
-make up
-
-# CLI verwenden
-docker exec -it llm-orchestrator llm-cli --help
-```
-
-**Oder mit Poetry (Entwickler):**
-```bash
-# Dependencies installieren
-poetry install
-
-# Docker-Container bauen
-docker-compose build
-
-# GUI starten
-poetry run llm-builder
-```
+* **Requirements:** Docker Engine (`docker-ce`). **No** Docker Desktop required!
+* **Setup & Start:**
+    ```bash
+    # Checks requirements, installs Docker if needed, fixes permissions
+    make setup
+    
+    # Starts the Orchestrator in background (Headless Mode)
+    make up
+    ```
+* Use the CLI afterwards: `docker exec -it llm-orchestrator llm-cli`
 
 ---
 
-## ⚙️ Hardware-Nutzung & Performance
+## ⚙️ Hardware Usage & Performance
 
-Das Framework arbeitet intelligent mit den verfügbaren Ressourcen.
+The framework intelligently manages available resources based on your target selection.
 
-### 🖥️ Standard: CPU & RAM (Cross-Compilation)
+### Standard: CPU & RAM (Cross-Compilation)
+For targets like **Rockchip (RK3588/RK3566)**, the standard container primarily utilizes **CPU and RAM**.
 
-Für Targets wie **Rockchip RK3588/RK3566** nutzt der Standard-Container primär **CPU und RAM**.
+* **Why?** We explicitly install the PyTorch CPU version to keep the Docker image small (~2GB instead of >8GB).
+* **Bottleneck:** During quantization (e.g., `llama-quantize`), memory bandwidth is usually the limiting factor, not raw GPU compute. A strong CPU is often more efficient here than the overhead of large GPU containers.
 
-**Warum?**
-- PyTorch-CPU-Version hält Docker-Image klein (~2GB statt >8GB)
-- Bei Quantisierung ist **RAM-Bandbreite** oft der Flaschenhals, nicht GPU-Rechenleistung
-- Starke CPUs sind hier effizienter als der Overhead großer GPU-Container
+### Option: GPU Acceleration (NVIDIA Jetson / RTX)
+The framework core is **GPU-Ready**.
 
-### 🎮 Option: GPU-Beschleunigung (NVIDIA Jetson / RTX)
-
-Das Framework ist im Kern bereits **GPU-Ready**!
-
-**Der "Hidden Gem":** Der Builder (`orchestrator/Core/builder.py`) kann GPU-Ressourcen via `DeviceRequest` direkt an den Build-Container durchreichen.
-
-**Aktivierung:**
-1. Wähle im GUI-Wizard oder CLI die Option **"Use GPU"**
-2. Stelle sicher, dass das Target-Modul ein GPU-fähiges Basis-Image nutzt (z.B. `nvidia/cuda:12.2...`)
-3. **💡 Tipp:** Nutze den **AI-Wizard (Ditto)** – er erkennt NVIDIA-Hardware im Probe-Log und schlägt automatisch das passende CUDA-Image vor!
-
-**Performance-Erwartungen:**
-
-| Model | Hardware | Quantization | RAM Usage | Speed (tokens/s) |
-|-------|----------|-------------|-----------|------------------|
-| Granite-350M | RK3566 | Q4_K_M | ~200MB | 8-15 |
-| Llama-2-7B | RK3588 | Q4_K_M | ~4GB | 5-10 |
-| Phi-2-2.7B | Pi 5 | Q5_K_M | ~2GB | 3-8 |
+* **The "Hidden Gem":** The Builder (`orchestrator/Core/builder.py`) can pass GPU resources via `DeviceRequest` directly to the build container.
+* **How to activate:**
+    1.  Select **"Use GPU"** in the GUI Wizard or CLI.
+    2.  Ensure the target module uses a GPU-capable base image (e.g., `nvidia/cuda:12.2...`).
+    3.  *Tip:* Use the **AI Wizard (Ditto)** – it detects NVIDIA hardware in the probe log and automatically suggests the correct CUDA image.
 
 ---
 
-## 🛠️ Verwendung
+## 🛠️ Features
 
-### Schritt 1: Hardware-Profil erstellen
-
-Führe dieses Skript auf deinem Zielsystem (z.B. dem Rockchip Board) aus, um die Hardware-Fähigkeiten exakt zu erfassen.
-```bash
-# Auf deinem RK3566/Zielsystem ausführen
-curl -O https://raw.githubusercontent.com/Smilez1985/llm_conversion_framework/main/scripts/hardware_probe.sh
-chmod +x hardware_probe.sh
-./hardware_probe.sh
-# -> Erzeugt: target_hardware_config.txt
-```
-
-### Schritt 2: Modell konvertieren & bauen
-
-**Via GUI** (empfohlen):
-
-1. `File` → `Import Hardware Profile` → Wähle deine `target_hardware_config.txt`
-2. **AI-Wizard aktivieren:** Der "Ditto"-Agent analysiert automatisch dein Hardware-Profil
-3. Wähle im Tab **"Build & Monitor"** dein Modell (z.B. via `Browse HF` Button)
-4. Wähle das Ziel (z.B. `rockchip`) und die Quantisierung (`Q4_K_M`)
-5. Klicke `Start Build`
-
-**Oder via CLI:**
-```bash
-llm-cli build start \
-  --model "IBM/granite-3b-code-instruct" \
-  --target rockchip \
-  --quantization Q4_K_M \
-  --task LLM
-```
-
-### Schritt 3: Deployment
-
-Das fertige Paket findest du im `output` Ordner.
-```bash
-cd output/packages/granite-3b_q4km_aarch64_latest/
-
-# Kopiere diesen Ordner auf dein Gerät und führe aus:
-./deploy.sh /opt/ai_models/
-```
-
----
-
-## 🏗️ Architektur
-
-### Framework-Struktur
-```
-llm-cross-compiler-framework/
-├── orchestrator/           # Python Core (GUI, CLI, Manager)
-│   ├── gui/                # GUI Fenster & Dialoge
-│   ├── Core/               # Geschäftslogik (Builder, Config, Model Manager)
-│   └── utils/              # Helper, Updater, Validation
-├── targets/                # Hardware-Module
-│   ├── rockchip/           # ✅ Production-Ready (RK3566/88)
-│   ├── _template/          # 📋 Vorlage für neue Targets
-│   └── ...
-├── community/              # Community-Contributed Targets
-├── configs/                # Globale Konfigurationen
-└── scripts/                # Setup, Build & CI Tools
-```
-
-### Pipeline-Ablauf
-```
-Input Model (HF/ONNX)
-        ↓
-    Format Convert
-        ↓
-    GGUF FP16
-        ↓
-Quantize (Native x86) ←──── Hardware Profile
-        ↓                           ↓
-  Quantized GGUF       AI-Wizard (Ditto) analyzes
-        ↓                           ↓
-        └──────→ Cross-Compile ←────┘
-                       ↓
-                llama-cli (ARM64)
-                       ↓
-              Deployment Package
-                       ↓
-              Trivy Security Scan
-```
-
-### Unterstützte Hardware
-
-| Familie | Status | Architekturen | Features |
-|---------|--------|---------------|----------|
-| **Rockchip** | ✅ Ready | RK3566, RK3568, RK3576, RK3588 | NEON, NPU (RKNN), Cross-Compilation |
-| **NVIDIA Jetson** | 🚧 Development | Nano, Xavier NX, Orin | CUDA, TensorRT |
-| **Raspberry Pi** | 🚧 Development | Pi 4, Pi 5 | ARM Cortex-A72/A76 |
-| **Intel NPU** | 📋 Planned | Meteor Lake | OpenVINO |
-| **Hailo** | 📋 Planned | Hailo-8, Hailo-10 | HailoRT |
-
----
-
-## 🤝 Community & Beitragen
-
-Wir brauchen **DICH**, um Unterstützung für weitere Hardware hinzuzufügen!
-
-### Neues Target hinzufügen
-
-Das Framework besitzt einen integrierten **5-Schritt Module Creation Wizard** mit **AI-Unterstützung**:
-
-1. Starte die GUI: `llm-builder` (Windows) oder `poetry run llm-builder` (Linux)
-2. Menü: `Tools` → `Create New Module...`
-3. **AI-Modus:** Upload deinen `hardware_probe.sh` Output → "Ditto" konfiguriert automatisch:
-   - Optimale Compiler-Flags (NEON, AVX, CUDA)
-   - Passendes Docker Base-Image
-   - SDK-Versionen & Dependencies
-4. Folge den **5 Schritten** im Wizard
-5. Das Framework generiert automatisch alle notwendigen Skripte (`config_module.sh`, `Dockerfile`, etc.)
-
-**Oder manuell:**
-```bash
-cp -r targets/_template targets/my_hardware
-# targets/my_hardware/ anpassen
-```
-
-### Pull Requests
-
-1. **Fork** das Repository
-2. **Branch** erstellen: `git checkout -b feature/my-new-target`
-3. **Module entwickeln** mit dem AI-Wizard
-4. **Tests** hinzufügen und ausführen
-5. **Pull Request** erstellen
-
-### Community-Targets
-
-Die `community/` Directory enthält von der Community beigesteuerte Hardware-Targets:
-
-- `community/hailo/` - Hailo NPU Support
-- `community/intel-npu/` - Intel Meteor Lake NPU
-- `community/custom-boards/` - Spezial-Hardware
-
----
-
-## 📊 Status & Roadmap
-
-### Current Status (v1.2.0)
-
-- ✅ **Framework Core** - GUI, CLI, Docker-Management
-- ✅ **Rockchip Target** - Production-ready für RK3566/3588
-- ✅ **AI-Wizard "Ditto"** - Automatische Hardware-Erkennung & Modul-Generierung
-- ✅ **Security Hardening** - Socket Proxy, Trivy-Scanner, Input-Validierung
-- ✅ **Multi-Provider AI** - Ollama, OpenAI, Anthropic, Google, Azure
-- ✅ **NVIDIA GPU Passthrough** - GPU-beschleunigte Builds
-
-### Roadmap
-
-| Meilenstein | Status | Geplant | Features |
-|-------------|--------|---------|----------|
-| v1.0.0 (MVP) | ✅ Abgeschlossen | - | Rockchip RK3566/88, GUI, Docker-Core |
-| v1.1.0 | ✅ Abgeschlossen | - | Auto-Updater, AI-Wizard, Smart Sync |
-| v1.2.0 | ✅ Abgeschlossen | - | Security Hardening, Multi-Provider AI, NVIDIA GPU Support |
-| v1.3.0 | 📋 In Planung | Q2 2026 | Intel NPU (OpenVINO), Hailo NPU, Auto-Optimization Engine |
-| v2.0.0 | 📋 In Planung | Q3 2026 | Cloud Build Support (AWS/Azure), Model Zoo Integration |
-
----
+* **Smart Wizard:** Create new hardware targets in 5 steps.
+* **AI Auto-Discovery:** Upload `hardware_probe.sh` output, and the AI configures the module for you (Flags, SDKs, Docker Image).
+* **Multi-Target:** Supports Rockchip (NPU), NVIDIA (CUDA), Intel (OpenVINO), and more.
+* **Security First:** Integrated Trivy scanner checks every image after build.
 
 ## 🏆 Examples
 
 ### Rockchip RK3566 Example
-```bash
-# 1. Hardware-Profil erstellen (auf RK3566)
-./hardware_probe.sh
 
-# 2. Build via CLI (auf der Workstation)
+```bash
+# 1. Create Hardware Profile (on the board)
+./hardware_probe.sh
+```
+```
+# 2. Build via CLI (on the host)
 llm-cli build start \
   --model "IBM/granite-3b-code-instruct" \
   --target rockchip \
   --quantization Q4_K_M \
   --task LLM
+  ```
+  
+### Module Development Guidelines
 
-# 3. Output: granite-3b_q4km_aarch64.zip
-# Enthält: Quantisiertes Model + AArch64 Binary + Test Scripts
-```
+**Gold standard directives for all modules:**
 
----
-
-## 📚 Documentation
-
-- 📖 [Getting Started Guide](docs/getting-started.md)
-- 🔧 [Adding New Targets](docs/adding-targets.md)
-- 🤖 [AI-Wizard "Ditto" Guide](docs/ai-wizard.md)
-- 📡 [API Reference](docs/api-reference.md)
-- 💡 [Examples & Tutorials](docs/examples/)
-
----
-
-## 🛠️ Development
-
-### Testing
-```bash
-# Framework-Tests
-poetry run pytest
-
-# Target-Validation
-./scripts/validate-target.sh targets/rockchip
-
-# Integration-Test
-poetry run llm-cli test --target rockchip --model test-model
-```
-
-### Module-Entwicklung Guidelines
-
-**Goldstandard-Direktiven für alle Module:**
-
-**Docker-Container:**
-- ✅ Multi-Stage Build verwenden
-- ✅ BuildX für Multi-Architektur
-- ✅ Hadolint-konforme Syntax
-- ✅ Poetry für Python-Dependencies
+**Docker Containers:**
+- ✅ Use multi-stage builds
+- ✅ BuildX for multi-architecture
+- ✅ Hadolint-compliant syntax
+- ✅ Poetry for Python dependencies
 
 **Scripts (Shell/Python):**
-- ✅ Vollständig funktionsfähig (keine Platzhalter)
-- ✅ Robuste `if not exist` Abfragen
-- ✅ Professional dokumentiert/kommentiert
-- ✅ Isolierte Umgebungen (Container-native)
+- ✅ Fully functional (no placeholders)
+- ✅ Robust `if not exist` checks
+- ✅ Professionally documented/commented
+- ✅ Isolated environments (container-native)
 
 ---
 
-## 📄 Lizenz
+## 📄 License
 
-Dieses Projekt ist lizenziert unter der **MIT License** - siehe die [LICENSE](LICENSE) Datei für Details.
+This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
 
 ---
 
-## 🙏 Danksagung
+## 🙏 Acknowledgments
 
-- **[llama.cpp](https://github.com/ggerganov/llama.cpp)** - Das Herzstück der Inferenz
-- **[Hugging Face](https://huggingface.co/)** - Für das Modell-Ökosystem
-- **[Ditto](https://github.com/yoheinakajima/ditto)** - AI-Agent Framework für automatische Hardware-Modul-Generierung (entwickelt von [@yoheinakajima](https://github.com/yoheinakajima))
-- **[Radxa Community](https://forum.radxa.com/)** - Für den Support bei der RK3566 Integration
-- **[Docker](https://www.docker.com/)** - Containerization Platform
-- **[PySide6](https://doc.qt.io/qtforpython-6/)** - Professional GUI Framework
-- **[Poetry](https://python-poetry.org/)** - Modern Python Dependency Management
+- **[llama.cpp](https://github.com/ggerganov/llama.cpp)** - The heart of inference
+- **[Hugging Face](https://huggingface.co/)** - For the model ecosystem
+- **[Ditto](https://github.com/yoheinakajima/ditto)** - AI agent framework for automatic hardware module generation (developed by [@yoheinakajima](https://github.com/yoheinakajima))
+- **[Radxa Community](https://forum.radxa.com/)** - For support with RK3566 integration
+- **[Docker](https://www.docker.com/)** - Containerization platform
+- **[PySide6](https://doc.qt.io/qtforpython-6/)** - Professional GUI framework
+- **[Poetry](https://python-poetry.org/)** - Modern Python dependency management
 
 ---
 

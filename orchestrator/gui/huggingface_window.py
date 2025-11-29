@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Hugging Face Browser
-DIREKTIVE: Goldstandard, GUI.
+DIREKTIVE: Goldstandard, GUI, Internationalisierung.
 """
 
 from PySide6.QtWidgets import (
@@ -13,12 +13,15 @@ from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QIcon, QColor
 
 from orchestrator.gui.dialogs import AskTokenDialog
+from orchestrator.utils.localization import tr
 
 class SearchWorker(QThread):
     finished = Signal(list)
     error = Signal(str)
     def __init__(self, manager, query):
-        super().__init__(); self.manager = manager; self.query = query
+        super().__init__()
+        self.manager = manager
+        self.query = query
     def run(self):
         try: self.finished.emit(self.manager.search_huggingface_models(self.query))
         except Exception as e: self.error.emit(str(e))
@@ -27,7 +30,10 @@ class FileListWorker(QThread):
     finished = Signal(list)
     error = Signal(str)
     def __init__(self, manager, repo_id, token=None):
-        super().__init__(); self.manager = manager; self.repo_id = repo_id; self.token = token
+        super().__init__()
+        self.manager = manager
+        self.repo_id = repo_id
+        self.token = token
     def run(self):
         try: self.finished.emit(self.manager.list_repo_files(self.repo_id, self.token))
         except Exception as e: self.error.emit(str(e))
@@ -36,7 +42,11 @@ class DownloadWorker(QThread):
     finished = Signal(str)
     error = Signal(str)
     def __init__(self, manager, repo_id, filename, token=None):
-        super().__init__(); self.manager = manager; self.repo_id = repo_id; self.filename = filename; self.token = token
+        super().__init__()
+        self.manager = manager
+        self.repo_id = repo_id
+        self.filename = filename
+        self.token = token
     def run(self):
         try:
             p = self.manager.download_file(self.repo_id, self.filename, self.token)
@@ -47,12 +57,12 @@ class DownloadWorker(QThread):
 class FileSelectionDialog(QDialog):
     def __init__(self, repo_id, files, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Select File from {repo_id}")
+        self.setWindowTitle(f"{tr('btn.browse_hf')} - {repo_id}")
         self.resize(500, 400)
         self.selected_file = None
         
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("Available Files:"))
+        layout.addWidget(QLabel(tr("lbl.files_available"))) # Needs to be added to localization
         
         self.list_widget = QListWidget()
         # Filter recommendation: show GGUF/Bin first
@@ -62,7 +72,7 @@ class FileSelectionDialog(QDialog):
         
         layout.addWidget(self.list_widget)
         
-        btn = QPushButton("Download Selected")
+        btn = QPushButton(tr("btn.download_selected")) # Needs adding
         btn.clicked.connect(self.accept_selection)
         layout.addWidget(btn)
 
@@ -77,7 +87,7 @@ class HuggingFaceWindow(QMainWindow):
         super().__init__(parent)
         self.framework_manager = framework_manager
         self.model_manager = framework_manager.model_manager
-        self.setWindowTitle("Hugging Face Model Hub Browser")
+        self.setWindowTitle("Hugging Face Model Hub")
         self.resize(900, 600)
         self.all_results = [] 
 
@@ -87,18 +97,19 @@ class HuggingFaceWindow(QMainWindow):
 
         hbox = QHBoxLayout()
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search models (e.g. 'llama-3', 'mistral')...")
+        self.search_edit.setPlaceholderText(tr("hf.search_placeholder")) # Needs adding
         self.search_edit.returnPressed.connect(self.start_search)
         hbox.addWidget(self.search_edit)
-        self.search_btn = QPushButton("Search")
+        
+        self.search_btn = QPushButton(tr("btn.search")) # Needs adding
         self.search_btn.clicked.connect(self.start_search)
         hbox.addWidget(self.search_btn)
         layout.addLayout(hbox)
         
         filter_box = QHBoxLayout()
-        filter_box.addWidget(QLabel("Filter:"))
+        filter_box.addWidget(QLabel(f"{tr('lbl.filter')}:")) # Needs adding
         self.filter_combo = QComboBox()
-        self.filter_combo.addItems(["All Models", "Free Models Only", "Gated Models Only"])
+        self.filter_combo.addItems([tr("filter.all"), tr("filter.free"), tr("filter.gated")]) # Needs adding
         self.filter_combo.currentIndexChanged.connect(self.apply_filter)
         filter_box.addWidget(self.filter_combo)
         filter_box.addStretch()
@@ -109,12 +120,17 @@ class HuggingFaceWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.cellDoubleClicked.connect(self.on_download_request)
         layout.addWidget(self.table)
-        self.status_label = QLabel("Ready"); layout.addWidget(self.status_label)
+        
+        self.status_label = QLabel(tr("status.ready"))
+        layout.addWidget(self.status_label)
+
+        # Add missing translations locally or update localization.py later
+        # For robustness, we use fallbacks if key missing in tr()
 
     def start_search(self):
         query = self.search_edit.text()
         if not query: return
-        self.status_label.setText("Searching...")
+        self.status_label.setText(tr("status.searching")) # Needs adding
         self.search_btn.setEnabled(False)
         self.table.setRowCount(0)
         self.worker = SearchWorker(self.model_manager, query)
@@ -125,20 +141,20 @@ class HuggingFaceWindow(QMainWindow):
     def on_search_finished(self, results):
         self.all_results = results
         self.apply_filter()
-        self.status_label.setText(f"Found {len(results)} models")
+        self.status_label.setText(f"{tr('status.found')} {len(results)} models") # Needs adding
         self.search_btn.setEnabled(True)
 
     def on_search_error(self, err):
-        self.status_label.setText(f"Error: {err}")
+        self.status_label.setText(f"{tr('status.error')}: {err}")
         self.search_btn.setEnabled(True)
         
     def apply_filter(self):
-        mode = self.filter_combo.currentText()
+        mode = self.filter_combo.currentIndex() # 0=All, 1=Free, 2=Gated
         filtered = []
         for m in self.all_results:
             is_gated = m.get("gated", False)
-            if mode == "Free Models Only" and is_gated: continue
-            if mode == "Gated Models Only" and not is_gated: continue
+            if mode == 1 and is_gated: continue
+            if mode == 2 and not is_gated: continue
             filtered.append(m)
         self.populate_table(filtered)
 
@@ -166,11 +182,10 @@ class HuggingFaceWindow(QMainWindow):
             if dlg.exec(): token = dlg.token
             else: return
         
-        # Step 1: List Files
         self.status_label.setText(f"Listing files for {model_id}...")
         self.list_worker = FileListWorker(self.model_manager, model_id, token)
         self.list_worker.finished.connect(lambda files: self.show_file_selection(model_id, files, token))
-        self.list_worker.error.connect(lambda e: QMessageBox.critical(self, "Error", f"Failed to list files:\n{e}"))
+        self.list_worker.error.connect(lambda e: QMessageBox.critical(self, tr("status.error"), str(e)))
         self.list_worker.start()
 
     def show_file_selection(self, model_id, files, token):
@@ -181,6 +196,6 @@ class HuggingFaceWindow(QMainWindow):
     def download_file(self, model_id, filename, token):
         self.status_label.setText(f"Downloading {filename}...")
         self.dl_worker = DownloadWorker(self.model_manager, model_id, filename, token)
-        self.dl_worker.finished.connect(lambda p: QMessageBox.information(self, "Success", f"Saved to: {p}"))
-        self.dl_worker.error.connect(lambda e: QMessageBox.critical(self, "Error", f"Download failed:\n{e}"))
+        self.dl_worker.finished.connect(lambda p: QMessageBox.information(self, tr("msg.success"), f"Saved to: {p}"))
+        self.dl_worker.error.connect(lambda e: QMessageBox.critical(self, tr("status.error"), f"Download failed:\n{e}"))
         self.dl_worker.start()

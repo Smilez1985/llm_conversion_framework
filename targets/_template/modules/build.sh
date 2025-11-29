@@ -32,9 +32,21 @@ case "$QUANT_TYPE" in
 [QUANTIZATION_LOGIC]
 
     *)
-        echo ">> Defaulting to FP16 (No specific quantization logic found)..."
-        # Fallback behavior if nothing matches
-        # In a real scenario, we might default to a simple copy or CPU conversion here
+        echo ">> No specific quantization logic matched for '$QUANT_TYPE'."
+        echo ">> Fallback Strategy: Passthrough (Copy Original Model)."
+        
+        if [ -d "$MODEL_SOURCE" ]; then
+            # Hugging Face Repo (Directory) -> Copy content
+            cp -r "$MODEL_SOURCE/"* "$OUTPUT_DIR/"
+        elif [ -f "$MODEL_SOURCE" ]; then
+            # Single File (GGUF/ONNX) -> Copy file
+            cp "$MODEL_SOURCE" "$OUTPUT_DIR/"
+        else
+            echo "❌ Error: Model source '$MODEL_SOURCE' not found or invalid type."
+            exit 1
+        fi
+        
+        echo ">> Original model copied to output (FP16/Source Precision)."
         ;;
 esac
 

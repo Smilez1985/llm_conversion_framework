@@ -1,121 +1,59 @@
 #!/bin/bash
-# rknn_module.sh - ONNX to RKNN Conversion Module
-# Part of LLM Cross-Compiler Framework
-# 
-# DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
-# ZWECK: Konvertiert ONNX-Modelle (Piper-TTS, Vosk, Vision) in das RKNN-Format
-#        für die RK3566/RK3588 NPU. Nutzt die Container-interne Python-Umgebung.
+# rknn_module.sh - RKNN Toolkit Execution Module
+# Optimized for RK3566/RK3588 NPU (Vision/Audio/Generic)
 
 set -euo pipefail
 
-# ============================================================================
-# CONFIGURATION & GLOBALS
-# ============================================================================
+# Environment Variables
+# $MODEL_SOURCE, $QUANTIZATION, $OUTPUT_DIR, $DATASET_PATH (Optional)
 
-readonly SCRIPT_NAME="rknn_module.sh"
-readonly BUILD_CACHE_DIR="${BUILD_CACHE_DIR:-/build-cache}"
-readonly OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_CACHE_DIR}/output}"
-# Pfad zum Python-Script innerhalb des Containers
-readonly SCRIPT_DIR="/app/scripts"
-readonly LOG_LEVEL="${LOG_LEVEL:-INFO}"
+RKNN_TOOLKIT_DIR="/app/rknn-toolkit2"
+BUILD_CACHE_DIR="${BUILD_CACHE_DIR:-/build-cache}"
+OUTPUT_DIR="${OUTPUT_DIR:-${BUILD_CACHE_DIR}/output}"
+SCRIPT_DIR="/app/scripts"
+DATASET="${DATASET_PATH:-}" # Empty if not set
 
-# Default NPU Platform (wird per Argument überschrieben, default rk3566 für dein Board)
-TARGET_PLATFORM="rk3566"
-# Quantization Type: i8 (int8) ist der Standard für NPU-Performance (1 TOPS)
-QUANT_TYPE="i8" 
-
-# ============================================================================
-# LOGGING
-# ============================================================================
-
-log_info() { echo "ℹ️  [$(date '+%H:%M:%S')] [RKNN] $1"; }
-log_success() { echo "✅ [$(date '+%H:%M:%S')] [RKNN] $1"; }
-log_warn() { echo "⚠️  [$(date '+%H:%M:%S')] [RKNN] $1"; }
-log_error() { echo "❌ [$(date '+%H:%M:%S')] [RKNN] $1" >&2; }
-
-die() {
-    log_error "$1"
-    exit "${2:-1}"
-}
-
-# ============================================================================
-# MAIN LOGIC
-# ============================================================================
+log() { echo ">> [RKNN] $1"; }
+die() { echo "❌ [RKNN] $1" >&2; exit 1; }
 
 main() {
-    local input_onnx=""
-    local model_name=""
+    log "Starting RKNN Pipeline..."
+
+    if [[ -z "${MODEL_SOURCE:-}" ]]; then die "MODEL_SOURCE missing."; fi
     
-    # Parse Arguments
-    while [[ $# -gt 0 ]]; do
-        case $1 in
-            --input) input_onnx="$2"; shift 2;;
-            --target) TARGET_PLATFORM="$2"; shift 2;;
-            --quant) QUANT_TYPE="$2"; shift 2;;
-            --model-name) model_name="$2"; shift 2;;
-            *) die "Unbekannter Parameter: $1";;
-        esac
-    done
+    # Quantization Mapping
+    case "${QUANTIZATION:-INT8}" in
+        "INT8"|"i8"|"Q8_0") Q_TYPE="i8";;
+        "FP16"|"f16") Q_TYPE="fp16";;
+        *) log "Warning: Unknown quantization. Defaulting to i8."; Q_TYPE="i8";;
+    esac
+
+    TARGET_PLATFORM="${TARGET_BOARD:-rk3566}"
+    if [[ "$TARGET_PLATFORM" == *"3588"* ]]; then TARGET_PLATFORM="rk3588"; fi
+    if [[ "$TARGET_PLATFORM" == *"3566"* ]]; then TARGET_PLATFORM="rk3566"; fi
+
+    log "Config: Target=$TARGET_PLATFORM, Quant=$Q_TYPE"
+    if [[ -n "$DATASET" ]]; then log "Dataset: $DATASET"; else log "Dataset: None (Hybrid Mode)"; fi
+
+    CONVERTER="$SCRIPT_DIR/rknn_converter.py"
+    if [ ! -f "$CONVERTER" ]; then die "Converter script missing."; fi
     
-    # Validation
-    if [[ -z "$input_onnx" ]]; then die "Input ONNX file required (--input)"; fi
-    if [[ ! -f "$input_onnx" ]]; then die "ONNX file not found: $input_onnx"; fi
+    MODEL_NAME=$(basename "$MODEL_SOURCE")
+    OUTPUT_FILE="$OUTPUT_DIR/${MODEL_NAME%.*}_${TARGET_PLATFORM}_${Q_TYPE}.rknn"
     
-    # Auto-generate model name if missing
-    if [[ -z "$model_name" ]]; then 
-        model_name=$(basename "$input_onnx" .onnx)
+    log "Running Python Converter..."
+    
+    # Build Args
+    ARGS=("--model" "$MODEL_SOURCE" "--output" "$OUTPUT_FILE" "--target" "$TARGET_PLATFORM" "--dtype" "$Q_TYPE")
+    if [[ -n "$DATASET" ]]; then
+        ARGS+=("--dataset" "$DATASET")
     fi
     
-    # Setup Output Paths
-    mkdir -p "$OUTPUT_DIR/rknn"
-    local output_rknn="$OUTPUT_DIR/rknn/${model_name}_${TARGET_PLATFORM}_${QUANT_TYPE}.rknn"
-    
-    log_info "🚀 Starte RKNN Konvertierung..."
-    log_info "Model: $model_name"
-    log_info "Input: $input_onnx"
-    log_info "Target Platform: $TARGET_PLATFORM"
-    log_info "Quantization: $QUANT_TYPE"
-    
-    # Check Python Converter Script
-    if [[ ! -f "$SCRIPT_DIR/rknn_converter.py" ]]; then
-        die "Helper script missing: $SCRIPT_DIR/rknn_converter.py"
-    fi
-    
-    # Execute Python Conversion
-    # Wir nutzen 'python3' direkt, da die Umgebung (rknn-toolkit2) im Dockerfile
-    # und source_module.sh global installiert wurde.
-    
-    local start_time=$SECONDS
-    
-    if python3 "$SCRIPT_DIR/rknn_converter.py" \
-        --model "$input_onnx" \
-        --output "$output_rknn" \
-        --target "$TARGET_PLATFORM" \
-        --dtype "$QUANT_TYPE"; then
-        
-        local duration=$((SECONDS - start_time))
-        
-        # Validate Output
-        if [[ -f "$output_rknn" ]]; then
-             local size_mb=$(du -m "$output_rknn" | cut -f1)
-             log_success "Konvertierung erfolgreich in ${duration}s!"
-             log_success "RKNN Model: $output_rknn ($size_mb MB)"
-             
-             # Create Metadata for Orchestrator / Deployment
-             echo "rknn_model_path=$output_rknn" > "$OUTPUT_DIR/rknn_build_info.txt"
-             echo "target_platform=$TARGET_PLATFORM" >> "$OUTPUT_DIR/rknn_build_info.txt"
-             echo "quantization=$QUANT_TYPE" >> "$OUTPUT_DIR/rknn_build_info.txt"
-        else
-             die "Output file missing despite success message."
-        fi
-        
+    if python3 "$CONVERTER" "${ARGS[@]}"; then
+        log "Success: $OUTPUT_FILE"
     else
-        log_error "Python conversion script failed."
-        log_warn "Tipp: Prüfen Sie die Logs oben auf ONNX-Fehler oder Versionskonflikte."
-        exit 1
+        die "Python conversion failed."
     fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
-fi
+main "$@"

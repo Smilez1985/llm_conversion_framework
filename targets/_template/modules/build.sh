@@ -34,7 +34,6 @@ case "$QUANT_TYPE" in
     *)
         echo ">> Defaulting to FP16 (No specific quantization logic found)..."
         # Fallback behavior if nothing matches
-        # In a real scenario, we might default to a simple copy or CPU conversion here
         ;;
 esac
 

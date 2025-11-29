@@ -1,6 +1,7 @@
 #!/bin/bash
 # rkllm_module.sh - RKLLM Toolkit Execution Module (Rockchip Specific)
 # Optimized for RK3588/RK3576 NPU LLM Acceleration
+# Part of LLM Cross-Compiler Framework
 
 set -euo pipefail
 
@@ -39,17 +40,21 @@ main() {
     esac
 
     # Platform Logic
-    # Rockchip specific: Check if user forced 3576 via TARGET_BOARD env, else 3588
     TARGET_PLATFORM="rk3588"
     if [[ "${TARGET_BOARD:-}" == *"3576"* ]]; then TARGET_PLATFORM="rk3576"; fi
 
     # Ensure Toolkit
     if [ ! -d "$RKLLM_DIR" ]; then
         log_info "Cloning RKLLM Toolkit..."
-        git clone "https://github.com/airockchip/rknn-llm.git" "$RKLLM_DIR" || die "Clone failed."
+        # Fallback URL
+        REPO="https://github.com/airockchip/rknn-llm.git"
+        # Try to use env var if set by builder
+        if [ -n "${RKLLM_TOOLKIT_REPO_OVERRIDE:-}" ]; then REPO="$RKLLM_TOOLKIT_REPO_OVERRIDE"; fi
+        
+        git clone "$REPO" "$RKLLM_DIR" || die "Clone failed."
     fi
 
-    # Run Python Exporter
+    # Run Python Exporter (Clean Call)
     CONVERTER="$SCRIPT_DIR/export_rkllm.py"
     if [ ! -f "$CONVERTER" ]; then die "Script $CONVERTER missing."; fi
     
@@ -65,10 +70,18 @@ main() {
         --quant "$Q_TYPE" \
         --target "$TARGET_PLATFORM"
     
-    if [ $? -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
+    EXIT_CODE=$?
+    set -e
+    
+    if [ $EXIT_CODE -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
         log_info "✅ Artifact Created: $OUTPUT_FILE"
+        
+        # Metadata
+        echo "framework=rkllm" > "$OUTPUT_DIR/model_info.txt"
+        echo "platform=$TARGET_PLATFORM" >> "$OUTPUT_DIR/model_info.txt"
+        echo "quantization=$Q_TYPE" >> "$OUTPUT_DIR/model_info.txt"
     else
-        die "Conversion failed."
+        die "Conversion failed with exit code $EXIT_CODE."
     fi
 }
 

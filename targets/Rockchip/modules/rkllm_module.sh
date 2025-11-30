@@ -44,7 +44,8 @@ ensure_rkllm_installed() {
     log_info "Found wheel: $WHEEL_FILE"
     log_info "Installing via pip..."
 
-    if pip install "$WHEEL_FILE"; then
+    # FIX: Use python3 -m pip for consistency
+    if python3 -m pip install "$WHEEL_FILE"; then
         log_info "Installation successful."
     else
         die "Failed to install RKLLM wheel."
@@ -80,7 +81,7 @@ main() {
         git clone "$REPO_URL" "$RKLLM_DIR" || die "Clone failed."
     fi
 
-    # 4. Toolkit Installation (Install Wheel) -- NEU
+    # 4. Toolkit Installation (Install Wheel)
     ensure_rkllm_installed
 
     # 5. Run Python Exporter

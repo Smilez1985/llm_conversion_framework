@@ -6,48 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.3.0] - 2025-11-29
+**Production Ready Release.** Focuses on full internationalization, security hardening, and closing the loop between GUI and Build Engine.
+
 ### Added
-- **Internationalization (I18n):** Complete support for English and German user interfaces.
-- **LocalizationManager:** Centralized service for dynamic language switching (`orchestrator/utils/localization.py`).
-- **GUI Enhancements:**
-    - New Dropdowns for **Task** (LLM, Voice, VLM) and **Quantization** (INT8, INT4, FP16).
-    - Added **"Use GPU"** checkbox for NVIDIA Passthrough.
-    - Integrated Language Selection Dialog on first start.
-- **Dataset Detection:** GUI now auto-detects `dataset.txt` for INT8 quantization or asks the user.
+- **I18n Support:** Full English/German localization for GUI and Wizard.
+- **Security Hardening:** Integrated Socket Proxy to isolate the Orchestrator from the Host Docker Daemon.
+- **UX Enhancements:** Added "Use GPU", Task (LLM/Voice), and Quantization selectors to Main Window.
+- **Smart Dataset:** Automatic detection of `dataset.txt` for INT8 calibration with fallback prompts.
 
 ### Changed
-- **Refactoring:** Updated all GUI components (`main_window.py`, `wizards.py`, `dialogs.py`) to use dynamic translation keys.
-- **Dependencies:** Added `litellm`, `rich`, and `psutil` to `pyproject.toml`.
+- **Refactoring:** Centralized text resources in `LocalizationManager`.
+- **Dependencies:** Added `litellm`, `rich`, and `psutil` to core requirements.
+- **Docker:** Removed static builder services in favor of dynamic spawning.
 
 ## [1.2.0] - 2025-11-29
-### Added
-- **AI Wizard (Ditto):** Integration of AI-powered hardware discovery.
-    - `ditto_manager.py`: Analyzes `hardware_probe` output and fetches SDK documentation from SSOT.
-    - Generates build logic dynamically (Bash `case` statements).
-- **Smart Dispatcher:** New `build.sh` template that dispatches tasks based on Hardware (RK3588 vs RK3566) and Task Type (LLM vs Voice).
-- **Templates:** Added `rkllm_module.sh` and `rknn_module.sh` templates for automated module generation.
+**AI Integration Release.** Introduces the Ditto Agent for automated hardware discovery and target generation.
 
-### Security
-- **Socket Proxy:** Replaced direct Docker Socket mount with `tecnativa/docker-socket-proxy` to isolate the Orchestrator.
-- **Trivy Scanner:** Integrated `trivy-infra-scanner` service for automated vulnerability checks.
-- **Input Validation:** Hardened `hardware_probe.ps1` with C# Native API injection for safe CPU flag detection.
+### Added
+- **Ditto AI Agent:** Automated analysis of hardware probes and documentation fetching from SSOT.
+- **Smart Dispatcher:** Implemented dynamic `build.sh` template handling Task and Hardware routing.
+- **Templates:** Added `rkllm_module` and `rknn_module` templates for Rockchip NPU support.
+- **Security:** Added `trivy-infra-scanner` for automated container vulnerability auditing.
+
+### Changed
+- **Hardware Probe:** Hardened Windows detection using Native API (C# Injection) for reliable CPU flags.
+- **Pipeline:** Decoupled Python generation logic from Bash scripts.
 
 ## [1.1.0] - 2025-11-28
+**Architecture Refactoring.** Decouples the core builder from specific target logic to enable universal cross-compilation.
+
 ### Changed
-- **Architecture:** Decoupled Builder from specific target logic. Removed hardcoded `TargetArch` enums.
-- **Clean Code:** Removed "Spaghetti Code" (Python inside Bash heredocs).
-    - Extracted `export_rkllm.py` and `rknn_converter.py` as standalone scripts.
-    - Updated `module_generator.py` to copy physical scripts instead of generating them.
-- **Docker:** Removed static `rockchip-builder` service from `docker-compose.yml`. Builders are now spawned dynamically.
+- **Architecture:** Removed hardcoded `TargetArch` enums; Builder is now target-agnostic.
+- **Clean Code:** Extracted inline Python code from Bash scripts into standalone files.
+- **Builder:** Switched to dynamic volume mounting for module execution.
 
 ### Fixed
-- Fixed `setup_windows.py` crashing on list/set operations.
-- Fixed missing Cross-Compilers (`gcc-aarch64-linux-gnu`) in Dockerfile templates.
+- **Stability:** Fixed list/set type errors in Windows installer.
+- **Cross-Compilation:** Added missing cross-compilers (`gcc-aarch64`) to Docker templates.
 
 ## [1.0.0] - 2025-11-20
+**Initial Release.** Establishes the core framework structure and basic Rockchip support.
+
 ### Added
-- Initial Release.
 - Core Framework structure (Orchestrator, Builder, Docker Manager).
 - Basic support for Rockchip RK3588/RK3566 cross-compilation.
 - CLI (`llm-cli`) and GUI (`llm-gui`) entry points.
-- Hardware Probe scripts for Linux and Windows.

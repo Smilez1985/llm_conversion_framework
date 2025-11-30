@@ -237,9 +237,13 @@ class ConfigManager:
             ConfigSchema("api_enabled", bool, False, False, "Enable API server"),
             ConfigSchema("api_port", int, False, 8000, "API server port"),
             ConfigSchema("api_host", str, False, "127.0.0.1", "API server host"),
+            
             # I18N & Security
             ConfigSchema("language", str, False, "en", "Interface Language (en/de)"),
-            ConfigSchema("ai_security_level", str, False, "STRICT", "AI Data Leakage Protection Level")
+            ConfigSchema("ai_security_level", str, False, "STRICT", "AI Data Leakage Protection Level"),
+            
+            # Local RAG / Vector Database (v1.5.0)
+            ConfigSchema("enable_rag_knowledge", bool, False, False, "Enable local Qdrant Vector DB for AI (Experimental)")
         ]
         
         for schema in core_schemas:
@@ -404,7 +408,7 @@ class ConfigManager:
         with self._lock:
             for key, val in self.config_values.items():
                 # Persist only specific keys (Language, AI Settings, etc.)
-                if key in ["language", "ai_security_level", "gui_theme", "docker_registry"]:
+                if key in ["language", "ai_security_level", "gui_theme", "docker_registry", "enable_rag_knowledge"]:
                      data[key] = val.value
         
         try:

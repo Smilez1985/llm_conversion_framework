@@ -24,7 +24,7 @@ ENV BUILD_CACHE_DIR=/build-cache
 ENV PATH="/root/.local/bin:$PATH"
 
 # System Dependencies
-# {packages_str} will be replaced by the wizard with target specific packages
+# The wizard automatically injects cross-compilers here if needed
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential cmake make git curl wget ca-certificates \
@@ -65,7 +65,6 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* && apt-get clean
 
 # Copy Python Environment from Builder
-# Adjust python version path if base image changes!
 COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 

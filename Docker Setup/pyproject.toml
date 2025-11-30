@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "llm-conversion-framework"
-version = "1.3.0"
+version = "1.4.0"
 description = "Universal LLM Cross-Compiler for Edge Hardware (Rockchip, NVIDIA, etc.)"
 authors = ["Smilez1985 <contact@framework.org>"]
 license = "MIT"
@@ -14,14 +14,11 @@ pyyaml = "^6.0.1"
 requests = "^2.31.0"
 pyside6 = "^6.6.0"
 huggingface-hub = "^0.20.0"
-# NEU: Für Ditto AI Agent
-litellm = "^1.0.0"
-# NEU: Für CLI Output
-rich = "^13.7.0"
-# NEU: Für Hardware Probe Helper
-psutil = "^5.9.0"
-# NEU: Für Secrets Management (AES-256 Encryption)
-cryptography = "^41.0.0"
+# Dependencies für v1.4.0 Features
+litellm = "^1.0.0"      # AI Agent (Ditto)
+rich = "^13.7.0"        # CLI UI
+psutil = "^5.9.0"       # Hardware Probe
+cryptography = "^41.0.0" # Secrets Manager
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"

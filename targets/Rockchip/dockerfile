@@ -26,14 +26,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Python Environment Setup
-RUN python3 -m pip3 install --no-cache-dir --upgrade pip setuptools wheel
+RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # Install CPU-only PyTorch to save space (Builder runs on Host CPU)
-RUN python3 -m pip3 install --no-cache-dir \
+RUN python3 -m pip install --no-cache-dir \
         torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 # Install Framework Dependencies
-RUN python3 -m pip3 install --no-cache-dir \
+RUN python3 -m pip install --no-cache-dir \
         transformers tokenizers safetensors sentencepiece protobuf \
         huggingface-hub datasets numpy scipy onnx onnxruntime \
         tqdm psutil pyyaml requests
@@ -49,13 +49,13 @@ WORKDIR /tmp
 RUN git clone -b release-v1.2.1b1 https://github.com/airockchip/rknn-llm.git && \
     # Find and install the python 3.11 wheel (Debian Bookworm uses py3.11)
     # Pattern: rkllm_toolkit-*-cp311-cp311-linux_x86_64.whl
-    pip3 install --no-cache-dir rknn-llm/rkllm-toolkit/packages/rkllm_toolkit-*-cp311-cp311-linux_x86_64.whl && \
+    pip install --no-cache-dir rknn-llm/rkllm-toolkit/packages/rkllm_toolkit-*-cp311-cp311-linux_x86_64.whl && \
     rm -rf rknn-llm
 
 # 2. RKNN-Toolkit2 (for Vision/Voice on RK3566/RK3588)
 # Using tag 'v2.0.0-beta0'
 RUN git clone -b v2.0.0-beta0 https://github.com/airockchip/rknn-toolkit2.git && \
-    pip3 install --no-cache-dir rknn-toolkit2/rknn-toolkit2/packages/rknn_toolkit2-*-cp311-cp311-linux_x86_64.whl && \
+    pip install --no-cache-dir rknn-toolkit2/rknn-toolkit2/packages/rknn_toolkit2-*-cp311-cp311-linux_x86_64.whl && \
     rm -rf rknn-toolkit2
 
 # Verification (Fails build if installation broke)

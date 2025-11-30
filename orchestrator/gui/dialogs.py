@@ -2,6 +2,10 @@
 """
 LLM Cross-Compiler Framework - Dialogs
 DIREKTIVE: Goldstandard, GUI-Komponenten, Internationalisierung.
+
+Updates v1.5.0:
+- AIConfigurationDialog: Checkbox für 'Local Knowledge Base' (RAG) hinzugefügt.
+- Layout-Optimierungen für bessere UX.
 """
 
 import requests
@@ -9,7 +13,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
     QComboBox, QLineEdit, QLabel, QPushButton, QApplication,
     QGroupBox, QRadioButton, QButtonGroup, QStackedWidget, QWidget,
-    QTextEdit, QMessageBox, QPlainTextEdit
+    QTextEdit, QMessageBox, QPlainTextEdit, QCheckBox
 )
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -118,7 +122,9 @@ class AIConfigurationDialog(QDialog):
     def _init_ui(self):
         layout = QVBoxLayout(self)
         
-        form = QFormLayout()
+        # --- Provider & Model ---
+        grp_model = QGroupBox("Model Selection")
+        form = QFormLayout(grp_model)
         self.provider_combo = QComboBox()
         self.provider_combo.addItems(self.PROVIDERS.keys())
         self.provider_combo.currentTextChanged.connect(self._update_models)
@@ -127,9 +133,11 @@ class AIConfigurationDialog(QDialog):
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
         form.addRow(tr("dlg.ai.model"), self.model_combo)
+        layout.addWidget(grp_model)
         
-        layout.addLayout(form)
-        
+        # --- Authentication ---
+        grp_auth = QGroupBox("Authentication")
+        auth_layout = QVBoxLayout(grp_auth)
         self.stack = QStackedWidget()
         
         # Page 1: API Key
@@ -149,10 +157,30 @@ class AIConfigurationDialog(QDialog):
         local_layout.addRow(tr("dlg.ai.base_url"), self.base_url_edit)
         self.stack.addWidget(self.page_local)
         
-        layout.addWidget(self.stack)
+        auth_layout.addWidget(self.stack)
+        layout.addWidget(grp_auth)
+        
+        # --- RAG / Knowledge Base (NEW v1.5.0) ---
+        grp_rag = QGroupBox("Expert Knowledge (RAG)")
+        rag_layout = QVBoxLayout(grp_rag)
+        
+        # Checkbox with explicit text (fallback logic if translation missing)
+        rag_text = "Enable Local Knowledge Base (RAG) [Experimental]"
+        if tr("dlg.ai.enable_rag") != "dlg.ai.enable_rag":
+            rag_text = tr("dlg.ai.enable_rag")
+            
+        self.chk_rag = QCheckBox(rag_text)
+        self.chk_rag.setToolTip(
+            "Downloads and starts Qdrant Vector DB (~50MB).\n"
+            "Enables Ditto to search local documentation instead of guessing."
+        )
+        rag_layout.addWidget(self.chk_rag)
+        
+        layout.addWidget(grp_rag)
         
         self._update_models(self.provider_combo.currentText())
         
+        # --- Buttons ---
         btns = QHBoxLayout()
         self.btn_cancel = QPushButton(tr("btn.cancel"))
         self.btn_cancel.clicked.connect(self.reject)
@@ -177,7 +205,12 @@ class AIConfigurationDialog(QDialog):
     def get_config(self):
         provider = self.provider_combo.currentText()
         model = self.model_combo.currentText()
-        config = {"provider": provider, "model": model}
+        config = {
+            "provider": provider, 
+            "model": model,
+            "enable_rag_knowledge": self.chk_rag.isChecked()
+        }
+        
         if self.stack.currentWidget() == self.page_cloud:
             config["api_key"] = self.api_key_edit.text()
             config["base_url"] = None

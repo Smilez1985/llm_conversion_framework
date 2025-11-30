@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Windows Build Script für LLM Cross-Compiler Framework
-DIREKTIVE: Goldstandard, definiert die PyInstaller-Argumente für ein externes Programm.
-ZWECK: Stellt die Liste der Argumente für den Build des GUI-Launchers bereit.
+Windows Build Script für LLM Cross-Compiler Framework (Main App)
+DIREKTIVE: Goldstandard. Konfiguration für externe Build-Tools.
+ZWECK: Definiert PYINSTALLER_CMD_ARGS für den Bau einer Einzeldatei-EXE (--onefile).
 """
+
 import os
 import sys
 from pathlib import Path
@@ -32,6 +33,11 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     "--hidden-import", "shutil",
     "--hidden-import", "win32api",
     "--hidden-import", "win32con",
+    "--hidden-import", "huggingface_hub",
+    "--hidden-import", "tqdm",
+    "--hidden-import", "psutil",
+    "--hidden-import", "requests",
+    "--hidden-import", "PySide6",
 
     # FIX: Collect-All für komplexe Pakete
     "--collect-all", "orchestrator", 
@@ -39,6 +45,8 @@ PYINSTALLER_CMD_ARGS: List[str] = [
     "--collect-all", "yaml",       
     "--collect-all", "requests",
     "--collect-all", "rich", 
+    "--collect-all", "huggingface_hub",
+    "--collect-all", "tqdm",
     
     # Data Files (Ordner und Configs einpacken)
     # Syntax: "Quellpfad;Zielpfad" (für Windows)
@@ -64,4 +72,4 @@ BUILD_METADATA: Dict[str, Any] = {
 # --- Selbst-Test (Optional: Wenn man das Skript direkt ausführt) ---
 if __name__ == "__main__":
     print("Diese Datei ist eine Konfiguration für das ExeBuilder Framework.")
-    print("Bitte ziehen Sie diese Datei in die GUI des Builders.")
+    print("Bitte nutzen Sie den externen Builder oder importieren Sie diese Config.")

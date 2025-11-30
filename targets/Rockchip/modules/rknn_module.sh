@@ -43,11 +43,11 @@ ensure_rknn_installed() {
     fi
     
     log "Installing $WHEEL_FILE..."
-    # --no-deps oft sicherer, wenn wir deps schon im Dockerfile haben, aber hier normal:
-    pip install "$WHEEL_FILE" || die "Pip install failed."
+    # FIX: Use python3 -m pip
+    python3 -m pip install "$WHEEL_FILE" || die "Pip install failed."
     
     # Optional: Requirements installieren
-    # pip install -r "$RKNN_TOOLKIT_DIR/packages/requirements_$PY_VER-*.txt"
+    # python3 -m pip install -r "$RKNN_TOOLKIT_DIR/packages/requirements_$PY_VER-*.txt"
 }
 
 main() {

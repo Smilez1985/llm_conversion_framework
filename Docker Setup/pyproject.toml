@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "llm-conversion-framework"
-version = "1.4.0"
+version = "1.5.0"
 description = "Universal LLM Cross-Compiler for Edge Hardware (Rockchip, NVIDIA, etc.)"
 authors = ["Smilez1985 <contact@framework.org>"]
 license = "MIT"
@@ -19,6 +19,8 @@ litellm = "^1.0.0"      # AI Agent (Ditto)
 rich = "^13.7.0"        # CLI UI
 psutil = "^5.9.0"       # Hardware Probe
 cryptography = "^41.0.0" # Secrets Manager
+# Dependencies für v1.5.0 Features
+qdrant-client = "^1.16.0" # Local RAG Vector DB (Dynamic Sidecar)
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"

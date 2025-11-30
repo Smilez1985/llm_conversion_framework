@@ -21,40 +21,69 @@ log_error() { echo ">> [RKLLM-Rockchip] $(date '+%H:%M:%S') ERROR: $1" >&2; }
 die() { log_error "$1"; exit 1; }
 
 # ============================================================================
+# HELPER: INSTALLATION LOGIC
+# ============================================================================
+
+ensure_rkllm_installed() {
+    if python3 -c "import rkllm" &> /dev/null; then
+        log_info "RKLLM Python package is already installed."
+        return 0
+    fi
+
+    log_info "RKLLM package missing. Attempting to install from repository..."
+    
+    # Suche nach dem Wheel im geklonten Repo
+    # Pfad-Struktur ist meist: rknn-llm/rkllm-toolkit/packages/rkllm_toolkit-*.whl
+    # Wir suchen rekursiv, um sicherzugehen
+    WHEEL_FILE=$(find "$RKLLM_DIR" -name "rkllm_toolkit*.whl" | head -n 1)
+
+    if [[ -z "$WHEEL_FILE" ]]; then
+        die "No RKLLM wheel found in $RKLLM_DIR. Cannot install SDK."
+    fi
+
+    log_info "Found wheel: $WHEEL_FILE"
+    log_info "Installing via pip..."
+
+    if pip install "$WHEEL_FILE"; then
+        log_info "Installation successful."
+    else
+        die "Failed to install RKLLM wheel."
+    fi
+}
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
 main() {
     log_info "Starting RKLLM Pipeline for Rockchip Target..."
 
-    # Input Check
+    # 1. Input Check
     if [[ -z "$MODEL_SOURCE" || ! -d "$MODEL_SOURCE" ]]; then
         die "Invalid MODEL_SOURCE: '$MODEL_SOURCE'. Must be a directory (HuggingFace format)."
     fi
 
-    # Quantization Logic
+    # 2. Quantization Logic
     case "${QUANTIZATION}" in
         "w8a8"|"W8A8"|"INT8"|"Q8_0") Q_TYPE="w8a8" ;;
         "w4a16"|"W4A16"|"INT4"|"Q4_K_M") Q_TYPE="w4a16" ;;
         *) log_info "Fallback to w8a8 quantization."; Q_TYPE="w8a8" ;;
     esac
 
-    # Platform Logic
     TARGET_PLATFORM="rk3588"
     if [[ "${TARGET_BOARD:-}" == *"3576"* ]]; then TARGET_PLATFORM="rk3576"; fi
 
-    # Ensure Toolkit
+    # 3. Toolkit Setup (Clone)
     if [ ! -d "$RKLLM_DIR" ]; then
         log_info "Cloning RKLLM Toolkit..."
-        # Fallback URL
-        REPO="https://github.com/airockchip/rknn-llm.git"
-        # Try to use env var if set by builder
-        if [ -n "${RKLLM_TOOLKIT_REPO_OVERRIDE:-}" ]; then REPO="$RKLLM_TOOLKIT_REPO_OVERRIDE"; fi
-        
-        git clone "$REPO" "$RKLLM_DIR" || die "Clone failed."
+        REPO_URL="${RKLLM_TOOLKIT_REPO_OVERRIDE:-https://github.com/airockchip/rknn-llm.git}"
+        git clone "$REPO_URL" "$RKLLM_DIR" || die "Clone failed."
     fi
 
-    # Run Python Exporter (Clean Call)
+    # 4. Toolkit Installation (Install Wheel) -- NEU
+    ensure_rkllm_installed
+
+    # 5. Run Python Exporter
     CONVERTER="$SCRIPT_DIR/export_rkllm.py"
     if [ ! -f "$CONVERTER" ]; then die "Script $CONVERTER missing."; fi
     
@@ -70,18 +99,10 @@ main() {
         --quant "$Q_TYPE" \
         --target "$TARGET_PLATFORM"
     
-    EXIT_CODE=$?
-    set -e
-    
-    if [ $EXIT_CODE -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
+    if [ $? -eq 0 ] && [ -f "$OUTPUT_FILE" ]; then
         log_info "✅ Artifact Created: $OUTPUT_FILE"
-        
-        # Metadata
-        echo "framework=rkllm" > "$OUTPUT_DIR/model_info.txt"
-        echo "platform=$TARGET_PLATFORM" >> "$OUTPUT_DIR/model_info.txt"
-        echo "quantization=$Q_TYPE" >> "$OUTPUT_DIR/model_info.txt"
     else
-        die "Conversion failed with exit code $EXIT_CODE."
+        die "Conversion failed."
     fi
 }
 

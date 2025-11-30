@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Ditto Manager (AI Hardware Agent)
-DIREKTIVE: Goldstandard. Pre-Fetch Docs & Smart Prompts.
+DIREKTIVE: Goldstandard. RAG-Enabled Expert System (v1.5.0).
 
 This manager orchestrates the AI-based analysis of hardware probes.
 It fetches context (documentation), constructs prompts, and validates
 the AI's output before passing it to the ModuleGenerator.
+
+UPDATES v1.5.0:
+- Integrated RAG retrieval via Qdrant (Hybrid approach: Vector DB -> Web Fallback).
+- Context-aware prompting based on indexed knowledge.
 """
 
 import json
@@ -23,20 +27,39 @@ except ImportError:
 from orchestrator.utils.logging import get_logger
 from orchestrator.Core.module_generator import ModuleGenerator
 
+# V1.5.0 Integration
+from orchestrator.Core.rag_manager import RAGManager
+
 class DittoCoder:
     """
     AI Agent that analyzes hardware probe dumps and generates
     optimized build configurations using LLMs.
-    Supports ALL providers via litellm abstraction.
+    
+    Capabilities:
+    - Multi-Provider Support (OpenAI, Anthropic, Ollama, etc.)
+    - RAG Support: Queries local Qdrant vector DB for SDK specifics.
+    - Web Fallback: Downloads docs if RAG is empty/disabled.
     """
     
     def __init__(self, provider: str = "OpenAI", model: str = "gpt-4o", 
                  api_key: Optional[str] = None, base_url: Optional[str] = None,
-                 config_manager = None):
+                 config_manager = None, framework_manager = None):
+        """
+        Initialize the AI Agent.
+        
+        Args:
+            provider: AI Service Provider
+            model: Model Name
+            api_key: API Credential
+            base_url: Optional Endpoint (for LocalAI/Ollama)
+            config_manager: Access to configuration
+            framework_manager: Access to Core Components (RAGManager) - NEW in v1.5.0
+        """
         self.logger = get_logger(__name__)
         self.provider = provider
         self.base_url = base_url
         self.config_manager = config_manager
+        self.framework_manager = framework_manager
         self.litellm_model = self._format_model_name(provider, model)
         
         # Set API Keys securely only for this instance context if possible
@@ -54,42 +77,81 @@ class DittoCoder:
         if "Google" in provider: return f"gemini/{model}"
         return model
 
+    def _get_rag_manager(self) -> Optional[RAGManager]:
+        """Retrieves the RAG Manager instance if enabled and available."""
+        if not self.framework_manager:
+            return None
+            
+        # Check Config
+        rag_enabled = False
+        if hasattr(self.framework_manager.config, 'enable_rag_knowledge'):
+            rag_enabled = self.framework_manager.config.enable_rag_knowledge
+        
+        if not rag_enabled:
+            return None
+            
+        return self.framework_manager.get_component("rag_manager")
+
     def _fetch_documentation(self, sdk_name: str) -> str:
         """
-        Fetches documentation text from URLs defined in SSOT (project_sources.yml).
-        This gives the AI 'Ground Truth' knowledge.
+        Fetches documentation context for the AI.
+        
+        Strategy (v1.5.0 Hybrid):
+        1. RAG Search: Query local Vector DB for specific SDK build flags.
+        2. Fallback: Fetch URL defined in SSOT (project_sources.yml).
         """
-        if not self.config_manager: return ""
-        
-        sources = self.config_manager.get("source_repositories", {})
-        url = ""
-        
-        # Search logic for flattened or nested configs
-        doc_key_suffix = "docs_workflow"
-        
-        for key, val in sources.items():
-            # Check if key matches SDK (e.g. 'rockchip' in 'rockchip_npu')
-            if sdk_name.lower() in key.lower():
-                if isinstance(val, dict) and doc_key_suffix in val:
-                    url = val[doc_key_suffix]
-                    break
-                elif key.endswith(doc_key_suffix) and isinstance(val, str):
-                    url = val
-                    break
-        
-        if not url or not url.startswith("http"): 
-            self.logger.debug(f"No documentation URL found for SDK: {sdk_name}")
-            return ""
-        
-        try:
-            self.logger.info(f"Fetching docs from {url}...")
-            # Timeout wichtig!
-            resp = requests.get(url, timeout=10)
-            if resp.status_code == 200:
-                return resp.text[:15000] # Limit context
-        except Exception as e:
-            self.logger.warning(f"Doc fetch failed: {e}")
-        return ""
+        context_text = ""
+        used_source = "None"
+
+        # --- STRATEGY 1: LOCAL RAG (Expert Mode) ---
+        rag = self._get_rag_manager()
+        if rag:
+            self.logger.info(f"Querying Knowledge Base for '{sdk_name}'...")
+            # Query design: Specific enough to find build flags, generic enough to find the SDK
+            query = f"{sdk_name} SDK compilation flags build configuration optimization parameters"
+            results = rag.search(query, limit=5, score_threshold=0.65)
+            
+            if results:
+                self.logger.info(f"RAG Hit: Found {len(results)} relevant snippets.")
+                context_text += "--- EXPERT KNOWLEDGE (Local RAG) ---\n"
+                for res in results:
+                    context_text += f"\n[Source: {res.source}]\n{res.content}\n"
+                used_source = "RAG (Qdrant)"
+                return context_text # Return early if we have good data? Or append web?
+                                    # Decision: RAG is usually better segmented. We return RAG.
+
+        # --- STRATEGY 2: NAIVE WEB RETRIEVAL (Fallback) ---
+        if not context_text and self.config_manager:
+            self.logger.info(f"RAG empty or disabled. Fallback to Web Retrieval for {sdk_name}...")
+            
+            sources = self.config_manager.get("source_repositories", {})
+            url = ""
+            doc_key_suffix = "docs_workflow"
+            
+            # Search logic for flattened or nested configs
+            for key, val in sources.items():
+                if sdk_name.lower() in key.lower():
+                    if isinstance(val, dict) and doc_key_suffix in val:
+                        url = val[doc_key_suffix]
+                        break
+                    elif key.endswith(doc_key_suffix) and isinstance(val, str):
+                        url = val
+                        break
+            
+            if url and url.startswith("http"): 
+                try:
+                    self.logger.info(f"Fetching docs from {url}...")
+                    resp = requests.get(url, timeout=10)
+                    if resp.status_code == 200:
+                        # Limit context to avoid token overflow
+                        clean_text = resp.text[:15000] 
+                        context_text = f"--- WEB KNOWLEDGE ({url}) ---\n{clean_text}"
+                        used_source = "Web Scraper"
+                except Exception as e:
+                    self.logger.warning(f"Doc fetch failed: {e}")
+
+        self.logger.debug(f"Documentation Context Source: {used_source}")
+        return context_text
 
     def generate_module_content(self, probe_file: Path) -> Dict[str, Any]:
         """
@@ -106,12 +168,14 @@ class DittoCoder:
         
         # 2. Determine SDK Hint for Doc Fetching
         sdk_hint = "generic"
-        if "nvidia" in probe_data.lower() or "tegra" in probe_data.lower(): sdk_hint = "nvidia"
-        elif "rockchip" in probe_data.lower() or "rk3" in probe_data.lower(): sdk_hint = "rockchip"
-        elif "hailo" in probe_data.lower(): sdk_hint = "hailo"
-        elif "intel" in probe_data.lower(): sdk_hint = "intel"
+        lower_probe = probe_data.lower()
+        if "nvidia" in lower_probe or "tegra" in lower_probe: sdk_hint = "nvidia"
+        elif "rockchip" in lower_probe or "rk3" in lower_probe: sdk_hint = "rockchip"
+        elif "hailo" in lower_probe: sdk_hint = "hailo"
+        elif "intel" in lower_probe: sdk_hint = "intel"
+        elif "riscv" in lower_probe: sdk_hint = "riscv"
         
-        # 3. Load Documentation Context
+        # 3. Fetch Context (RAG or Web)
         doc_context = self._fetch_documentation(sdk_hint)
 
         # 4. Construct System Prompt
@@ -169,8 +233,8 @@ class DittoCoder:
                 "temperature": 0.1
             }
             
-            if self.api_key and self.api_key != "sk-dummy":
-                kwargs["api_key"] = self.api_key
+            if hasattr(self, 'api_key') and self.api_key and self.api_key != "sk-dummy":
+                kwargs["api_key"] = getattr(self, 'api_key', None)
             
             if self.base_url:
                 kwargs["api_base"] = self.base_url
@@ -208,7 +272,7 @@ class DittoCoder:
             "cpu_flags": config.get("cpu_flags", ""),
             "cmake_flags": config.get("cmake_flags", ""),
             "quantization_logic": config.get("quantization_logic", ""), # Hier übergeben wir die Logik
-            "setup_commands": "# Auto-generated setup by Ditto",
+            "setup_commands": config.get("setup_commands", "# Auto-generated setup by Ditto"),
             "detection_commands": "lscpu",
             "supported_boards": [module_name]
         }

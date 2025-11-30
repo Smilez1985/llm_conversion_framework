@@ -21,6 +21,7 @@ ICON_CANDIDATES = ["LLM-Builder.ico", "assets/icon.ico"]
 ICON_FILE = None
 
 # Pfade auflösen
+# REPO_ROOT ist der Ordner, in dem 'orchestrator', 'configs' etc. liegen
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DIST_DIR = REPO_ROOT / "dist"
 WORK_DIR = REPO_ROOT / "build"
@@ -32,9 +33,8 @@ for candidate in ICON_CANDIDATES:
         ICON_FILE = str(icon_path)
         break
 
-# Platform Separator
+# Platform Separator (Windows = ;)
 PATH_SEP = os.pathsep 
-SITE_PACKAGES_PATH = "" # Optional: Pfad zu venv site-packages erzwingen
 
 # Definitive Liste der PyYAML-Untermodule (Fix für Hidden Import Errors)
 PYYAML_DEEP_IMPORTS = [
@@ -44,7 +44,6 @@ PYYAML_DEEP_IMPORTS = [
 ]
 
 # --- PYINSTALLER ARGUMENTE (Die Definition) ---
-# Diese Liste wird generiert, damit sie sowohl hier als auch extern genutzt werden kann.
 
 def get_pyinstaller_args() -> List[str]:
     args = [
@@ -52,8 +51,8 @@ def get_pyinstaller_args() -> List[str]:
         "--clean",
         "--windowed",  # GUI Modus (keine Konsole)
         f"--name={APP_NAME}",
-        f"--distpath={DIST_DIR}",
-        f"--workpath={WORK_DIR}",
+        f"--distpath={str(DIST_DIR)}",
+        f"--workpath={str(WORK_DIR)}",
         
         # WICHTIG: Fix für PyYAML C-Bindings und fehlende Module
         "--hidden-import", "yaml", 
@@ -73,11 +72,12 @@ def get_pyinstaller_args() -> List[str]:
         "--collect-all", "requests",
         "--collect-all", "rich", 
         
-        # Data Files (Wichtig: Pfadtrenner beachten!)
-        # Syntax: "Quelle;Ziel" (Windows)
-        f"--add-data=configs{PATH_SEP}configs",
-        f"--add-data=targets{PATH_SEP}targets",
-        f"--add-data=Docker Setup/docker-compose.yml{PATH_SEP}.",
+        # Data Files
+        # FIX: Absolute Pfade für die QUELLE nutzen, damit externe Tools sie finden!
+        # Syntax: "AbsoluterPfadQuelle;RelativerPfadImZiel"
+        f"--add-data={str(REPO_ROOT / 'configs')}{PATH_SEP}configs",
+        f"--add-data={str(REPO_ROOT / 'targets')}{PATH_SEP}targets",
+        f"--add-data={str(REPO_ROOT / 'Docker Setup/docker-compose.yml')}{PATH_SEP}.",
     ]
 
     # Deep Imports
@@ -88,7 +88,7 @@ def get_pyinstaller_args() -> List[str]:
     if ICON_FILE:
         args.append(f"--icon={ICON_FILE}")
     
-    # Main Script (Muss am Ende stehen)
+    # Main Script (Muss am Ende stehen, absoluter Pfad ist sicherer)
     args.append(str(REPO_ROOT / MAIN_SCRIPT))
     
     return args
@@ -101,7 +101,7 @@ if __name__ == "__main__":
     print(f"🚀 Starting Build for {APP_NAME}...")
     print(f"📂 Root: {REPO_ROOT}")
     
-    # Arbeitsverzeichnis wechseln
+    # Arbeitsverzeichnis wechseln (optional, da wir jetzt absolute Pfade nutzen)
     os.chdir(REPO_ROOT)
     
     # Icon Status

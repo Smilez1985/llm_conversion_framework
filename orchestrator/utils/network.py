@@ -15,6 +15,7 @@ import socket
 import hashlib
 import requests
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -99,7 +100,12 @@ class NetworkGuard:
         
         try:
             # Request mit Stream und Timeout
-            with requests.get(url, stream=True, timeout=20) as r:
+            # Wir nutzen Session für Retry-Logik
+            session = requests.Session()
+            adapter = requests.adapters.HTTPAdapter(max_retries=3)
+            session.mount('https://', adapter)
+            
+            with session.get(url, stream=True, timeout=30) as r:
                 r.raise_for_status()
                 
                 # Wir berechnen den Hash während des Downloads "on the fly"
@@ -137,5 +143,6 @@ class NetworkGuard:
         except Exception as e:
             logger.error(f"Download fehlgeschlagen: {e}")
             if temp_path.exists():
-                temp_path.unlink()
+                try: temp_path.unlink()
+                except: pass
             return False

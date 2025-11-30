@@ -23,6 +23,12 @@ from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, check_command_exists, safe_json_load
 
+# Import new Managers
+try:
+    from orchestrator.Core.dataset_manager import DatasetManager
+except ImportError:
+    DatasetManager = None
+
 @dataclass
 class FrameworkInfo:
     version: str
@@ -84,10 +90,12 @@ class FrameworkManager:
         else: 
             self.config = FrameworkConfig()
         
-        # UPDATE: Version 1.3.0
-        self.info = FrameworkInfo("1.3.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
+        # UPDATE: Version 1.4.0 (Smart Calibration Release)
+        self.info = FrameworkInfo("1.4.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
         
         self._components = {}
+        self.dataset_manager = None
+        
         self._event_queue = queue.Queue()
         self._build_counter = 0
         self._active_builds = {}
@@ -103,6 +111,8 @@ class FrameworkManager:
                 self._setup_directories()
                 self._load_extended_configuration()
                 self._initialize_docker()
+                self._initialize_core_components()
+                
                 self._initialized = True
                 return True
             except Exception as e:
@@ -127,8 +137,6 @@ class FrameworkManager:
                 with open(src_file, 'r') as f:
                     data = yaml.safe_load(f)
                     if data:
-                        # Flatten nested dict for simple env var access (core.llama_cpp.url -> CORE_LLAMA_CPP_URL)
-                        # Aber wir behalten die Struktur im Memory für Ditto!
                         self.config.source_repositories = data
             except Exception as e: self.logger.warning(f"Sources load failed: {e}")
 
@@ -141,6 +149,16 @@ class FrameworkManager:
         except Exception as e:
             self.logger.error(f"Docker init failed: {e}")
             self.info.docker_available = False
+
+    def _initialize_core_components(self):
+        """Initializes internal managers like DatasetManager."""
+        if DatasetManager:
+            try:
+                self.dataset_manager = DatasetManager(self)
+                self.register_component("dataset_manager", self.dataset_manager)
+                self.logger.info("DatasetManager initialized")
+            except Exception as e:
+                self.logger.error(f"Failed to init DatasetManager: {e}")
 
     def register_component(self, n, c):
         with self._lock: self._components[n] = c
@@ -162,7 +180,6 @@ class FrameworkManager:
         with self._lock:
             if bid in self._active_builds:
                 j = self._active_builds[bid]
-                # Handle both dict and object access
                 if hasattr(j, 'status'): j.status = stat; j.progress = prog or j.progress
                 else: j['status'] = stat; j['progress'] = prog or j['progress']
 
@@ -174,7 +191,6 @@ class FrameworkManager:
         return None
 
     def get_info(self):
-        # Update dynamic info
         try:
             targets = list(Path(self.config.targets_dir).glob("*"))
             self.info.targets_count = len([t for t in targets if t.is_dir() and not t.name.startswith('_')])

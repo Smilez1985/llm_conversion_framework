@@ -22,6 +22,16 @@ core:
   # Python Transformers für Konvertierungs-Skripte
   transformers: "https://github.com/huggingface/transformers"
 
+# --- VECTOR DATABASE (Local RAG / Knowledge Base) ---
+# NEU in v1.5.0: Qdrant für lokale Dokumenten-Indizierung
+vector_database:
+  qdrant_core:
+    url: "https://github.com/qdrant/qdrant"
+    # Pinned Tag v1.16.0 (Stable Release) für Reproduzierbarkeit
+    commit: "v1.16.0" 
+    # WICHTIG: Dies ist die Quelle für Ditto, um zu lernen, wie man Qdrant nutzt
+    docs_workflow: "https://qdrant.tech/documentation/quickstart/"
+
 # --- ROCKCHIP (RK3566 / RK3588) ---
 rockchip_npu:
   # LLM-spezifische NPU Inferenz (nur RK3588/RK3576)

@@ -26,7 +26,8 @@ ensure_rknn_installed() {
     WHEEL=$(find "$RKNN_TOOLKIT_DIR/packages" -name "rknn_toolkit2*${PY_VER}*.whl" | head -n 1)
     
     if [[ -n "$WHEEL" ]]; then
-        pip install "$WHEEL" || die "Install failed"
+        # FIX: Use python3 -m pip
+        python3 -m pip install "$WHEEL" || die "Install failed"
     else
         log "⚠️  Warning: No matching wheel found for $PY_VER. Assuming pre-installed."
     fi

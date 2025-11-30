@@ -1,133 +1,67 @@
 #!/usr/bin/env python3
 """
-Windows Build Script für LLM Cross-Compiler Framework (Main App)
-DIREKTIVE: Goldstandard. Konfiguration + Builder in einem.
-ZWECK: 
-1. Definiert PYINSTALLER_CMD_ARGS für externe Frameworks.
-2. Führt den Build direkt aus, wenn das Skript gestartet wird.
+Windows Build Script für LLM Cross-Compiler Framework
+DIREKTIVE: Goldstandard, definiert die PyInstaller-Argumente für ein externes Programm.
+ZWECK: Stellt die Liste der Argumente für den Build des GUI-Launchers bereit.
 """
-
 import os
 import sys
-import subprocess
 from pathlib import Path
 from typing import List, Dict, Any
 
 # --- KONFIGURATION ---
 APP_NAME = "LLM-Builder"
 MAIN_SCRIPT = "orchestrator/main.py"
-# Wir suchen das Icon erst im Root, dann in assets
-ICON_CANDIDATES = ["LLM-Builder.ico", "assets/icon.ico"]
-ICON_FILE = None
+ICON_FILE = "assets/icon.ico" 
 
-# Pfade auflösen
-# REPO_ROOT ist der Ordner, in dem 'orchestrator', 'configs' etc. liegen
-REPO_ROOT = Path(__file__).resolve().parent.parent
-DIST_DIR = REPO_ROOT / "dist"
-WORK_DIR = REPO_ROOT / "build"
-
-# Icon finden
-for candidate in ICON_CANDIDATES:
-    icon_path = REPO_ROOT / candidate
-    if icon_path.exists():
-        ICON_FILE = str(icon_path)
-        break
-
-# Platform Separator (Windows = ;)
+# Pfadtrenner (Windows = ;)
 PATH_SEP = os.pathsep 
 
-# Definitive Liste der PyYAML-Untermodule (Fix für Hidden Import Errors)
-PYYAML_DEEP_IMPORTS = [
-    'yaml.loader', 'yaml.dumper', 'yaml.scanner', 'yaml.parser',
-    'yaml.composer', 'yaml.constructor', 'yaml.resolver',
-    'yaml.representer', 'yaml.emitter', 'yaml.serializer',
+# --- BUILD ARGUMENTE ---
+# Diese Liste wird vom ExeBuilder Framework geladen.
+PYINSTALLER_CMD_ARGS: List[str] = [
+    # WICHTIG: --onefile erzwingt eine einzelne EXE (löst den "Datei fehlt" Fehler)
+    "--onefile",
+    "--windowed",  # Kein Konsolenfenster beim Start der fertigen App
+    "--noconfirm",
+    "--clean",
+    "--name", APP_NAME,
+    
+    # FIX: Hidden Imports für kritische Module
+    "--hidden-import", "yaml", 
+    "--hidden-import", "shutil",
+    "--hidden-import", "win32api",
+    "--hidden-import", "win32con",
+
+    # FIX: Collect-All für komplexe Pakete
+    "--collect-all", "orchestrator", 
+    "--collect-all", "PySide6",
+    "--collect-all", "yaml",       
+    "--collect-all", "requests",
+    "--collect-all", "rich", 
+    
+    # Data Files (Ordner und Configs einpacken)
+    # Syntax: "Quellpfad;Zielpfad" (für Windows)
+    f"--add-data=configs{PATH_SEP}configs",
+    f"--add-data=targets{PATH_SEP}targets",
+    f"--add-data=Docker Setup/docker-compose.yml{PATH_SEP}.",
+    
+    # Icon
+    f"--icon={ICON_FILE}",
+    
+    # Das Hauptskript muss immer am Ende stehen
+    MAIN_SCRIPT
 ]
 
-# --- PYINSTALLER ARGUMENTE (Die Definition) ---
+# --- Build Metadaten (Optional für Übersicht) ---
+BUILD_METADATA: Dict[str, Any] = {
+    "APP_NAME": APP_NAME,
+    "ENTRY_POINT": MAIN_SCRIPT,
+    "OUTPUT_FILE": Path("dist") / f"{APP_NAME}.exe",
+    "REQUIRES_EXECUTION_FROM_ROOT": True
+}
 
-def get_pyinstaller_args() -> List[str]:
-    args = [
-        "--noconfirm",
-        "--clean",
-        "--windowed",  # GUI Modus (keine Konsole)
-        f"--name={APP_NAME}",
-        f"--distpath={str(DIST_DIR)}",
-        f"--workpath={str(WORK_DIR)}",
-        
-        # WICHTIG: Fix für PyYAML C-Bindings und fehlende Module
-        "--hidden-import", "yaml", 
-        "--hidden-import", "shutil",
-        "--hidden-import", "huggingface_hub",
-        "--hidden-import", "tqdm",
-        "--hidden-import", "psutil",
-        "--hidden-import", "requests",
-        "--hidden-import", "PySide6",
-        
-        # Collect All (Sichert Daten und Binaries der Pakete)
-        "--collect-all", "huggingface_hub", 
-        "--collect-all", "tqdm",
-        "--collect-all", "orchestrator", 
-        "--collect-all", "PySide6",
-        "--collect-all", "yaml",       
-        "--collect-all", "requests",
-        "--collect-all", "rich", 
-        
-        # Data Files
-        # FIX: Absolute Pfade für die QUELLE nutzen, damit externe Tools sie finden!
-        # Syntax: "AbsoluterPfadQuelle;RelativerPfadImZiel"
-        f"--add-data={str(REPO_ROOT / 'configs')}{PATH_SEP}configs",
-        f"--add-data={str(REPO_ROOT / 'targets')}{PATH_SEP}targets",
-        f"--add-data={str(REPO_ROOT / 'Docker Setup/docker-compose.yml')}{PATH_SEP}.",
-    ]
-
-    # Deep Imports
-    for module in PYYAML_DEEP_IMPORTS:
-        args.extend(["--hidden-import", module])
-        
-    # Icon (falls gefunden)
-    if ICON_FILE:
-        args.append(f"--icon={ICON_FILE}")
-    
-    # Main Script (Muss am Ende stehen, absoluter Pfad ist sicherer)
-    args.append(str(REPO_ROOT / MAIN_SCRIPT))
-    
-    return args
-
-# Globale Variable für externe Tools (Kompatibilität)
-PYINSTALLER_CMD_ARGS = get_pyinstaller_args()
-
-# --- MAIN EXECUTION (Selbstausführung) ---
+# --- Selbst-Test (Optional: Wenn man das Skript direkt ausführt) ---
 if __name__ == "__main__":
-    print(f"🚀 Starting Build for {APP_NAME}...")
-    print(f"📂 Root: {REPO_ROOT}")
-    
-    # Arbeitsverzeichnis wechseln (optional, da wir jetzt absolute Pfade nutzen)
-    os.chdir(REPO_ROOT)
-    
-    # Icon Status
-    if ICON_FILE:
-        print(f"✅ Icon found: {ICON_FILE}")
-    else:
-        print("⚠️  No icon found. Using default.")
-
-    # PyInstaller aufrufen
-    cmd = [sys.executable, "-m", "PyInstaller"] + get_pyinstaller_args()
-    
-    try:
-        # Creationflags unterdrücken Konsolenfenster beim Spawn neuer Prozesse (nur Windows)
-        flags = 0
-        if sys.platform == "win32":
-            flags = subprocess.CREATE_NO_WINDOW
-            
-        print("🔨 Running PyInstaller...")
-        subprocess.run(cmd, check=True, creationflags=flags)
-        
-        print(f"\n🎉 Build SUCCESSFUL!")
-        print(f"📁 Output: {DIST_DIR / f'{APP_NAME}.exe'}")
-        
-    except subprocess.CalledProcessError as e:
-        print(f"\n❌ Build FAILED with exit code {e.returncode}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n❌ Unexpected Error: {e}")
-        sys.exit(1)
+    print("Diese Datei ist eine Konfiguration für das ExeBuilder Framework.")
+    print("Bitte ziehen Sie diese Datei in die GUI des Builders.")

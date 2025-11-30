@@ -40,7 +40,8 @@ ensure_rkllm_installed() {
         die "No RKLLM wheel found in $RKLLM_DIR/packages/."
     fi
     
-    pip install "$WHEEL_FILE" || die "Pip install failed."
+    # FIX: Use python3 -m pip
+    python3 -m pip install "$WHEEL_FILE" || die "Pip install failed."
 }
 
 # ============================================================================
@@ -72,7 +73,7 @@ main() {
         git clone "$REPO_URL" "$RKLLM_DIR" || die "Clone failed."
     fi
 
-    # 5. Install Wheel (NEU)
+    # 5. Install Wheel
     ensure_rkllm_installed
 
     # 6. Python Script Call

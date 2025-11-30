@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
     QComboBox, QLineEdit, QLabel, QPushButton, QApplication,
     QGroupBox, QRadioButton, QButtonGroup, QStackedWidget, QWidget,
-    QTextEdit, QMessageBox
+    QTextEdit, QMessageBox, QPlainTextEdit
 )
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -18,7 +18,6 @@ from PySide6.QtGui import QDesktopServices
 try:
     from orchestrator.utils.localization import tr
 except ImportError:
-    # Fallback if localization module is missing during dev
     def tr(key): return key
 
 class AddSourceDialog(QDialog):
@@ -257,4 +256,43 @@ class LanguageSelectionDialog(QDialog):
         
     def select(self, lang):
         self.selected_lang = lang
+        self.accept()
+
+class DatasetReviewDialog(QDialog):
+    """
+    Human-in-the-Loop Dialog.
+    Allows the user to review and edit AI-generated calibration data before saving.
+    """
+    def __init__(self, data_list, domain, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Review Dataset: {domain}")
+        self.resize(600, 500)
+        self.final_data = []
+        
+        layout = QVBoxLayout(self)
+        
+        layout.addWidget(QLabel(f"Ditto AI generated {len(data_list)} samples for '{domain}'.\nPlease review and edit if necessary:"))
+        
+        self.editor = QPlainTextEdit()
+        # Join list to text for editing (one item per block)
+        # We use a separator for clarity
+        self.editor.setPlainText("\n\n---SEPARATOR---\n\n".join(data_list))
+        layout.addWidget(self.editor)
+        
+        btns = QHBoxLayout()
+        self.btn_cancel = QPushButton(tr("btn.cancel"))
+        self.btn_cancel.clicked.connect(self.reject)
+        btns.addWidget(self.btn_cancel)
+        
+        self.btn_save = QPushButton(tr("btn.save"))
+        self.btn_save.setStyleSheet("background-color: #2ea043; color: white; font-weight: bold;")
+        self.btn_save.clicked.connect(self.save_data)
+        btns.addWidget(self.btn_save)
+        
+        layout.addLayout(btns)
+        
+    def save_data(self):
+        # Split back to list
+        text = self.editor.toPlainText()
+        self.final_data = [s.strip() for s in text.split("---SEPARATOR---") if s.strip()]
         self.accept()

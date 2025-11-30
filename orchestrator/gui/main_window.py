@@ -9,29 +9,34 @@ import os
 import time
 import socket
 import logging
+import shutil
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QLabel, QPushButton, QTextEdit, QProgressBar,
     QGroupBox, QFormLayout, QLineEdit, QComboBox, 
     QMessageBox, QTableWidget, QTableWidgetItem,
-    QDialog, QInputDialog, QFileDialog, QCheckBox, QHeaderView
+    QDialog, QInputDialog, QFileDialog, QCheckBox, QHeaderView,
+    QMenu
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QEvent
+from PySide6.QtGui import QAction, QIcon
 
+# Core & Utils Imports
 from orchestrator.Core.docker_manager import DockerManager
 from orchestrator.Core.framework import FrameworkConfig, FrameworkManager
+from orchestrator.Core.dataset_manager import DatasetManager
 from orchestrator.utils.updater import UpdateManager
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.localization import tr, get_instance as get_i18n
 
+# GUI Module Imports
 from orchestrator.gui.community_hub import CommunityHubWindow
 from orchestrator.gui.huggingface_window import HuggingFaceWindow
-from orchestrator.gui.dialogs import AddSourceDialog
+from orchestrator.gui.dialogs import AddSourceDialog, LanguageSelectionDialog, DatasetReviewDialog
 from orchestrator.gui.wizards import ModuleCreationWizard
 from orchestrator.gui.benchmark_window import BenchmarkWindow
 
@@ -57,7 +62,30 @@ class UpdateWorker(QThread):
         except: pass
     def stop(self): self._is_running = False
 
+class DatasetGenWorker(QThread):
+    """Worker to generate synthetic data via Ditto without freezing GUI."""
+    finished = Signal(list)
+    error = Signal(str)
+    
+    def __init__(self, manager, domain, count=50):
+        super().__init__()
+        self.manager = manager
+        self.domain = domain
+        self.count = count
+        
+    def run(self):
+        try:
+            # Calls Ditto via DatasetManager
+            data = self.manager.generate_synthetic_dataset(self.domain, self.count)
+            self.finished.emit(data)
+        except Exception as e:
+            self.error.emit(str(e))
+
 class MainOrchestrator(QMainWindow):
+    """
+    Main GUI Application Window.
+    Orchestrates all UI components and connects to Core Logic.
+    """
     def __init__(self, app_root: Path):
         super().__init__()
         self.app_root = app_root
@@ -79,11 +107,16 @@ class MainOrchestrator(QMainWindow):
             self.docker_manager = DockerManager()
             self.docker_manager.initialize(self.framework_manager)
             
+            # New: Dataset Manager for Smart Calibration
+            self.dataset_manager = DatasetManager(self.framework_manager)
+            
             self.docker_manager.build_output.connect(self.on_build_output)
             self.docker_manager.build_progress.connect(self.on_build_progress)
             self.docker_manager.build_completed.connect(self.on_build_completed)
             get_i18n().language_changed.connect(self.retranslateUi)
+            
         except Exception as e:
+            print(f"CRITICAL INIT ERROR: {e}")
             sys.exit(1)
             
         self.init_ui()
@@ -167,7 +200,6 @@ class MainOrchestrator(QMainWindow):
         
         q_layout = QHBoxLayout()
         self.quant_combo = QComboBox()
-        # FP16 = Original / None
         self.quant_combo.addItems(["FP16 (Original)", "INT8", "INT4", "Q4_K_M", "Q8_0"])
         q_layout.addWidget(self.quant_combo); q_layout.addSpacing(20)
         self.chk_use_gpu = QCheckBox(tr("chk.gpu")); q_layout.addWidget(self.chk_use_gpu)
@@ -227,50 +259,102 @@ class MainOrchestrator(QMainWindow):
     def check_for_updates_automatic(self): self.update_worker.start()
 
     def start_build(self):
-        if not self.model_name.text(): return QMessageBox.warning(self, tr("status.error"), "Model required")
-        
-        # --- DATASET CHECK LOGIC ---
-        quant = self.quant_combo.currentText()
+        """Handles pre-build checks (Dataset) and triggers DockerManager."""
         model_path = self.model_name.text()
-        dataset_path = None
+        if not model_path: return QMessageBox.warning(self, tr("status.error"), "Model required")
         
-        # Check 1: Does Quantization need data? (INT8 needs calibration)
-        # "FP16" does not.
+        quant = self.quant_combo.currentText()
+        
+        # --- Smart Dataset Check ---
         needs_ds = "INT" in quant or "W8" in quant or "W4" in quant
+        ds_path = None
         
         if needs_ds:
-            # Check 2: Is dataset in model folder?
+            # 1. Auto-Detect
             if os.path.exists(model_path):
-                ds_check = os.path.join(model_path, "dataset.txt")
-                if os.path.exists(ds_check):
-                    dataset_path = ds_check
-                    self.log(f"Auto-detected dataset: {ds_check}")
+                check = os.path.join(model_path, "dataset.json")
+                if os.path.exists(check):
+                    ds_path = check
+                    self.log(f"Auto-Detected Dataset: {ds_path}")
             
-            # Check 3: Ask User if not found
-            if not dataset_path:
-                reply = QMessageBox.question(self, tr("grp.build_config"), 
-                    f"Quantization '{quant}' recommends a calibration dataset.\nSelect one now?", QMessageBox.Yes|QMessageBox.No)
-                if reply == QMessageBox.Yes:
-                    f, _ = QFileDialog.getOpenFileName(self, "Select Dataset", "", "Text (*.txt)")
-                    if f: dataset_path = f
+            # 2. Prompt User if missing
+            if not ds_path:
+                ans = QMessageBox.question(self, "Calibration Data Missing", 
+                                           f"Quantization '{quant}' requires a dataset.\n"
+                                           "Generate via AI (Ditto) or Select File?", 
+                                           QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+                
+                if ans == QMessageBox.Yes: # Generate AI
+                    self.start_ai_dataset_gen(model_path)
+                    return # Stop here, resume in callback
+                elif ans == QMessageBox.No: # Manual Select
+                    f, _ = QFileDialog.getOpenFileName(self, "Select Dataset", "", "JSON (*.json);;TXT (*.txt)")
+                    if f: ds_path = f
                 else:
-                    self.log("Warning: Building without explicit dataset (Accuracy might suffer).")
+                    return # Cancel
+        
+        self._trigger_docker_build(model_path, quant, ds_path)
 
+    def start_ai_dataset_gen(self, model_path):
+        """Starts the background worker for Ditto dataset generation."""
+        domain = self.dataset_manager.detect_domain(model_path)
+        
+        # Fallback if domain unknown
+        if not domain:
+             d, ok = QInputDialog.getItem(self, "Select Domain", "Could not detect model domain.\nPlease select:", 
+                                          ["code", "chat", "medical", "legal", "general_text"], 0, False)
+             if ok: domain = d
+             else: return
+
+        self.log(f"Generating synthetic dataset for '{domain}' via Ditto...")
+        self.set_controls_enabled(False)
+        
+        self.ds_worker = DatasetGenWorker(self.dataset_manager, domain)
+        self.ds_worker.finished.connect(lambda data: self.on_dataset_generated(data, model_path))
+        self.ds_worker.error.connect(self.on_dataset_error)
+        self.ds_worker.start()
+
+    def on_dataset_generated(self, data, model_path):
+        self.set_controls_enabled(True)
+        # Review Dialog (HitL)
+        dlg = DatasetReviewDialog(data, "AI Generated Data", self)
+        if dlg.exec():
+            # Save
+            save_path = Path(model_path) / "dataset.json" if os.path.exists(model_path) else Path(self.framework_manager.config.cache_dir) / "dataset.json"
+            if self.dataset_manager.save_dataset(dlg.final_data, save_path):
+                self.log(f"Dataset saved to {save_path}")
+                # Resume Build
+                self._trigger_docker_build(model_path, self.quant_combo.currentText(), str(save_path))
+            else:
+                QMessageBox.critical(self, "Error", "Failed to save dataset.")
+
+    def on_dataset_error(self, err):
+        self.set_controls_enabled(True)
+        QMessageBox.critical(self, "AI Error", str(err))
+
+    def _trigger_docker_build(self, model, quant, ds_path):
         cfg = {
-            "model_name": model_path,
+            "model_name": model,
             "target": self.target_combo.currentText(),
             "task": self.task_combo.currentText(),
             "quantization": quant,
             "auto_benchmark": self.chk_auto_bench.isChecked(),
             "use_gpu": self.chk_use_gpu.isChecked(),
-            "dataset_path": dataset_path # Passed to DockerManager
+            "dataset_path": ds_path
         }
         self.log(f"Build Start: {cfg['target']} [{cfg['quantization']}]")
-        self.start_btn.setEnabled(False); self.progress_bar.setValue(0)
+        self.set_controls_enabled(False)
         self.docker_manager.start_build(cfg)
+
+    def set_controls_enabled(self, enabled):
+        self.start_btn.setEnabled(enabled)
+        self.grp_build.setEnabled(enabled)
 
     def on_build_output(self, bid, line): self.log_view.append(line); self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
     def on_build_progress(self, bid, pct): self.progress_bar.setValue(pct)
-    def on_build_completed(self, bid, success, p): self.start_btn.setEnabled(True); self.progress_bar.setValue(100 if success else 0); self.log(f"{'✅' if success else '❌'} Done")
+    def on_build_completed(self, bid, success, p): 
+        self.set_controls_enabled(True)
+        self.progress_bar.setValue(100 if success else 0)
+        self.log(f"{'✅' if success else '❌'} Done")
 
     def log(self, msg): self.log_view.append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")

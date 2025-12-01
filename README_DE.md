@@ -72,21 +72,6 @@ Die Pipeline endet nicht bei der Kompilierung. Sie bündelt automatisch das quan
 └── output/               # Build-Artefakte landen hier
 ```
 
----
-
-## 👥 Wer nutzt das?
-
-> *"Wir haben unsere Deployment-Zeit für Custom LLMs auf Rockchip-Boards von 2 Tagen auf 45 Minuten reduziert. Das Auto-Packaging ist ein Lebensretter."*  
-> **— StartUp Robotics, Berlin**
-
-> *"Endlich ein Weg, Studenten Cross-Compilation beizubringen, ohne 3 Wochen mit Environment-Setup zu verbringen. Die GUI macht komplexe Toolchains zugänglich."*  
-> **— Hochschule für Angewandte Wissenschaften, München**
-
-> *"Datenschutz war unsere Hauptsorge. Mit dem lokalen RAG-Feature verlassen unsere Hardware-Specs und Dokus niemals unser lokales Netzwerk."*  
-> **— Industrial IoT Integrator**
-
----
-
 ## 📟 Unterstützte Hardware
 
 | Familie | Status | Chips | NPU/GPU | Features |

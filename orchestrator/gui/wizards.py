@@ -7,6 +7,9 @@ Dieser Wizard führt den Benutzer durch die Erstellung eines neuen Hardware-Targ
 Er unterstützt zwei Modi:
 1. Standard Import: Deterministisches Parsen von hardware_probe.sh/.ps1 Ausgaben.
 2. AI Auto-Discovery: Intelligente Analyse und Optimierungsvorschläge durch Ditto (LLM).
+
+Updates v1.5.0:
+- Integrated Ditto Avatar Image for better UX.
 """
 
 import threading
@@ -20,6 +23,7 @@ from PySide6.QtWidgets import (
     QDialog, QHBoxLayout, QWidget
 )
 from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtGui import QPixmap
 
 from orchestrator.Core.module_generator import ModuleGenerator
 from orchestrator.gui.dialogs import AIConfigurationDialog
@@ -44,6 +48,12 @@ class ModuleCreationWizard(QWizard):
     def __init__(self, targets_dir: Path, parent=None):
         super().__init__(parent)
         self.targets_dir = targets_dir
+        
+        # Access assets path via parent app root if available
+        self.assets_dir = None
+        if parent and hasattr(parent, 'app_root'):
+            self.assets_dir = parent.app_root / "assets"
+            
         self.setWindowTitle(tr("wiz.title"))
         self.setWizardStyle(QWizard.ModernStyle)
         self.setMinimumSize(900, 700)
@@ -73,8 +83,26 @@ class ModuleCreationWizard(QWizard):
         import_group = QGroupBox(tr("wiz.grp.import"))
         import_layout = QVBoxLayout()
         
-        # Info Label
-        import_layout.addWidget(QLabel(tr("wiz.lbl.ai_info")))
+        # Ditto Avatar & Info
+        header_layout = QHBoxLayout()
+        
+        # Avatar Image
+        if self.assets_dir:
+            ditto_img_path = self.assets_dir / "ditto.png"
+            if ditto_img_path.exists():
+                lbl_img = QLabel()
+                pixmap = QPixmap(str(ditto_img_path))
+                # Scale nicely
+                lbl_img.setPixmap(pixmap.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                header_layout.addWidget(lbl_img)
+        
+        # Info Text
+        info_lbl = QLabel(tr("wiz.lbl.ai_info") if tr("wiz.lbl.ai_info") != "wiz.lbl.ai_info" else "Let Ditto analyze your hardware probe.")
+        info_lbl.setWordWrap(True)
+        header_layout.addWidget(info_lbl)
+        header_layout.addStretch()
+        
+        import_layout.addLayout(header_layout)
 
         hbox_btns = QHBoxLayout()
         

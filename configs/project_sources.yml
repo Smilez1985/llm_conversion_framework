@@ -32,6 +32,24 @@ vector_database:
     # WICHTIG: Dies ist die Quelle für Ditto, um zu lernen, wie man Qdrant nutzt
     docs_workflow: "https://qdrant.tech/documentation/quickstart/"
 
+# --- KNOWLEDGE INGESTION (v1.6.0) ---
+# Tools für den Deep-Crawler und PDF-Analyse
+knowledge_ingestion:
+  langchain:
+    url: "https://github.com/langchain-ai/langchain"
+    # Framework für RecursiveUrlLoader
+    docs_workflow: "https://python.langchain.com/docs/integrations/document_loaders/recursive_url/"
+  
+  beautifulsoup4:
+    url: "https://git.launchpad.net/beautifulsoup"
+    # HTML Parsing Engine für sauberen Text-Extrakt
+    docs_workflow: "https://www.crummy.com/software/BeautifulSoup/bs4/doc/"
+
+  pypdf:
+    url: "https://github.com/py-pdf/pypdf"
+    # PDF Parsing Engine für Datenblätter
+    docs_workflow: "https://pypdf.readthedocs.io/en/stable/"
+
 # --- ROCKCHIP (RK3566 / RK3588) ---
 rockchip_npu:
   # LLM-spezifische NPU Inferenz (nur RK3588/RK3576)

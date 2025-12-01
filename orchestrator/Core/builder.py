@@ -5,6 +5,9 @@ DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 
 Core logic for orchestrating Docker builds, container execution, and artifact management.
 Handles security scans, GPU passthrough, and dynamic volume mounting.
+
+Updates v1.5.0:
+- Expanded ModelFormat Enum to support RKNN, TensorRT, OpenVINO, etc.
 """
 
 import os
@@ -56,6 +59,13 @@ class ModelFormat(Enum):
     ONNX = "onnx"
     TENSORFLOW_LITE = "tflite"
     PYTORCH_MOBILE = "pytorch_mobile"
+    # NEU v1.5.0: Hardware-Specific Formats
+    RKNN = "rknn"          # Rockchip NPU
+    TENSORRT = "tensorrt"  # NVIDIA GPU
+    OPENVINO = "openvino"  # Intel NPU/CPU
+    COREML = "coreml"      # Apple Silicon
+    NCNN = "ncnn"          # Mobile High-Performance
+    MNN = "mnn"            # Alibaba Mobile
 
 class OptimizationLevel(Enum):
     FAST = "fast"
@@ -431,10 +441,6 @@ class BuildEngine:
         try:
             scan_cmd = ["image", "--exit-code", "1", "--severity", "HIGH,CRITICAL", image_tag]
             
-            # Using a temporary container to run trivy
-            # Needs docker socket mapped if not using client/server trivy, or just use the image
-            # Here we assume the host has trivy or we run the trivy container
-            
             # Secure way: Run trivy container
             log_stream = self.docker_client.containers.run(
                 "aquasec/trivy:latest", 
@@ -480,7 +486,9 @@ class BuildEngine:
             "TARGET_ARCH": config.target_arch,
             "OPTIMIZATION_LEVEL": config.optimization_level.value,
             "QUANTIZATION": config.quantization or "",
-            "LLAMA_CPP_COMMIT": config.build_args.get("LLAMA_CPP_COMMIT", "b3626")
+            "LLAMA_CPP_COMMIT": config.build_args.get("LLAMA_CPP_COMMIT", "b3626"),
+            # NEW: Output Format als ENV Variable
+            "TARGET_FORMAT": config.target_format.value
         }
         
         # Inject SSOT Vars
@@ -511,7 +519,7 @@ class BuildEngine:
         # 5. Run Container
         container = self.docker_client.containers.create(
             image=image.id, 
-            command=["/app/modules/build.sh"], # We assume entrypoint handles this, or we call build.sh directly
+            command=["/app/modules/build.sh"], 
             volumes=vols, 
             environment=env, 
             name=f"llm-build-{config.build_id}", 

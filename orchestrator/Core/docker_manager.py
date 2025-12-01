@@ -68,13 +68,10 @@ class DockerManager(QObject):
             str: HTTP URL of the Qdrant service (internal Docker network) or None.
         """
         # 1. Check Configuration (Opt-In)
-        # We access the config value directly. Default is False.
-        # Note: config_values is a dict of ConfigValue objects, we need the .value attribute
         rag_enabled = False
         if hasattr(self.framework.config, 'enable_rag_knowledge'):
              rag_enabled = self.framework.config.enable_rag_knowledge
         else:
-             # Fallback lookup via config manager direct access if available
              rag_enabled = self.framework.config_manager.get("enable_rag_knowledge", False)
 
         if not rag_enabled:
@@ -114,7 +111,7 @@ class DockerManager(QObject):
                 client.containers.run(
                     image_tag,
                     name=container_name,
-                    # Expose ports for local debugging if needed, but mainly for internal net
+                    # Expose ports for local debugging if needed
                     ports={'6333/tcp': 6333}, 
                     # Persistence
                     volumes={'llm_qdrant_data': {'bind': '/qdrant/storage', 'mode': 'rw'}},
@@ -156,7 +153,16 @@ class DockerManager(QObject):
             task = gui_config.get("task", "LLM")
             quant = gui_config.get("quantization", "Q4_K_M")
             use_gpu = gui_config.get("use_gpu", False)
-            dataset_path = gui_config.get("dataset_path") # Optional: Calibration dataset
+            dataset_path = gui_config.get("dataset_path")
+            
+            # FORMAT HANDLING (NEW)
+            raw_format = gui_config.get("format", "GGUF")
+            try:
+                # Map string (e.g. "RKNN", "GGUF") to ModelFormat Enum
+                target_format = ModelFormat[raw_format.upper()]
+            except KeyError:
+                self.logger.warning(f"Unknown format '{raw_format}', defaulting to GGUF.")
+                target_format = ModelFormat.GGUF
             
             # Output Directory Generation
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -164,11 +170,9 @@ class DockerManager(QObject):
             output_base = Path(self.framework.config.output_dir)
             out_dir = output_base / build_id
             
-            # Ensure absolute path for model if it's local
             if os.path.exists(model_path):
                 model_path = str(Path(model_path).resolve())
             
-            # Ensure absolute path for dataset if exists
             if dataset_path and os.path.exists(dataset_path):
                 dataset_path = str(Path(dataset_path).resolve())
 
@@ -177,31 +181,27 @@ class DockerManager(QObject):
                 build_id=build_id,
                 timestamp=timestamp,
                 model_source=model_path,
-                target_arch=target,          # Folder name in targets/
-                target_format=ModelFormat.GGUF, # Default, will be handled by build.sh logic
+                target_arch=target,
+                target_format=target_format, # Passing the correct Enum
                 source_format=ModelFormat.HUGGINGFACE,
                 output_dir=str(out_dir),
                 quantization=quant,
-                model_task=task,             # 'LLM', 'VOICE', 'VLM'
-                use_gpu=use_gpu,             # NVIDIA Passthrough
-                dataset_path=dataset_path,   # Calibration data for INT8
+                model_task=task,
+                use_gpu=use_gpu,
+                dataset_path=dataset_path,
                 
-                # Defaults from Framework Config or Standard
-                base_image="debian:bookworm-slim", # Will be overridden by Target's Dockerfile
+                base_image="debian:bookworm-slim",
                 build_timeout=self.framework.config.build_timeout,
                 parallel_jobs=self.framework.config.max_concurrent_builds
             )
             
             # 3. Submit to Engine
-            # The builder uses a ThreadPool, so this returns quickly
             returned_id = self.builder.build_model(config)
             
             self.logger.info(f"Build submitted with ID: {returned_id}")
             self.build_started.emit(returned_id)
             
             # 4. Start Monitoring Thread
-            # We need a separate thread to poll the builder status and emit Qt signals
-            # because the Builder is framework-agnostic and doesn't know Qt.
             self._monitor_active = True
             monitor_thread = threading.Thread(
                 target=self._monitor_build, 
@@ -248,7 +248,6 @@ class DockerManager(QObject):
                 if status.artifacts:
                     output_path = status.artifacts[0]
                 elif success:
-                    # Fallback to output dir if artifacts list is empty but build succeeded
                     output_path = "Check Output Directory"
 
                 self.logger.info(f"Build {build_id} finished. Success: {success}")

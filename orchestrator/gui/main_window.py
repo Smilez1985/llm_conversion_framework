@@ -2,6 +2,10 @@
 """
 LLM Cross-Compiler Framework - Main Window GUI
 DIREKTIVE: Goldstandard, MVC-Pattern, Separation of Concerns.
+
+Updates v1.5.0:
+- Added Output Format Selection (GGUF, RKNN, ONNX, etc.)
+- Connected Format selection to Build Configuration
 """
 
 import sys
@@ -36,7 +40,7 @@ from orchestrator.utils.localization import tr, get_instance as get_i18n
 # GUI Module Imports
 from orchestrator.gui.community_hub import CommunityHubWindow
 from orchestrator.gui.huggingface_window import HuggingFaceWindow
-from orchestrator.gui.dialogs import AddSourceDialog, LanguageSelectionDialog, DatasetReviewDialog
+from orchestrator.gui.dialogs import AddSourceDialog, LanguageSelectionDialog, DatasetReviewDialog, AIConfigurationDialog
 from orchestrator.gui.wizards import ModuleCreationWizard
 from orchestrator.gui.benchmark_window import BenchmarkWindow
 
@@ -113,6 +117,9 @@ class MainOrchestrator(QMainWindow):
             self.docker_manager.build_output.connect(self.on_build_output)
             self.docker_manager.build_progress.connect(self.on_build_progress)
             self.docker_manager.build_completed.connect(self.on_build_completed)
+            # New: Sidecar Status (v1.5.0)
+            self.docker_manager.sidecar_status.connect(self.on_sidecar_status)
+            
             get_i18n().language_changed.connect(self.retranslateUi)
             
         except Exception as e:
@@ -162,6 +169,10 @@ class MainOrchestrator(QMainWindow):
         self.tools_menu = self.menubar.addMenu(tr("menu.tools"))
         act_wiz = QAction(tr("menu.create_module"), self); act_wiz.triggered.connect(self.open_module_wizard); self.tools_menu.addAction(act_wiz)
         act_aud = QAction(tr("menu.audit"), self); act_aud.triggered.connect(self.run_image_audit); self.tools_menu.addAction(act_aud)
+        
+        # New AI Config Action
+        act_ai = QAction(tr("wiz.btn.config_ai"), self); act_ai.triggered.connect(self.open_ai_config); self.tools_menu.addAction(act_ai)
+        
         self.comm_menu = self.menubar.addMenu(tr("menu.community"))
         act_hub = QAction(tr("menu.open_hub"), self); act_hub.triggered.connect(self.open_community_hub); self.comm_menu.addAction(act_hub)
         act_upd = QAction(tr("menu.update"), self); act_upd.triggered.connect(self.check_for_updates_automatic); self.comm_menu.addAction(act_upd)
@@ -198,9 +209,25 @@ class MainOrchestrator(QMainWindow):
         self.task_combo = QComboBox(); self.task_combo.addItems(["LLM", "VOICE", "VLM"]); t_layout.addWidget(self.task_combo)
         self.lbl_target = QLabel(tr("lbl.target")); c_layout.addRow(self.lbl_target, t_layout)
         
+        # New Output Format Selection (v1.5.0 Update)
+        f_layout = QHBoxLayout()
+        self.format_combo = QComboBox()
+        self.format_combo.addItems([
+            "GGUF (Universal)", 
+            "RKNN (Rockchip NPU)", 
+            "ONNX (Universal)", 
+            "TensorRT (NVIDIA)", 
+            "TFLite (Mobile/Pi)", 
+            "OpenVINO (Intel)", 
+            "CoreML (Apple)",
+            "NCNN (Mobile)"
+        ])
+        f_layout.addWidget(self.format_combo)
+        c_layout.addRow("Format:", f_layout)
+
         q_layout = QHBoxLayout()
         self.quant_combo = QComboBox()
-        self.quant_combo.addItems(["FP16 (Original)", "INT8", "INT4", "Q4_K_M", "Q8_0"])
+        self.quant_combo.addItems(["FP16 (Original)", "INT8", "INT4", "Q4_K_M", "Q8_0", "W8A8 (NPU)", "W4A16 (NPU)"])
         q_layout.addWidget(self.quant_combo); q_layout.addSpacing(20)
         self.chk_use_gpu = QCheckBox(tr("chk.gpu")); q_layout.addWidget(self.chk_use_gpu)
         self.lbl_quant = QLabel(tr("lbl.quant")); c_layout.addRow(self.lbl_quant, q_layout)
@@ -257,6 +284,23 @@ class MainOrchestrator(QMainWindow):
     def open_module_wizard(self): ModuleCreationWizard(Path(self.framework_manager.config.targets_dir), self).exec(); self.refresh_targets()
     def run_image_audit(self): QMessageBox.information(self, "Info", "Audit via CLI: llm-cli system audit")
     def check_for_updates_automatic(self): self.update_worker.start()
+    
+    def open_ai_config(self):
+        """Open AI Configuration Dialog (Ditto / RAG)"""
+        dlg = AIConfigurationDialog(self)
+        # Pre-Load current settings if possible
+        if dlg.exec() == QDialog.Accepted:
+            cfg = dlg.get_config()
+            # Save relevant parts to config manager
+            self.framework_manager.config_manager.set("enable_rag_knowledge", cfg.get("enable_rag_knowledge", False))
+            self.framework_manager.config.enable_rag_knowledge = cfg.get("enable_rag_knowledge", False)
+            
+            # Persist user config
+            self.framework_manager.config_manager.save_user_config()
+            
+            # Start/Stop RAG Service immediately if changed
+            if self.docker_manager:
+                self.docker_manager.ensure_qdrant_service()
 
     def start_build(self):
         """Handles pre-build checks (Dataset) and triggers DockerManager."""
@@ -333,16 +377,21 @@ class MainOrchestrator(QMainWindow):
         QMessageBox.critical(self, "AI Error", str(err))
 
     def _trigger_docker_build(self, model, quant, ds_path):
+        # Extract Format (GGUF, RKNN...) from Combo string (e.g. "GGUF (Universal)" -> "GGUF")
+        raw_format = self.format_combo.currentText()
+        target_format = raw_format.split()[0].strip() # Takes "GGUF" from "GGUF (Universal)"
+
         cfg = {
             "model_name": model,
             "target": self.target_combo.currentText(),
             "task": self.task_combo.currentText(),
             "quantization": quant,
+            "format": target_format, # NEW Field
             "auto_benchmark": self.chk_auto_bench.isChecked(),
             "use_gpu": self.chk_use_gpu.isChecked(),
             "dataset_path": ds_path
         }
-        self.log(f"Build Start: {cfg['target']} [{cfg['quantization']}]")
+        self.log(f"Build Start: {cfg['target']} [{cfg['format']} / {cfg['quantization']}]")
         self.set_controls_enabled(False)
         self.docker_manager.start_build(cfg)
 
@@ -355,6 +404,9 @@ class MainOrchestrator(QMainWindow):
     def on_build_completed(self, bid, success, p): 
         self.set_controls_enabled(True)
         self.progress_bar.setValue(100 if success else 0)
-        self.log(f"{'✅' if success else '❌'} Done")
+        self.log(f"{'✅' if success else '❌'} Done. Artifact: {p}")
+    
+    def on_sidecar_status(self, service, status):
+        self.log(f"Sidecar [{service}]: {status}")
 
     def log(self, msg): self.log_view.append(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")

@@ -6,6 +6,7 @@ DIREKTIVE: Goldstandard, MVC-Pattern, Separation of Concerns.
 Updates v1.5.0:
 - Added Output Format Selection (GGUF, RKNN, ONNX, etc.)
 - Connected Format selection to Build Configuration
+- Added Window Icon support from assets/
 """
 
 import sys
@@ -139,6 +140,18 @@ class MainOrchestrator(QMainWindow):
     def init_ui(self):
         self.setWindowTitle(tr("app.title"))
         self.setMinimumSize(1200, 850)
+        
+        # --- App Icon (v1.5.0 Visual Update) ---
+        # Checks for logo in assets folder
+        logo_path = self.app_root / "assets" / "logo.png"
+        if logo_path.exists():
+            self.setWindowIcon(QIcon(str(logo_path)))
+        else:
+            # Fallback check for .ico
+            logo_ico = self.app_root / "assets" / "icon.ico"
+            if logo_ico.exists():
+                self.setWindowIcon(QIcon(str(logo_ico)))
+
         self.setStyleSheet("""
             QMainWindow, QWidget { background-color: #2b2b2b; color: #ffffff; }
             QGroupBox { border: 1px solid #555; margin-top: 10px; font-weight: bold; border-radius: 4px; }

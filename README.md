@@ -72,21 +72,6 @@ The pipeline doesn't stop at compilation. It automatically bundles the quantized
 └── output/               # Build Artifacts appear here
 ```
 
----
-
-## 👥 Who Uses This?
-
-> *"We reduced our deployment time for custom LLMs on Rockchip boards from 2 days to 45 minutes. The auto-packaging is a lifesaver."*  
-> **— StartUp Robotics, Berlin**
-
-> *"Finally, a way to teach students cross-compilation without spending 3 weeks on environment setup. The GUI makes complex toolchains accessible."*  
-> **— Applied Sciences University, Munich**
-
-> *"Privacy was our main concern. With the Local RAG feature, our hardware specs and docs never leave our local network."*  
-> **— Industrial IoT Integrator**
-
----
-
 ## 📟 Supported Hardware
 
 | Family | Status | Chips | NPU/GPU | Features |

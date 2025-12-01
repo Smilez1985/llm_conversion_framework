@@ -10,6 +10,7 @@ the AI's output before passing it to the ModuleGenerator.
 UPDATES v1.5.0:
 - Integrated RAG retrieval via Qdrant (Hybrid approach: Vector DB -> Web Fallback).
 - Context-aware prompting based on indexed knowledge.
+- STRICT System Prompt for Hardware Ontology understanding.
 """
 
 import json
@@ -117,8 +118,7 @@ class DittoCoder:
                 for res in results:
                     context_text += f"\n[Source: {res.source}]\n{res.content}\n"
                 used_source = "RAG (Qdrant)"
-                return context_text # Return early if we have good data? Or append web?
-                                    # Decision: RAG is usually better segmented. We return RAG.
+                return context_text 
 
         # --- STRATEGY 2: NAIVE WEB RETRIEVAL (Fallback) ---
         if not context_text and self.config_manager:
@@ -178,20 +178,39 @@ class DittoCoder:
         # 3. Fetch Context (RAG or Web)
         doc_context = self._fetch_documentation(sdk_hint)
 
-        # 4. Construct System Prompt
+        # 4. Construct System Prompt (HIGH PRECISION MODE)
         system_prompt = """
-        You are 'Ditto', an expert Embedded Systems Engineer.
-        Analyze the hardware probe and generate a JSON configuration to fill the framework templates.
+        You are 'Ditto', the Lead Architect for Edge-AI Deployment.
+        Your Mission: Create a mathematically perfect, production-grade build configuration for the detected hardware.
         
-        TASKS:
-        1. Analyze Hardware (Arch, CPU Flags, NPU).
-        2. Generate Bash Code blocks for 'build.sh'.
+        ### HARDWARE ONTOLOGY (Internalize this):
+        - **SoC (System on Chip)** defines the NPU/GPU capabilities (e.g. RK3588 -> 6 TOPS NPU).
+        - **CPU Architecture** defines the Instruction Set (e.g. aarch64 -> NEON, x86_64 -> AVX512).
+        - **SDKs** are strictly coupled to the SoC Family (e.g. RKNN-Toolkit2 is ONLY for RK3566/88).
+        - **Drivers** must match the Kernel version found in the probe.
+        
+        ### EXECUTION PROTOCOL:
+        1. **DECODE PROBE:** Extract 'CPU_Implementer', 'NPU_Name', 'Instruction_Set', and 'Kernel_Version' from the Input.
+        2. **CROSS-REFERENCE:** Search the 'Documentation Context' for these exact keywords. Find the matching CMake flags and Docker base images.
+        3. **SECURE CONFIGURATION (Enterprise Security):**
+           - Base Image: Must be a trusted vendor image (e.g. nvcr.io, rockchip) or Debian-Slim.
+           - Packages: Only install compile-time dependencies. NO development tools in runtime.
+           - Permissions: Do not use root for build execution if possible (user 'llmbuilder' is preferred).
+           - Network: Use HTTPS only. Pin git commits if version is known.
+        4. **CODE GENERATION:**
+           - Generate 'setup_commands' that are idempotent and failure-proof (set -e).
+           - 'quantization_logic' must handle the specific format required by the NPU (e.g. RKNN) vs CPU (GGUF).
+        
+        ### ZERO TOLERANCE POLICY:
+        - Do not guess compiler flags. If `doc_context` is empty or ambiguous, use generic `-O3`.
+        - Do not invent SDK versions. Use the ones from the Context.
+        - If Hardware is unknown, default to "Generic CPU" mode.
         
         REQUIRED JSON STRUCTURE:
         {
-            "module_name": "Str",
+            "module_name": "Str (e.g. Rockchip_RK3588_NPU)",
             "architecture": "aarch64|x86_64",
-            "sdk": "Str",
+            "sdk": "Str (e.g. RKNN)",
             "base_os": "Docker Image Name",
             "packages": ["list", "of", "packages"],
             "cpu_flags": "GCC Flags",
@@ -199,17 +218,7 @@ class DittoCoder:
             "setup_commands": "Bash code for Dockerfile setup (optional)",
             "quantization_logic": "Bash CASE block content for build.sh"
         }
-        
-        CRITICAL RULES for 'quantization_logic':
-        - Generate ONLY the case content lines (cases and commands).
-        - Do not wrap in 'case ... esac', just the body.
-        - Example for RKNN:
-        "INT8"|"i8")
-            echo "Converting to INT8..."
-            /app/modules/rknn_module.sh ;;
-        "FP16")
-            echo "Keeping FP16..." ;;
-            
+
         Documentation Context:
         {doc_context}
         """
@@ -230,7 +239,7 @@ class DittoCoder:
                     {"role": "system", "content": system_prompt.replace("{doc_context}", doc_context)},
                     {"role": "user", "content": user_prompt}
                 ],
-                "temperature": 0.1
+                "temperature": 0.1 # Low temperature for precision
             }
             
             if hasattr(self, 'api_key') and self.api_key and self.api_key != "sk-dummy":

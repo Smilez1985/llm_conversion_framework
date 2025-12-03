@@ -132,23 +132,26 @@ docker exec -it llm-orchestrator llm-cli
 ---
 
 ## 🛠️ Verwendung
+1. GUI Modus (Empfohlen)
+Hardware Prüfen: Führen Sie ./hardware_probe.sh auf Ihrem Zielgerät aus.
 
-### 1. GUI Modus (Empfohlen)
+Importieren: Öffnen Sie LLM-Builder, gehen Sie zu "Tools" -> "Hardware Profil importieren".
 
-1. **Hardware Prüfen:** Führen Sie `./hardware_probe.sh` auf Ihrem Zielgerät aus (z.B. dem Pi oder Rockchip Board).
-2. **Importieren:** Öffnen Sie LLM-Builder, gehen Sie zu **"Tools" → "Hardware Profil importieren"** und wählen Sie die Datei.
-3. **Konfigurieren:** Der Wizard wählt automatisch das beste Docker-Image und Flags.
-4. **KI-Experte (Optional):** Aktivieren Sie **"Lokale Wissensdatenbank"** in den KI-Einstellungen, damit Ditto spezifische SDK-Dokus analysiert.
-5. **Build:** Wählen Sie Ihr Modell (HF-ID) und klicken Sie auf **"Build starten"**.
+Deep Ingest (v1.6): Wenn Ditto die Hardware nicht kennt, klicken Sie auf "🧠 Deep Ingest". Geben Sie die URL zur offiziellen Doku ein (z.B. docs.rock-chips.com). Ditto crawlt und memoriert diese.
 
-### 2. CLI Modus (Automatisierung)
+Konfigurieren: Der Wizard wählt automatisch das beste Docker-Image und Flags basierend auf dem gelernten Wissen.
+
+Build: Wählen Sie Ihr Modell (HF-ID) und klicken Sie auf "Build starten".
+
+2. CLI Modus (Automatisierung)
+
+# Beispiel: Cross-Compile Granite-3B für Rockchip RK3588 im RKNN Format
 ```bash
-# Beispiel: Cross-Compile Granite-3B für Rockchip RK3588
 llm-cli build start \
   --model "IBM/granite-3b-code-instruct" \
   --target rockchip \
-  --quantization Q4_K_M \
-  --task LLM \
+  --format rknn \
+  --quantization W8A8 \
   --output-dir ./my-builds
 ```
 

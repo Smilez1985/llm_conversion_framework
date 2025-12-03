@@ -8,25 +8,29 @@ Er unterstützt zwei Modi:
 1. Standard Import: Deterministisches Parsen von hardware_probe.sh/.ps1 Ausgaben.
 2. AI Auto-Discovery: Intelligente Analyse und Optimierungsvorschläge durch Ditto (LLM).
 
-Updates v1.5.0:
-- Integrated Ditto Avatar Image for better UX.
+Updates v1.6.0:
+- Integrated "Deep Ingest" Workflow via CrawlWorker.
+- Added UI for URL Input and Live Crawl Progress.
+- Updated Ditto Avatar logic.
 """
 
 import threading
 import re
 import os
 from pathlib import Path
+from typing import List, Dict, Any
+
 from PySide6.QtWidgets import (
     QWizard, QWizardPage, QVBoxLayout, QLabel, QFormLayout, 
     QLineEdit, QComboBox, QRadioButton, QButtonGroup, QTextEdit, 
     QMessageBox, QGroupBox, QPushButton, QFileDialog, QProgressBar,
-    QDialog, QHBoxLayout, QWidget
+    QDialog, QHBoxLayout, QWidget, QPlainTextEdit
 )
-from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtCore import Qt, Signal, QObject, QThread
 from PySide6.QtGui import QPixmap
 
 from orchestrator.Core.module_generator import ModuleGenerator
-from orchestrator.gui.dialogs import AIConfigurationDialog
+from orchestrator.gui.dialogs import AIConfigurationDialog, URLInputDialog
 from orchestrator.utils.localization import tr
 
 # Optionale Ditto Integration
@@ -39,6 +43,59 @@ class WizardSignals(QObject):
     """Signale für Thread-Kommunikation"""
     analysis_finished = Signal(dict)
     analysis_error = Signal(str)
+    # Crawler Signals
+    crawl_progress = Signal(str)
+    crawl_finished = Signal(str)
+    crawl_error = Signal(str)
+
+class CrawlWorker(QThread):
+    """Worker Thread for Deep Ingest (prevents GUI freeze)."""
+    progress = Signal(str)
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, rag_manager, urls: List[str], options: Dict[str, Any]):
+        super().__init__()
+        self.rag_manager = rag_manager
+        self.urls = urls
+        self.options = options
+        self._is_running = True
+
+    def run(self):
+        try:
+            total_docs = 0
+            for url in self.urls:
+                if not self._is_running: break
+                
+                self.progress.emit(f"Crawling root: {url}...")
+                
+                # Wir nutzen die ingest_url Methode des RAGManagers, die den Crawler kapselt
+                # Hinweis: Hier könnten wir die Options (depth, limits) anpassen, 
+                # wenn wir rag_manager.ingest_url erweitern würden. 
+                # Für v1.6.0 nehmen wir an, der ConfigManager steuert die Limits global,
+                # oder wir setzen sie temporär.
+                
+                # Global Config Override (Temporary for this crawl)
+                if self.rag_manager.framework.config:
+                    self.rag_manager.framework.config.crawler_max_depth = self.options.get("depth", 2)
+                    self.rag_manager.framework.config.crawler_max_pages = self.options.get("max_pages", 50)
+
+                result = self.rag_manager.ingest_url(url)
+                
+                if result.get("success"):
+                    count = result.get("count", 0)
+                    total_docs += count
+                    self.progress.emit(f"  -> Ingested {count} chunks from {url}")
+                else:
+                    self.progress.emit(f"  -> Failed: {result.get('message')}")
+            
+            self.finished.emit(f"Deep Ingest complete. Added {total_docs} knowledge chunks.")
+            
+        except Exception as e:
+            self.error.emit(str(e))
+
+    def stop(self):
+        self._is_running = False
 
 class ModuleCreationWizard(QWizard):
     """
@@ -48,11 +105,14 @@ class ModuleCreationWizard(QWizard):
     def __init__(self, targets_dir: Path, parent=None):
         super().__init__(parent)
         self.targets_dir = targets_dir
+        self.framework_manager = None
         
-        # Access assets path via parent app root if available
+        # Access assets & framework via parent app root if available
         self.assets_dir = None
         if parent and hasattr(parent, 'app_root'):
             self.assets_dir = parent.app_root / "assets"
+        if parent and hasattr(parent, 'framework_manager'):
+            self.framework_manager = parent.framework_manager
             
         self.setWindowTitle(tr("wiz.title"))
         self.setWizardStyle(QWizard.ModernStyle)
@@ -60,6 +120,7 @@ class ModuleCreationWizard(QWizard):
         
         self.module_data = {}
         self.ai_config = {} 
+        self.crawl_worker = None
         
         self.signals = WizardSignals()
         self.signals.analysis_finished.connect(self.on_ai_finished)
@@ -104,6 +165,7 @@ class ModuleCreationWizard(QWizard):
         
         import_layout.addLayout(header_layout)
 
+        # Buttons Row 1: Imports
         hbox_btns = QHBoxLayout()
         
         # Button 1: Standard Import (Hardcoded Logic)
@@ -121,15 +183,23 @@ class ModuleCreationWizard(QWizard):
         
         import_layout.addLayout(hbox_btns)
         
+        # Buttons Row 2: Knowledge Ingest (v1.6.0)
+        hbox_know = QHBoxLayout()
+        self.btn_deep_ingest = QPushButton("🧠 Deep Ingest (Add Docs)")
+        self.btn_deep_ingest.setToolTip("Crawl external documentation URLs to teach Ditto about new hardware.")
+        self.btn_deep_ingest.clicked.connect(self.run_deep_ingest)
+        hbox_know.addWidget(self.btn_deep_ingest)
+        
+        hbox_know.addStretch()
+        
         # AI Config Button
-        hbox_conf = QHBoxLayout()
-        hbox_conf.addStretch()
         self.btn_configure_ai = QPushButton(tr("wiz.btn.config_ai"))
         self.btn_configure_ai.clicked.connect(self.configure_ai)
-        hbox_conf.addWidget(self.btn_configure_ai)
-        import_layout.addLayout(hbox_conf)
+        hbox_know.addWidget(self.btn_configure_ai)
+        
+        import_layout.addLayout(hbox_know)
 
-        # Progress & Status
+        # Progress & Status Area
         self.status_label = QLabel(tr("wiz.status.waiting"))
         self.status_label.setAlignment(Qt.AlignCenter)
         import_layout.addWidget(self.status_label)
@@ -138,6 +208,14 @@ class ModuleCreationWizard(QWizard):
         self.ai_progress.setRange(0, 0) 
         self.ai_progress.setVisible(False)
         import_layout.addWidget(self.ai_progress)
+        
+        # Crawler Log (New v1.6.0)
+        self.crawl_log = QPlainTextEdit()
+        self.crawl_log.setReadOnly(True)
+        self.crawl_log.setMaximumHeight(100)
+        self.crawl_log.setVisible(False)
+        self.crawl_log.setStyleSheet("background-color: #222; color: #0f0; font-family: Consolas;")
+        import_layout.addWidget(self.crawl_log)
 
         import_group.setLayout(import_layout)
         layout.addWidget(import_group)
@@ -272,6 +350,57 @@ CMake Flags:  {self.cmake_flags.text()}
 Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No (Default)'}
 """
         self.summary_text.setText(summary)
+
+    # --- DEEP INGEST LOGIC (v1.6.0) ---
+    def run_deep_ingest(self):
+        """Starts the Deep Ingest Process."""
+        if not self.framework_manager:
+            QMessageBox.critical(self, "Error", "Framework Manager not linked.")
+            return
+            
+        rag = self.framework_manager.get_component("rag_manager")
+        if not rag:
+            QMessageBox.critical(self, "Error", "Local Knowledge Base (RAG) is not active.\nPlease enable it in 'Configure AI Agent' first.")
+            return
+
+        # Show Input Dialog
+        dlg = URLInputDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            urls = dlg.get_urls()
+            options = dlg.get_options()
+            
+            if not urls:
+                return
+
+            self.crawl_log.setVisible(True)
+            self.crawl_log.clear()
+            self.crawl_log.appendPlainText(f"Initializing Crawler for {len(urls)} URLs...")
+            self.btn_deep_ingest.setEnabled(False)
+            self.ai_progress.setVisible(True)
+            self.ai_progress.setRange(0, 0) # Infinite spin
+            
+            # Start Worker
+            self.crawl_worker = CrawlWorker(rag, urls, options)
+            self.crawl_worker.progress.connect(self.on_crawl_progress)
+            self.crawl_worker.finished.connect(self.on_crawl_finished)
+            self.crawl_worker.error.connect(self.on_crawl_error)
+            self.crawl_worker.start()
+
+    def on_crawl_progress(self, msg):
+        self.crawl_log.appendPlainText(msg)
+        self.crawl_log.verticalScrollBar().setValue(self.crawl_log.verticalScrollBar().maximum())
+
+    def on_crawl_finished(self, msg):
+        self.btn_deep_ingest.setEnabled(True)
+        self.ai_progress.setVisible(False)
+        self.crawl_log.appendPlainText(f"\n✅ {msg}")
+        QMessageBox.information(self, "Ingest Complete", msg)
+
+    def on_crawl_error(self, err):
+        self.btn_deep_ingest.setEnabled(True)
+        self.ai_progress.setVisible(False)
+        self.crawl_log.appendPlainText(f"\n❌ Error: {err}")
+        QMessageBox.critical(self, "Crawl Error", str(err))
 
     # --- STANDARD IMPORT LOGIC (Rule Based) ---
 
@@ -412,7 +541,8 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
                 model=self.ai_config.get("model"),
                 api_key=self.ai_config.get("api_key"),
                 base_url=self.ai_config.get("base_url"),
-                config_manager=fm_config
+                config_manager=fm_config,
+                framework_manager=self.framework_manager # Pass Framework Manager for RAG
             )
             config = coder.generate_module_content(path)
             self.signals.analysis_finished.emit(config)
@@ -491,7 +621,12 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
         try:
             if not self.targets_dir.exists(): self.targets_dir.mkdir(parents=True, exist_ok=True)
             generator = ModuleGenerator(self.targets_dir)
-            output_path = generator.generate_module(self.module_data)
+            # Pass Framework Manager if available to enable Knowledge Snapshot
+            if self.framework_manager:
+                output_path = generator.generate_module(self.module_data, self.framework_manager)
+            else:
+                output_path = generator.generate_module(self.module_data)
+                
             QMessageBox.information(self, tr("msg.success"), f"{tr('msg.module_created')}\n{output_path}")
             super().accept()
         except Exception as e:

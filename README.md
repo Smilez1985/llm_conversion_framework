@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-20.10+-blue.svg)](https://docs.docker.com/get-docker/)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
-[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/Smilez1985/llm_conversion_framework?style=social)](https://github.com/Smilez1985/llm_conversion_framework)
 [![GitHub Forks](https://img.shields.io/github/forks/Smilez1985/llm_conversion_framework?style=social)](https://github.com/Smilez1985/llm_conversion_framework)
 
@@ -16,15 +16,15 @@ A GUI-based LLM Deployment Framework capable of automating the optimization & qu
 
 ---
 
-## 🌟 What's New in v1.5.0
+## 🌟 What's New in v1.6.0
 
-**Expert Knowledge Release.** We transformed the AI Agent "Ditto" from a passive reader into an active expert system.
+**Deep Ingest Release.** We empowered the AI Agent "Ditto" to learn from the entire web, not just single pages.
 
-* 🧠 **Local RAG with Qdrant:** Semantic search over hardware documentation instead of naive scraping.
-* 🤝 **Community Knowledge Sync:** Share and import indexed knowledge snapshots via Git – create a collective brain without cloud dependency.
-* 🏎️ **Dynamic Sidecar Architecture:** The vector database runs as an on-demand container. Zero resource usage when not enabled.
+* 🕷️ **Deep Crawler Engine:** Recursively crawls entire documentation sites (LangChain-based) to understand complex SDKs.
+* 📄 **PDF Intelligence:** Native parsing of technical datasheets and PDF manuals.
+* 🧠 **Knowledge Snapshots:** Automatically bundles learned RAG knowledge into the generated module for easy sharing with the community.
 
-[View Full Changelog](CHANGELOG.md) | [Upgrade Guide](docs/upgrade_v1.5.md)
+[View Full Changelog](CHANGELOG.md) | [Upgrade Guide](docs/upgrade_v1.6.md)
 
 ---
 
@@ -34,24 +34,26 @@ A GUI-based LLM Deployment Framework capable of automating the optimization & qu
 Compile models for any target architecture from a single x86 host. The framework automatically handles cross-compilation toolchains (GCC/G++ for AArch64, RISC-V) and detects CPU flags (NEON, AVX512) via the `hardware_probe.sh` script to produce highly optimized binaries.
 
 ### 🤖 AI-Powered Module Creation (Ditto)
-Don't know the compiler flags for your specific board? The "Ditto" AI Agent analyzes your hardware probe, queries its **Local Knowledge Base (RAG)**, and automatically generates the complete Docker configuration, CMake toolchains, and build scripts. Supports OpenAI, Anthropic, and Local LLMs (Ollama).
+Don't know the compiler flags for your specific board? The "Ditto" AI Agent analyzes your hardware probe and automatically generates the complete Docker configuration. 
+**New in v1.6:** If Ditto doesn't know a board, feed it the documentation URL. It will crawl, read, and memorize the entire SDK manual in minutes.
 
 ### 🛡️ Security-First Architecture
-Enterprise-grade security by design. The Orchestrator communicates with Docker via a strictly confined **Socket Proxy** to prevent privilege escalation. Every build image is automatically scanned for vulnerabilities using **Trivy**. Inputs are sanitized, and API keys are AES-256 encrypted using the `SecretsManager`.
+Enterprise-grade security by design. The Orchestrator communicates with Docker via a strictly confined **Socket Proxy**. Every build image is scanned for vulnerabilities using **Trivy**. The new Crawler respects `robots.txt` and includes mandatory user disclaimers.
 
 ### 🐳 Docker-Native Build System
 No pollution of your host system. All builds happen in isolated, transient Docker containers. Uses multi-stage builds to keep images small and `BuildX` for performance. Volumes are mounted dynamically for caching and artifact extraction.
 
-### 🧠 Local Knowledge Base (New!)
-An optional, privacy-focused RAG system based on **Qdrant**. It indexes SDK documentation (e.g., RKNN Toolkit, TensorRT) locally. This allows the AI to answer complex questions about quantization parameters accurately without sending data to the cloud.
+### 🧠 Local Knowledge Base (RAG)
+An optional, privacy-focused RAG system based on **Qdrant**. It indexes SDK documentation locally. This allows the AI to answer complex questions about quantization parameters accurately without sending data to the cloud.
 
 ### 📦 Auto-Packaging & Deployment
-The pipeline doesn't stop at compilation. It automatically bundles the quantized model (GGUF/RKNN), the compiled binaries, and necessary runtime scripts (`deploy.sh`, `test_model.sh`) into a ready-to-deploy ZIP archive or Tarball. Includes a generated Model Card (`README.md`).
+The pipeline doesn't stop at compilation. It automatically bundles the quantized model (GGUF/RKNN/TensorRT), the compiled binaries, and necessary runtime scripts into a ready-to-deploy ZIP archive.
 
 ---
 
 ## 📂 Project Structure
-```
+
+```text
 .
 ├── LLM-Builder.exe       # Main Entry Point (Windows)
 ├── scripts/
@@ -60,10 +62,10 @@ The pipeline doesn't stop at compilation. It automatically bundles the quantized
 │   └── hardware_probe.sh # Run this on your Target Device!
 ├── orchestrator/
 │   ├── gui/              # PySide6 GUI Components
-│   ├── Core/             # Logic: Builder, ModelManager, RAGManager
+│   ├── Core/             # Logic: Builder, ModelManager, RAGManager, CrawlerManager
 │   └── utils/            # Helpers: Logging, Security, Network
 ├── targets/              # Hardware Modules
-│   ├── rockchip/         # Production Ready (RK3588/RK3566)
+│   ├── Rockchip/         # Production Ready (RK3588/RK3566)
 │   ├── _template/        # Template for new modules
 │   └── README.md
 ├── community/

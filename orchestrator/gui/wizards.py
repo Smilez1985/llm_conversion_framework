@@ -8,10 +8,9 @@ Er unterstützt zwei Modi:
 1. Standard Import: Deterministisches Parsen von hardware_probe.sh/.ps1 Ausgaben.
 2. AI Auto-Discovery: Intelligente Analyse und Optimierungsvorschläge durch Ditto (LLM).
 
-Updates v1.6.0:
-- Integrated "Deep Ingest" Workflow via CrawlWorker.
-- Added UI for URL Input and Live Crawl Progress.
-- Updated Ditto Avatar logic.
+Updates v1.7.0:
+- Integrated Dynamic Ditto Avatar (States: Thinking, Reading, Success, Error).
+- Visual Feedback for Long-Running Tasks.
 """
 
 import threading
@@ -69,12 +68,6 @@ class CrawlWorker(QThread):
                 
                 self.progress.emit(f"Crawling root: {url}...")
                 
-                # Wir nutzen die ingest_url Methode des RAGManagers, die den Crawler kapselt
-                # Hinweis: Hier könnten wir die Options (depth, limits) anpassen, 
-                # wenn wir rag_manager.ingest_url erweitern würden. 
-                # Für v1.6.0 nehmen wir an, der ConfigManager steuert die Limits global,
-                # oder wir setzen sie temporär.
-                
                 # Global Config Override (Temporary for this crawl)
                 if self.rag_manager.framework.config:
                     self.rag_manager.framework.config.crawler_max_depth = self.options.get("depth", 2)
@@ -126,6 +119,9 @@ class ModuleCreationWizard(QWizard):
         self.signals.analysis_finished.connect(self.on_ai_finished)
         self.signals.analysis_error.connect(self.on_ai_error)
         
+        # UI Elements reference for updates
+        self.lbl_avatar = None
+        
         # Pages hinzufügen
         self.addPage(self.create_intro_page())
         self.addPage(self.create_hardware_page())
@@ -147,15 +143,12 @@ class ModuleCreationWizard(QWizard):
         # Ditto Avatar & Info
         header_layout = QHBoxLayout()
         
-        # Avatar Image
-        if self.assets_dir:
-            ditto_img_path = self.assets_dir / "ditto.png"
-            if ditto_img_path.exists():
-                lbl_img = QLabel()
-                pixmap = QPixmap(str(ditto_img_path))
-                # Scale nicely
-                lbl_img.setPixmap(pixmap.scaled(80, 80, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-                header_layout.addWidget(lbl_img)
+        # Avatar Image Container
+        self.lbl_avatar = QLabel()
+        self.lbl_avatar.setMinimumSize(100, 100)
+        self.lbl_avatar.setAlignment(Qt.AlignCenter)
+        self._set_avatar("ditto.png") # Default State
+        header_layout.addWidget(self.lbl_avatar)
         
         # Info Text
         info_lbl = QLabel(tr("wiz.lbl.ai_info") if tr("wiz.lbl.ai_info") != "wiz.lbl.ai_info" else "Let Ditto analyze your hardware probe.")
@@ -227,6 +220,14 @@ class ModuleCreationWizard(QWizard):
         page.setLayout(layout)
         return page
 
+    def _set_avatar(self, image_name: str):
+        """Updates the Ditto Avatar based on state."""
+        if self.assets_dir and self.lbl_avatar:
+            path = self.assets_dir / image_name
+            if path.exists():
+                pixmap = QPixmap(str(path))
+                self.lbl_avatar.setPixmap(pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
     def create_hardware_page(self):
         page = QWizardPage()
         page.setTitle(tr("wiz.page.hardware"))
@@ -278,7 +279,6 @@ class ModuleCreationWizard(QWizard):
         
         layout.addWidget(QLabel(tr("wiz.lbl.packages")))
         self.packages_edit = QLineEdit()
-        # Standard-Pakete ohne Compiler, der wird dynamisch hinzugefügt
         self.packages_edit.setText("build-essential cmake git python3-pip")
         layout.addWidget(self.packages_edit)
         
@@ -372,6 +372,7 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
             if not urls:
                 return
 
+            self._set_avatar("ditto_read.png") # Visual Update: Reading
             self.crawl_log.setVisible(True)
             self.crawl_log.clear()
             self.crawl_log.appendPlainText(f"Initializing Crawler for {len(urls)} URLs...")
@@ -391,12 +392,14 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
         self.crawl_log.verticalScrollBar().setValue(self.crawl_log.verticalScrollBar().maximum())
 
     def on_crawl_finished(self, msg):
+        self._set_avatar("ditto_success.png") # Visual Update: Success
         self.btn_deep_ingest.setEnabled(True)
         self.ai_progress.setVisible(False)
         self.crawl_log.appendPlainText(f"\n✅ {msg}")
         QMessageBox.information(self, "Ingest Complete", msg)
 
     def on_crawl_error(self, err):
+        self._set_avatar("ditto_fail.png") # Visual Update: Fail
         self.btn_deep_ingest.setEnabled(True)
         self.ai_progress.setVisible(False)
         self.crawl_log.appendPlainText(f"\n❌ Error: {err}")
@@ -493,12 +496,14 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
             self.cpu_flags.setText(" ".join(cpu_flags))
             self.cmake_flags.setText(" ".join(cmake_flags))
             
+            self._set_avatar("ditto_success.png")
             self.status_label.setText(tr("msg.import_success"))
             QMessageBox.information(self, tr("msg.import_success"), 
                                   f"Hardware profile loaded.\nDetected Arch: {detected_arch}\nSuggested SDK: {sdk}")
             self.next()
             
         except Exception as e:
+            self._set_avatar("ditto_fail.png")
             self.status_label.setText(tr("status.error"))
             QMessageBox.critical(self, tr("status.error"), f"Failed to parse probe file:\n{str(e)}")
 
@@ -523,6 +528,7 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
         path, _ = QFileDialog.getOpenFileName(self, tr("menu.import_profile"), "", "Config (*.txt);;All Files (*)")
         if not path: return
         
+        self._set_avatar("ditto_think.png") # Visual Update: Thinking
         self.btn_import_ai.setEnabled(False)
         self.btn_import_std.setEnabled(False)
         self.ai_progress.setVisible(True)
@@ -550,6 +556,7 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
             self.signals.analysis_error.emit(str(e))
 
     def on_ai_error(self, err):
+        self._set_avatar("ditto_fail.png") # Visual Update: Fail
         self.btn_import_ai.setEnabled(True)
         self.btn_import_std.setEnabled(True)
         self.ai_progress.setVisible(False)
@@ -557,6 +564,7 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
         QMessageBox.critical(self, "AI Error", err)
 
     def on_ai_finished(self, config):
+        self._set_avatar("ditto_success.png") # Visual Update: Success
         self.btn_import_ai.setEnabled(True)
         self.btn_import_std.setEnabled(True)
         self.ai_progress.setVisible(False)
@@ -584,7 +592,6 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
         packages_list = self.packages_edit.text().split()
         arch = self.arch_combo.currentText()
         
-        # Wenn wir nicht x86_64 sind, brauchen wir den Compiler
         if arch == "aarch64":
             if "gcc-aarch64-linux-gnu" not in packages_list:
                 packages_list.append("gcc-aarch64-linux-gnu")
@@ -609,7 +616,7 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
             "sdk": self.sdk_edit.text(),
             "description": f"Target for {self.name_edit.text()}",
             "base_os": self.custom_os_edit.text() if self.rad_custom.isChecked() else ("debian:bookworm-slim" if self.rad_debian.isChecked() else "ubuntu:22.04"),
-            "packages": packages_list, # Updated List
+            "packages": packages_list,
             "cpu_flags": self.cpu_flags.text(),
             "supported_boards": [],
             "setup_commands": "",
@@ -621,7 +628,6 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
         try:
             if not self.targets_dir.exists(): self.targets_dir.mkdir(parents=True, exist_ok=True)
             generator = ModuleGenerator(self.targets_dir)
-            # Pass Framework Manager if available to enable Knowledge Snapshot
             if self.framework_manager:
                 output_path = generator.generate_module(self.module_data, self.framework_manager)
             else:

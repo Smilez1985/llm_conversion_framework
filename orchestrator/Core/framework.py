@@ -3,10 +3,9 @@
 LLM Cross-Compiler Framework - Core Framework Manager
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 
-Updates v1.5.0:
-- Version Bump auf 1.5.0.
-- Integration des RAGManagers (Optional/Dynamic).
-- FrameworkConfig erweitert um RAG-Flags.
+Updates v1.6.0:
+- Version Bump auf 1.6.0 ("The Deep Ingest").
+- Integration des CrawlerManagers für Web/PDF Ingestion.
 """
 
 import os
@@ -28,17 +27,22 @@ from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, check_command_exists, safe_json_load
 
-# Import new Managers
+# Import Managers (Optional features via try-import)
 try:
     from orchestrator.Core.dataset_manager import DatasetManager
 except ImportError:
     DatasetManager = None
 
-# NEU v1.5.0: Local RAG Knowledge Base
 try:
     from orchestrator.Core.rag_manager import RAGManager
 except ImportError:
     RAGManager = None
+
+# NEU v1.6.0: Crawler Manager
+try:
+    from orchestrator.Core.crawler_manager import CrawlerManager
+except ImportError:
+    CrawlerManager = None
 
 @dataclass
 class FrameworkInfo:
@@ -84,8 +88,14 @@ class FrameworkConfig:
     api_host: str = "127.0.0.1"
     source_repositories: Dict[str, str] = field(default_factory=dict)
     
-    # NEU v1.5.0: RAG Configuration (Opt-In)
+    # RAG Configuration (Opt-In v1.5.0)
     enable_rag_knowledge: bool = False
+    
+    # Crawler Configuration (v1.6.0)
+    crawler_respect_robots: bool = True
+    crawler_max_depth: int = 2
+    crawler_max_pages: int = 50
+    input_history: List[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.default_build_args is None: self.default_build_args = {"BUILD_JOBS": "4", "PYTHON_VERSION": "3.11"}
@@ -105,12 +115,13 @@ class FrameworkManager:
         else: 
             self.config = FrameworkConfig()
         
-        # UPDATE: Version 1.5.0 (Expert Knowledge Release)
-        self.info = FrameworkInfo("1.5.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
+        # UPDATE: Version 1.6.0 (Deep Ingest Release)
+        self.info = FrameworkInfo("1.6.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
         
         self._components = {}
         self.dataset_manager = None
-        self.rag_manager = None # Placeholder v1.5.0
+        self.rag_manager = None
+        self.crawler_manager = None # Placeholder v1.6.0
         
         self._event_queue = queue.Queue()
         self._build_counter = 0
@@ -167,7 +178,8 @@ class FrameworkManager:
             self.info.docker_available = False
 
     def _initialize_core_components(self):
-        """Initializes internal managers like DatasetManager and RAGManager."""
+        """Initializes internal managers like DatasetManager, RAGManager and CrawlerManager."""
+        
         # 1. Dataset Manager
         if DatasetManager:
             try:
@@ -177,7 +189,7 @@ class FrameworkManager:
             except Exception as e:
                 self.logger.error(f"Failed to init DatasetManager: {e}")
                 
-        # 2. RAG Manager (v1.5.0) - Nur wenn aktiviert!
+        # 2. RAG Manager (Nur wenn aktiviert)
         if RAGManager:
             if self.config.enable_rag_knowledge:
                 try:
@@ -188,6 +200,16 @@ class FrameworkManager:
                     self.logger.error(f"Failed to init RAGManager: {e}")
             else:
                 self.logger.info("RAGManager disabled via config (Opt-In).")
+
+        # 3. Crawler Manager (NEU v1.6.0)
+        # Wird immer initialisiert, aber nur genutzt, wenn RAG aktiv ist oder manuell aufgerufen wird
+        if CrawlerManager:
+            try:
+                self.crawler_manager = CrawlerManager(self)
+                self.register_component("crawler_manager", self.crawler_manager)
+                self.logger.info("CrawlerManager initialized (Deep Ingest Ready)")
+            except Exception as e:
+                self.logger.error(f"Failed to init CrawlerManager: {e}")
 
     def register_component(self, n, c):
         with self._lock: self._components[n] = c

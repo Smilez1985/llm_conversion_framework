@@ -3,11 +3,11 @@
 LLM Cross-Compiler Framework - Main Window GUI
 DIREKTIVE: Goldstandard, MVC-Pattern, Separation of Concerns.
 
-Updates v1.7.0:
-- Added Deployment Features (SSH/SCP) via DeploymentDialog.
-- Added DeploymentWorker for background transfer.
-- New 'Deploy' button in UI.
-- Maintained all v1.5/1.6 features (RAG, Formats).
+Updates v1.7.0 (Final):
+- Integrated Live Resource Monitoring (CPU/RAM) directly in GUI.
+- Deployment Features (SSH/SCP) via DeploymentDialog.
+- Deep Ingest & RAG Integration.
+- Output Format Selection.
 """
 
 import sys
@@ -106,10 +106,6 @@ class DeploymentWorker(QThread):
         try:
             self.log_signal.emit(f"Starting deployment to {self.creds['ip']}...")
             
-            # Redirect Logger to Signal? 
-            # For simplicity, we assume manager logs to file/stdout and we capture high level result.
-            # Ideally we would attach a handler to the manager's logger here.
-            
             success = self.manager.deploy_artifact(
                 self.artifact,
                 self.creds['ip'],
@@ -137,7 +133,7 @@ class MainOrchestrator(QMainWindow):
         super().__init__()
         self.app_root = app_root
         self.logger = get_logger(__name__)
-        self.last_artifact_path = None # Track for deployment
+        self.last_artifact_path = None 
         
         config_path = self.app_root / "configs" / "framework_config.json"
         try:
@@ -158,10 +154,14 @@ class MainOrchestrator(QMainWindow):
             self.dataset_manager = DatasetManager(self.framework_manager)
             self.deployment_manager = DeploymentManager(self.framework_manager)
             
+            # Connect Signals
             self.docker_manager.build_output.connect(self.on_build_output)
             self.docker_manager.build_progress.connect(self.on_build_progress)
             self.docker_manager.build_completed.connect(self.on_build_completed)
             self.docker_manager.sidecar_status.connect(self.on_sidecar_status)
+            
+            # NEW v1.7.0: Resource Monitoring
+            self.docker_manager.build_stats.connect(self.on_build_stats)
             
             get_i18n().language_changed.connect(self.retranslateUi)
             
@@ -289,18 +289,43 @@ class MainOrchestrator(QMainWindow):
         self.start_btn = QPushButton(tr("btn.start")); self.start_btn.clicked.connect(self.start_build); b_layout.addWidget(self.start_btn)
         self.bench_btn = QPushButton(tr("btn.bench")); self.bench_btn.clicked.connect(self.open_benchmark_window); b_layout.addWidget(self.bench_btn)
         
-        # NEW v1.7.0: Deploy Button
         self.deploy_btn = QPushButton("Deploy to Target")
         self.deploy_btn.setStyleSheet("background-color: #007acc; color: white; font-weight: bold;")
         self.deploy_btn.clicked.connect(self.open_deployment_dialog)
-        self.deploy_btn.setEnabled(False) # Enabled after build
+        self.deploy_btn.setEnabled(False) 
         b_layout.addWidget(self.deploy_btn)
         
         c_layout.addRow("", b_layout)
         layout.addWidget(self.grp_build)
         
+        # --- PROGRESS & MONITORING (v1.7.0) ---
         self.grp_progress = QGroupBox(tr("grp.progress")); p_layout = QVBoxLayout(self.grp_progress)
+        
+        # Main Progress
+        p_layout.addWidget(QLabel("Overall Progress:"))
         self.progress_bar = QProgressBar(); self.progress_bar.setValue(0); p_layout.addWidget(self.progress_bar)
+        
+        # Live Monitoring (Stats)
+        stats_layout = QHBoxLayout()
+        
+        self.lbl_cpu = QLabel("CPU: 0%")
+        self.cpu_bar = QProgressBar()
+        self.cpu_bar.setRange(0, 100)
+        self.cpu_bar.setTextVisible(False)
+        self.cpu_bar.setStyleSheet("QProgressBar::chunk { background-color: #d9534f; }") # Red
+        
+        self.lbl_ram = QLabel("RAM: 0MB")
+        self.ram_bar = QProgressBar()
+        self.ram_bar.setRange(0, 100)
+        self.ram_bar.setTextVisible(False)
+        self.ram_bar.setStyleSheet("QProgressBar::chunk { background-color: #5bc0de; }") # Blue
+        
+        stats_layout.addWidget(self.lbl_cpu); stats_layout.addWidget(self.cpu_bar)
+        stats_layout.addSpacing(20)
+        stats_layout.addWidget(self.lbl_ram); stats_layout.addWidget(self.ram_bar)
+        
+        p_layout.addLayout(stats_layout)
+        
         self.log_view = QTextEdit(); self.log_view.setReadOnly(True); p_layout.addWidget(self.log_view)
         layout.addWidget(self.grp_progress)
 
@@ -476,6 +501,14 @@ class MainOrchestrator(QMainWindow):
             self.log(f"✅ Build Success. Golden Artifact: {p}")
         else:
             self.log(f"❌ Build Failed. {p}")
+    
+    def on_build_stats(self, bid, cpu, ram_usage, ram_limit):
+        self.lbl_cpu.setText(f"CPU: {cpu}%")
+        self.cpu_bar.setValue(int(cpu))
+        
+        ram_pct = (ram_usage / ram_limit) * 100 if ram_limit > 0 else 0
+        self.lbl_ram.setText(f"RAM: {int(ram_usage)} MB")
+        self.ram_bar.setValue(int(ram_pct))
     
     def on_sidecar_status(self, service, status):
         self.log(f"Sidecar [{service}]: {status}")

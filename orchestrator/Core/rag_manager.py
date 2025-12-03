@@ -7,12 +7,17 @@ Zweck:
 Verwaltet die lokale Vektor-Datenbank (Qdrant).
 Zuständig für Ingestion (Doku -> Vektoren) und Retrieval (Suche -> Kontext).
 Nutzt 'litellm' für Embeddings, um Provider-Agnostik zu wahren.
+
+Updates v1.6.0:
+- Integration des CrawlerManager für "Deep Ingest".
+- Neue Methode `ingest_url` für Webseiten und PDFs.
 """
 
 import uuid
 import time
 import logging
 import json
+import os
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 from datetime import datetime
@@ -27,6 +32,12 @@ except ImportError:
     QdrantClient = None
 
 from orchestrator.utils.logging import get_logger
+
+# Import Crawler (v1.6.0)
+try:
+    from orchestrator.Core.crawler_manager import CrawlerManager
+except ImportError:
+    CrawlerManager = None
 
 # ============================================================================
 # CONFIGURATION
@@ -192,6 +203,47 @@ class RAGManager:
                 self.logger.error(f"Qdrant Upsert failed: {e}")
                 return False
         return False
+
+    def ingest_url(self, url: str) -> Dict[str, Any]:
+        """
+        Startet den 'Deep Ingest' Prozess für eine URL mittels CrawlerManager.
+        Speichert Ergebnisse direkt in Qdrant.
+        """
+        if not CrawlerManager:
+            return {"success": False, "message": "Crawler module missing"}
+            
+        if not self._connect():
+            return {"success": False, "message": "Qdrant not connected"}
+
+        try:
+            crawler = CrawlerManager(self.framework)
+            self.logger.info(f"Invoking Crawler for {url}...")
+            
+            # 1. Crawl
+            documents = crawler.crawl(url)
+            
+            if not documents:
+                return {"success": False, "message": "No documents found", "count": 0}
+
+            # 2. Ingest Loop
+            success_count = 0
+            for doc in documents:
+                # Nutze die Metadaten vom Crawler (Source URL, Content Type)
+                meta = doc.metadata or {}
+                meta["root_url"] = url # Tagging für späteres Filtern
+                
+                if self.ingest_document(meta.get("source", url), doc.page_content, meta):
+                    success_count += 1
+            
+            return {
+                "success": True, 
+                "message": f"Ingested {success_count} documents", 
+                "count": success_count
+            }
+
+        except Exception as e:
+            self.logger.error(f"Deep Ingest failed: {e}")
+            return {"success": False, "message": str(e)}
 
     def search(self, query: str, limit: int = 3, score_threshold: float = 0.7) -> List[SearchResult]:
         """

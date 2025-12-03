@@ -3,9 +3,9 @@
 LLM Cross-Compiler Framework - Dialogs
 DIREKTIVE: Goldstandard, GUI-Komponenten, Internationalisierung.
 
-Updates v1.5.0:
-- AIConfigurationDialog: Checkbox für 'Local Knowledge Base' (RAG) hinzugefügt.
-- Layout-Optimierungen für bessere UX.
+Updates v1.6.0:
+- Added URLInputDialog for Deep Ingest (Crawler).
+- Includes Legal Disclaimer Checkbox & Crawler Limits.
 """
 
 import requests
@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
     QComboBox, QLineEdit, QLabel, QPushButton, QApplication,
     QGroupBox, QRadioButton, QButtonGroup, QStackedWidget, QWidget,
-    QTextEdit, QMessageBox, QPlainTextEdit, QCheckBox
+    QTextEdit, QMessageBox, QPlainTextEdit, QCheckBox, QSpinBox
 )
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
@@ -329,3 +329,81 @@ class DatasetReviewDialog(QDialog):
         text = self.editor.toPlainText()
         self.final_data = [s.strip() for s in text.split("---SEPARATOR---") if s.strip()]
         self.accept()
+
+# --- NEU v1.6.0: URL Input for Deep Crawler ---
+class URLInputDialog(QDialog):
+    """Dialog to input Documentation URLs for Deep Ingest."""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Deep Ingest - Documentation Source")
+        self.setMinimumWidth(600)
+        self.setMinimumHeight(400)
+        self._init_ui()
+        
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Intro
+        layout.addWidget(QLabel("<b>Deep Ingest:</b> Learn from external documentation."))
+        layout.addWidget(QLabel("Enter URLs to official documentation (PDF or Website). Ditto will crawl, chunk and memorize them."))
+        
+        # Text Area
+        self.text_edit = QPlainTextEdit()
+        self.text_edit.setPlaceholderText("https://docs.rock-chips.com/rk3588_manual\nhttps://wiki.banana-pi.org/...\n/path/to/local/specs.pdf")
+        layout.addWidget(self.text_edit)
+        
+        # Settings Group
+        grp_opts = QGroupBox("Crawler Settings")
+        form = QFormLayout(grp_opts)
+        
+        self.spin_depth = QSpinBox()
+        self.spin_depth.setRange(1, 10)
+        self.spin_depth.setValue(2)
+        self.spin_depth.setToolTip("Recursive depth: 1 = Only this page, 2 = This page + all links on it")
+        form.addRow("Crawl Depth:", self.spin_depth)
+        
+        self.spin_pages = QSpinBox()
+        self.spin_pages.setRange(1, 500)
+        self.spin_pages.setValue(50)
+        self.spin_pages.setToolTip("Safety limit: Stop after X pages.")
+        form.addRow("Max Pages:", self.spin_pages)
+        
+        layout.addWidget(grp_opts)
+        
+        # Disclaimer (MANDATORY)
+        self.chk_disclaimer = QCheckBox("I confirm that I am authorized to access/crawl these URLs and comply with their ToS/robots.txt.")
+        self.chk_disclaimer.setStyleSheet("color: red; font-weight: bold;")
+        self.chk_disclaimer.toggled.connect(self._validate)
+        layout.addWidget(self.chk_disclaimer)
+        
+        # Buttons
+        btns = QHBoxLayout()
+        self.btn_cancel = QPushButton(tr("btn.cancel"))
+        self.btn_cancel.clicked.connect(self.reject)
+        btns.addWidget(self.btn_cancel)
+        
+        self.btn_start = QPushButton("Start Deep Ingest")
+        self.btn_start.setStyleSheet("background-color: #6a0dad; color: white; font-weight: bold;")
+        self.btn_start.clicked.connect(self.accept)
+        self.btn_start.setEnabled(False) # Default disabled
+        btns.addWidget(self.btn_start)
+        
+        layout.addLayout(btns)
+        
+    def _validate(self):
+        # Enable start button only if disclaimer is checked AND text is not empty
+        has_text = bool(self.text_edit.toPlainText().strip())
+        is_checked = self.chk_disclaimer.isChecked()
+        self.btn_start.setEnabled(has_text and is_checked)
+        
+    def get_urls(self):
+        raw = self.text_edit.toPlainText()
+        # Split lines and filter empty
+        return [u.strip() for u in raw.split('\n') if u.strip()]
+        
+    def get_options(self):
+        return {
+            "depth": self.spin_depth.value(),
+            "max_pages": self.spin_pages.value()
+        }

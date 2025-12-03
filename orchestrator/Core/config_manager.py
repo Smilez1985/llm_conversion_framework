@@ -5,6 +5,10 @@ DIREKTIVE: Goldstandard, vollständige Implementierung.
 
 Verwaltet die globale Konfiguration, validiert Eingaben gegen definierte Schemata
 und persistiert Benutzereinstellungen.
+
+Updates v1.6.0:
+- Added Crawler Configuration (Depth, Limits, Robots.txt)
+- Added Input History for UX
 """
 
 import os
@@ -83,6 +87,12 @@ class ConfigSchema:
                     value = str(value).lower() in ('true', '1', 'yes', 'on')
                 elif self.field_type == str:
                     value = str(value)
+                elif self.field_type == list:
+                    if isinstance(value, (tuple, set)):
+                        value = list(value)
+                    elif isinstance(value, str):
+                        # Simple split for comma lists if string passed
+                        value = [v.strip() for v in value.split(',')]
             except (ValueError, TypeError):
                 errors.append(f"Invalid type for {self.field_name}: expected {self.field_type.__name__}")
         
@@ -104,7 +114,7 @@ class ConfigSchema:
             elif rule == "positive":
                 return value > 0
             elif rule == "non_empty":
-                return bool(value and str(value).strip())
+                return bool(value and (str(value).strip() if isinstance(value, str) else len(value) > 0))
         except Exception:
             return False
         return True
@@ -220,17 +230,22 @@ class ConfigManager:
 
     def _initialize_core_schemas(self):
         core_schemas = [
+            # Core Paths & Settings
             ConfigSchema("targets_dir", str, True, "targets", "Directory for target definitions"),
             ConfigSchema("models_dir", str, True, "models", "Directory for model storage"),
             ConfigSchema("output_dir", str, True, "output", "Directory for build outputs"),
             ConfigSchema("cache_dir", str, True, "cache", "Directory for cache files"),
             ConfigSchema("logs_dir", str, True, "logs", "Directory for log files"),
             ConfigSchema("log_level", str, False, "INFO", "Logging level", ["regex:^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$"]),
+            
+            # Build Settings
             ConfigSchema("max_concurrent_builds", int, False, 2, "Maximum concurrent builds", ["min:1", "max:10"]),
             ConfigSchema("build_timeout", int, False, 3600, "Build timeout in seconds", ["min:60"]),
             ConfigSchema("auto_cleanup", bool, False, True, "Enable automatic cleanup"),
             ConfigSchema("docker_registry", str, False, "ghcr.io", "Docker registry URL"),
             ConfigSchema("docker_namespace", str, False, "llm-framework", "Docker namespace"),
+            
+            # GUI & API
             ConfigSchema("gui_theme", str, False, "dark", "GUI theme"),
             ConfigSchema("gui_auto_refresh", bool, False, True, "GUI auto-refresh"),
             ConfigSchema("gui_refresh_interval", int, False, 30, "GUI refresh interval"),
@@ -243,7 +258,15 @@ class ConfigManager:
             ConfigSchema("ai_security_level", str, False, "STRICT", "AI Data Leakage Protection Level"),
             
             # Local RAG / Vector Database (v1.5.0)
-            ConfigSchema("enable_rag_knowledge", bool, False, False, "Enable local Qdrant Vector DB for AI (Experimental)")
+            ConfigSchema("enable_rag_knowledge", bool, False, False, "Enable local Qdrant Vector DB for AI (Experimental)"),
+            
+            # Deep Crawler Settings (v1.6.0)
+            ConfigSchema("crawler_respect_robots", bool, False, True, "Respect robots.txt rules"),
+            ConfigSchema("crawler_max_depth", int, False, 2, "Max recursion depth for crawler", ["min:1"]),
+            ConfigSchema("crawler_max_pages", int, False, 50, "Max pages to crawl per session", ["min:1"]),
+            
+            # UX History
+            ConfigSchema("input_history", list, False, [], "History of user inputs (URLs, etc.)")
         ]
         
         for schema in core_schemas:
@@ -392,6 +415,7 @@ class ConfigManager:
         """
         Saves current configuration to config.yml (User Scope).
         Only saves keys that are user-configurable to avoid clutter.
+        Updated v1.6.0: Includes crawler settings and history.
         """
         config_file = self.config_dir / "config.yml"
         data = {}
@@ -406,9 +430,22 @@ class ConfigManager:
             
         # Update with current memory values
         with self._lock:
+            # List of keys to persist
+            persist_keys = [
+                "language", 
+                "ai_security_level", 
+                "gui_theme", 
+                "docker_registry", 
+                "enable_rag_knowledge",
+                # New v1.6.0 keys
+                "crawler_respect_robots",
+                "crawler_max_depth",
+                "crawler_max_pages",
+                "input_history"
+            ]
+            
             for key, val in self.config_values.items():
-                # Persist only specific keys (Language, AI Settings, etc.)
-                if key in ["language", "ai_security_level", "gui_theme", "docker_registry", "enable_rag_knowledge"]:
+                if key in persist_keys:
                      data[key] = val.value
         
         try:

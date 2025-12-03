@@ -7,6 +7,9 @@ Zweck:
 Zentrale Logik zur Generierung neuer Hardware-Target-Module.
 Wird sowohl von der GUI (Wizard) als auch der CLI (Command) genutzt.
 Enthält Templates für Dockerfile, target.yml und build.sh.
+
+Updates v1.6.0:
+- Knowledge Snapshot Integration: Speichert gelerntes Wissen (RAG) direkt im Modul.
 """
 
 import os
@@ -23,6 +26,7 @@ class ModuleGenerator:
     """
     Generates file structure and content for new hardware targets.
     Uses a template-based approach to ensure consistency across all modules.
+    Now capable of attaching Knowledge Snapshots (RAG Data).
     """
     
     def __init__(self, targets_dir: Path):
@@ -47,37 +51,30 @@ class ModuleGenerator:
              else:
                  self.logger.warning(f"Template directory not found at {self.template_dir} or {possible_path}")
 
-    def generate_module(self, data: Dict[str, Any]) -> Path:
+    def generate_module(self, data: Dict[str, Any], framework_manager=None) -> Path:
         """
         Generate a complete module from configuration data.
         
         Args:
-            data: Dictionary containing configuration keys:
-                  - module_name (str): Display name of the module
-                  - architecture (str): CPU Arch (aarch64, x86_64)
-                  - sdk (str): Associated SDK (cuda, rknn, none)
-                  - base_os (str): Docker base image
-                  - packages (List[str] or str): Apt packages
-                  - cpu_flags (str): GCC optimization flags
-                  - cmake_flags (str): CMake build flags
-                  - quantization_logic (str): Bash case block for build.sh
-                  - setup_commands (str): Custom Dockerfile commands
-                  - detection_commands (str): Commands for profile script
+            data: Dictionary containing configuration keys.
+            framework_manager: Optional reference to access Community/RAG Managers for snapshots.
         
         Returns:
             Path: Path to the created module directory
         """
         # Slugify name for folder
-        module_slug = data["module_name"].lower().replace(" ", "_")
+        module_name = data.get("module_name", "Unknown")
+        module_slug = module_name.lower().replace(" ", "_")
         target_dir = self.targets_dir / module_slug
         
-        self.logger.info(f"Generating new target module: '{data['module_name']}' at {target_dir}")
+        self.logger.info(f"Generating new target module: '{module_name}' at {target_dir}")
         
         try:
             # 1. Create Directory Structure
             ensure_directory(target_dir)
             ensure_directory(target_dir / "modules")
             ensure_directory(target_dir / "scripts")
+            ensure_directory(target_dir / "knowledge") # NEU v1.6.0: Speicherort für RAG Snapshots
             
             # 2. Generate Files via Template Processing
             
@@ -96,7 +93,7 @@ class ModuleGenerator:
             self._process_template("modules/config_module.sh", target_dir, data)
             self._process_template("modules/source_module.sh", target_dir, data)
             
-            # NEU: Das intelligente Build-Skript (Dispatcher)
+            # Build Dispatcher
             self._write_build_script(target_dir, data)
             
             # Specialized Modules (Optional copy if template exists)
@@ -113,12 +110,54 @@ class ModuleGenerator:
             # 5. Create Placeholder/Fallback Modules
             self._write_standard_modules(target_dir)
             
-            self.logger.info(f"Module generation for '{data['module_name']}' completed successfully.")
+            # 6. Knowledge Snapshot (NEU v1.6.0)
+            if framework_manager:
+                self._create_knowledge_snapshot(target_dir, framework_manager, module_slug)
+            
+            self.logger.info(f"Module generation for '{module_name}' completed successfully.")
             return target_dir
             
         except Exception as e:
             self.logger.error(f"Failed to generate module: {e}")
             raise e
+
+    def _create_knowledge_snapshot(self, target_dir: Path, framework_manager, module_slug: str):
+        """
+        Exports the current RAG knowledge (gathered via Deep Ingest) and saves it
+        into the module's knowledge directory for distribution.
+        """
+        try:
+            # Lazy import to prevent circular dependencies at module level
+            from orchestrator.Core.community_manager import CommunityManager
+            
+            # Use existing or temporary CommunityManager to handle the export
+            # (We use CommunityManager because it owns the 'export_knowledge_base' logic including sanitization)
+            cm = CommunityManager(framework_manager)
+            
+            self.logger.info("Creating Knowledge Snapshot for module...")
+            
+            # Export from Qdrant to temp/community dir
+            snapshot_path_str = cm.export_knowledge_base(output_name_prefix=f"knowledge_{module_slug}")
+            
+            if snapshot_path_str and os.path.exists(snapshot_path_str):
+                src = Path(snapshot_path_str)
+                # Move to target module folder
+                dst = target_dir / "knowledge" / "initial_knowledge.json"
+                
+                shutil.move(src, dst)
+                self.logger.info(f"✅ Attached Knowledge Snapshot: {dst}")
+                
+                # Create a small Readme for the knowledge
+                with open(target_dir / "knowledge" / "README.md", "w") as f:
+                    f.write(f"# Knowledge Base for {module_slug}\n\n")
+                    f.write("This folder contains vectorized knowledge snapshots (JSON).\n")
+                    f.write("The framework will automatically ingest these into the local Qdrant instance when using this module.\n")
+            else:
+                self.logger.warning("No knowledge snapshot created (maybe Qdrant was empty or disabled).")
+                
+        except Exception as e:
+            self.logger.warning(f"Failed to create knowledge snapshot: {e}")
+            # Non-fatal error, module creation should still succeed
 
     def _process_template(self, filename: str, target_dir: Path, data: Dict[str, Any], target_filename: str = None):
         """

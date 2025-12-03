@@ -87,11 +87,17 @@ hailo_ai:
   hailo_rpi5_examples: "https://github.com/hailo-ai/hailo-rpi5-examples"
   docs_workflow: "https://github.com/hailo-ai/hailo_model_zoo/blob/master/docs/public_models/HAILO8/HAILO8_inference_guide.rst"
 
-# --- INTEL NPU (Core Ultra / Meteor Lake) ---
-intel_npu:
-  openvino: "https://github.com/openvinotoolkit/openvino"
-  linux_npu_driver: "https://github.com/intel/linux-npu-driver"
-  docs_workflow: "https://docs.openvino.ai/2024/documentation/openvino-ir-format.html"
+# --- INTEL NPU & GPU (v1.7.0) ---
+intel_ecosystem:
+  ipex_llm:
+    url: "https://github.com/intel/ipex-llm"
+    commit: "v2.2.0" # Latest stable as of Dec 2025
+    docs_workflow: "https://github.com/intel/ipex-llm/blob/main/docs/mddocs/Quickstart/install_linux.md"
+  
+  openvino:
+    url: "https://github.com/openvinotoolkit/openvino"
+    commit: "2025.4.0" # Latest stable as of Dec 2025
+    docs_workflow: "https://docs.openvino.ai/2025/documentation/openvino-ir-format.html"
 
 # --- AMD ROCm (Radeon GPUs) ---
 amd_rocm:
@@ -116,3 +122,15 @@ voice_tts:
 # --- MODELLE (MVP / Getestet) ---
 models:
   granite_350m: "https://huggingface.co/ibm-granite/granite-4.0-h-350m"
+
+# --- TINY MODELS (Offline Intelligence v2.0 Prep) ---
+tiny_models:
+  tinyllama_1b:
+    url: "https://huggingface.co/TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    description: "Fastest option (< 700MB), good for basic commands."
+  qwen_0_5b:
+    url: "https://huggingface.co/Qwen/Qwen1.5-0.5B-Chat"
+    description: "Extremely smart for size (< 500MB), multi-lingual capabilities."
+  danube_1_8b:
+    url: "https://huggingface.co/h2oai/h2o-danube-1.8b-chat"
+    description: "Strong reasoning capabilities, slightly larger footprint."

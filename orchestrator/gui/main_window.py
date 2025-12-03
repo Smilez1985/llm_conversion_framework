@@ -3,10 +3,11 @@
 LLM Cross-Compiler Framework - Main Window GUI
 DIREKTIVE: Goldstandard, MVC-Pattern, Separation of Concerns.
 
-Updates v1.5.0:
-- Added Output Format Selection (GGUF, RKNN, ONNX, etc.)
-- Connected Format selection to Build Configuration
-- Added Window Icon support from assets/
+Updates v1.7.0:
+- Added Deployment Features (SSH/SCP) via DeploymentDialog.
+- Added DeploymentWorker for background transfer.
+- New 'Deploy' button in UI.
+- Maintained all v1.5/1.6 features (RAG, Formats).
 """
 
 import sys
@@ -34,6 +35,7 @@ from PySide6.QtGui import QAction, QIcon
 from orchestrator.Core.docker_manager import DockerManager
 from orchestrator.Core.framework import FrameworkConfig, FrameworkManager
 from orchestrator.Core.dataset_manager import DatasetManager
+from orchestrator.Core.deployment_manager import DeploymentManager
 from orchestrator.utils.updater import UpdateManager
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.localization import tr, get_instance as get_i18n
@@ -41,7 +43,10 @@ from orchestrator.utils.localization import tr, get_instance as get_i18n
 # GUI Module Imports
 from orchestrator.gui.community_hub import CommunityHubWindow
 from orchestrator.gui.huggingface_window import HuggingFaceWindow
-from orchestrator.gui.dialogs import AddSourceDialog, LanguageSelectionDialog, DatasetReviewDialog, AIConfigurationDialog
+from orchestrator.gui.dialogs import (
+    AddSourceDialog, LanguageSelectionDialog, DatasetReviewDialog, 
+    AIConfigurationDialog, DeploymentDialog
+)
 from orchestrator.gui.wizards import ModuleCreationWizard
 from orchestrator.gui.benchmark_window import BenchmarkWindow
 
@@ -86,6 +91,43 @@ class DatasetGenWorker(QThread):
         except Exception as e:
             self.error.emit(str(e))
 
+class DeploymentWorker(QThread):
+    """Worker for zero-dependency deployment (SCP/SSH) in background."""
+    log_signal = Signal(str)
+    finished = Signal(bool)
+    
+    def __init__(self, manager, artifact, creds):
+        super().__init__()
+        self.manager = manager
+        self.artifact = artifact
+        self.creds = creds
+        
+    def run(self):
+        try:
+            self.log_signal.emit(f"Starting deployment to {self.creds['ip']}...")
+            
+            # Redirect Logger to Signal? 
+            # For simplicity, we assume manager logs to file/stdout and we capture high level result.
+            # Ideally we would attach a handler to the manager's logger here.
+            
+            success = self.manager.deploy_artifact(
+                self.artifact,
+                self.creds['ip'],
+                self.creds['user'],
+                self.creds['password'],
+                self.creds['path']
+            )
+            
+            if success:
+                self.log_signal.emit("✅ Deployment successful!")
+            else:
+                self.log_signal.emit("❌ Deployment failed. Check logs.")
+                
+            self.finished.emit(success)
+        except Exception as e:
+            self.log_signal.emit(f"Deployment Error: {e}")
+            self.finished.emit(False)
+
 class MainOrchestrator(QMainWindow):
     """
     Main GUI Application Window.
@@ -95,6 +137,7 @@ class MainOrchestrator(QMainWindow):
         super().__init__()
         self.app_root = app_root
         self.logger = get_logger(__name__)
+        self.last_artifact_path = None # Track for deployment
         
         config_path = self.app_root / "configs" / "framework_config.json"
         try:
@@ -112,13 +155,12 @@ class MainOrchestrator(QMainWindow):
             self.docker_manager = DockerManager()
             self.docker_manager.initialize(self.framework_manager)
             
-            # New: Dataset Manager for Smart Calibration
             self.dataset_manager = DatasetManager(self.framework_manager)
+            self.deployment_manager = DeploymentManager(self.framework_manager)
             
             self.docker_manager.build_output.connect(self.on_build_output)
             self.docker_manager.build_progress.connect(self.on_build_progress)
             self.docker_manager.build_completed.connect(self.on_build_completed)
-            # New: Sidecar Status (v1.5.0)
             self.docker_manager.sidecar_status.connect(self.on_sidecar_status)
             
             get_i18n().language_changed.connect(self.retranslateUi)
@@ -141,13 +183,10 @@ class MainOrchestrator(QMainWindow):
         self.setWindowTitle(tr("app.title"))
         self.setMinimumSize(1200, 850)
         
-        # --- App Icon (v1.5.0 Visual Update) ---
-        # Checks for logo in assets folder
         logo_path = self.app_root / "assets" / "logo.png"
         if logo_path.exists():
             self.setWindowIcon(QIcon(str(logo_path)))
         else:
-            # Fallback check for .ico
             logo_ico = self.app_root / "assets" / "icon.ico"
             if logo_ico.exists():
                 self.setWindowIcon(QIcon(str(logo_ico)))
@@ -182,8 +221,6 @@ class MainOrchestrator(QMainWindow):
         self.tools_menu = self.menubar.addMenu(tr("menu.tools"))
         act_wiz = QAction(tr("menu.create_module"), self); act_wiz.triggered.connect(self.open_module_wizard); self.tools_menu.addAction(act_wiz)
         act_aud = QAction(tr("menu.audit"), self); act_aud.triggered.connect(self.run_image_audit); self.tools_menu.addAction(act_aud)
-        
-        # New AI Config Action
         act_ai = QAction(tr("wiz.btn.config_ai"), self); act_ai.triggered.connect(self.open_ai_config); self.tools_menu.addAction(act_ai)
         
         self.comm_menu = self.menubar.addMenu(tr("menu.community"))
@@ -222,7 +259,6 @@ class MainOrchestrator(QMainWindow):
         self.task_combo = QComboBox(); self.task_combo.addItems(["LLM", "VOICE", "VLM"]); t_layout.addWidget(self.task_combo)
         self.lbl_target = QLabel(tr("lbl.target")); c_layout.addRow(self.lbl_target, t_layout)
         
-        # New Output Format Selection (v1.5.0 Update)
         f_layout = QHBoxLayout()
         self.format_combo = QComboBox()
         self.format_combo.addItems([
@@ -252,6 +288,14 @@ class MainOrchestrator(QMainWindow):
         b_layout = QHBoxLayout()
         self.start_btn = QPushButton(tr("btn.start")); self.start_btn.clicked.connect(self.start_build); b_layout.addWidget(self.start_btn)
         self.bench_btn = QPushButton(tr("btn.bench")); self.bench_btn.clicked.connect(self.open_benchmark_window); b_layout.addWidget(self.bench_btn)
+        
+        # NEW v1.7.0: Deploy Button
+        self.deploy_btn = QPushButton("Deploy to Target")
+        self.deploy_btn.setStyleSheet("background-color: #007acc; color: white; font-weight: bold;")
+        self.deploy_btn.clicked.connect(self.open_deployment_dialog)
+        self.deploy_btn.setEnabled(False) # Enabled after build
+        b_layout.addWidget(self.deploy_btn)
+        
         c_layout.addRow("", b_layout)
         layout.addWidget(self.grp_build)
         
@@ -299,64 +343,74 @@ class MainOrchestrator(QMainWindow):
     def check_for_updates_automatic(self): self.update_worker.start()
     
     def open_ai_config(self):
-        """Open AI Configuration Dialog (Ditto / RAG)"""
         dlg = AIConfigurationDialog(self)
-        # Pre-Load current settings if possible
         if dlg.exec() == QDialog.Accepted:
             cfg = dlg.get_config()
-            # Save relevant parts to config manager
             self.framework_manager.config_manager.set("enable_rag_knowledge", cfg.get("enable_rag_knowledge", False))
             self.framework_manager.config.enable_rag_knowledge = cfg.get("enable_rag_knowledge", False)
-            
-            # Persist user config
             self.framework_manager.config_manager.save_user_config()
-            
-            # Start/Stop RAG Service immediately if changed
             if self.docker_manager:
                 self.docker_manager.ensure_qdrant_service()
 
+    def open_deployment_dialog(self):
+        """Opens the Deployment Dialog using the last build artifact."""
+        if not self.last_artifact_path or not os.path.exists(self.last_artifact_path):
+            QMessageBox.warning(self, "Deployment", "No valid artifact found. Please build a model first.")
+            return
+            
+        dlg = DeploymentDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            creds = dlg.get_credentials()
+            self.log(f"Initializing Deployment to {creds['ip']}...")
+            self.set_controls_enabled(False)
+            
+            # Start Background Worker
+            self.deploy_worker = DeploymentWorker(self.deployment_manager, self.last_artifact_path, creds)
+            self.deploy_worker.log_signal.connect(self.log)
+            self.deploy_worker.finished.connect(self.on_deployment_finished)
+            self.deploy_worker.start()
+
+    def on_deployment_finished(self, success):
+        self.set_controls_enabled(True)
+        if success:
+            QMessageBox.information(self, "Deployment", "Successfully deployed to target device.")
+        else:
+            QMessageBox.critical(self, "Deployment Failed", "Deployment failed. See logs for details.")
+
     def start_build(self):
-        """Handles pre-build checks (Dataset) and triggers DockerManager."""
         model_path = self.model_name.text()
         if not model_path: return QMessageBox.warning(self, tr("status.error"), "Model required")
         
         quant = self.quant_combo.currentText()
-        
-        # --- Smart Dataset Check ---
         needs_ds = "INT" in quant or "W8" in quant or "W4" in quant
         ds_path = None
         
         if needs_ds:
-            # 1. Auto-Detect
             if os.path.exists(model_path):
                 check = os.path.join(model_path, "dataset.json")
                 if os.path.exists(check):
                     ds_path = check
                     self.log(f"Auto-Detected Dataset: {ds_path}")
             
-            # 2. Prompt User if missing
             if not ds_path:
                 ans = QMessageBox.question(self, "Calibration Data Missing", 
                                            f"Quantization '{quant}' requires a dataset.\n"
                                            "Generate via AI (Ditto) or Select File?", 
                                            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
                 
-                if ans == QMessageBox.Yes: # Generate AI
+                if ans == QMessageBox.Yes:
                     self.start_ai_dataset_gen(model_path)
-                    return # Stop here, resume in callback
-                elif ans == QMessageBox.No: # Manual Select
+                    return
+                elif ans == QMessageBox.No:
                     f, _ = QFileDialog.getOpenFileName(self, "Select Dataset", "", "JSON (*.json);;TXT (*.txt)")
                     if f: ds_path = f
                 else:
-                    return # Cancel
+                    return
         
         self._trigger_docker_build(model_path, quant, ds_path)
 
     def start_ai_dataset_gen(self, model_path):
-        """Starts the background worker for Ditto dataset generation."""
         domain = self.dataset_manager.detect_domain(model_path)
-        
-        # Fallback if domain unknown
         if not domain:
              d, ok = QInputDialog.getItem(self, "Select Domain", "Could not detect model domain.\nPlease select:", 
                                           ["code", "chat", "medical", "legal", "general_text"], 0, False)
@@ -373,14 +427,11 @@ class MainOrchestrator(QMainWindow):
 
     def on_dataset_generated(self, data, model_path):
         self.set_controls_enabled(True)
-        # Review Dialog (HitL)
         dlg = DatasetReviewDialog(data, "AI Generated Data", self)
         if dlg.exec():
-            # Save
             save_path = Path(model_path) / "dataset.json" if os.path.exists(model_path) else Path(self.framework_manager.config.cache_dir) / "dataset.json"
             if self.dataset_manager.save_dataset(dlg.final_data, save_path):
                 self.log(f"Dataset saved to {save_path}")
-                # Resume Build
                 self._trigger_docker_build(model_path, self.quant_combo.currentText(), str(save_path))
             else:
                 QMessageBox.critical(self, "Error", "Failed to save dataset.")
@@ -390,22 +441,22 @@ class MainOrchestrator(QMainWindow):
         QMessageBox.critical(self, "AI Error", str(err))
 
     def _trigger_docker_build(self, model, quant, ds_path):
-        # Extract Format (GGUF, RKNN...) from Combo string (e.g. "GGUF (Universal)" -> "GGUF")
         raw_format = self.format_combo.currentText()
-        target_format = raw_format.split()[0].strip() # Takes "GGUF" from "GGUF (Universal)"
+        target_format = raw_format.split()[0].strip()
 
         cfg = {
             "model_name": model,
             "target": self.target_combo.currentText(),
             "task": self.task_combo.currentText(),
             "quantization": quant,
-            "format": target_format, # NEW Field
+            "format": target_format,
             "auto_benchmark": self.chk_auto_bench.isChecked(),
             "use_gpu": self.chk_use_gpu.isChecked(),
             "dataset_path": ds_path
         }
         self.log(f"Build Start: {cfg['target']} [{cfg['format']} / {cfg['quantization']}]")
         self.set_controls_enabled(False)
+        self.deploy_btn.setEnabled(False) # Disable deploy during build
         self.docker_manager.start_build(cfg)
 
     def set_controls_enabled(self, enabled):
@@ -414,10 +465,17 @@ class MainOrchestrator(QMainWindow):
 
     def on_build_output(self, bid, line): self.log_view.append(line); self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
     def on_build_progress(self, bid, pct): self.progress_bar.setValue(pct)
+    
     def on_build_completed(self, bid, success, p): 
         self.set_controls_enabled(True)
         self.progress_bar.setValue(100 if success else 0)
-        self.log(f"{'✅' if success else '❌'} Done. Artifact: {p}")
+        
+        if success and p and os.path.exists(p):
+            self.last_artifact_path = p
+            self.deploy_btn.setEnabled(True) # Enable deploy button
+            self.log(f"✅ Build Success. Golden Artifact: {p}")
+        else:
+            self.log(f"❌ Build Failed. {p}")
     
     def on_sidecar_status(self, service, status):
         self.log(f"Sidecar [{service}]: {status}")

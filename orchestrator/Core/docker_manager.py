@@ -5,7 +5,10 @@ DIREKTIVE: Goldstandard, robust, thread-safe.
 
 This manager acts as the bridge between the GUI/CLI and the core BuildEngine.
 It handles thread management, signal emission, and configuration mapping.
-Updated in v1.5.0 to support Dynamic Sidecar (Qdrant) management.
+
+Updates v1.7.0:
+- Added Native Resource Monitoring (CPU/RAM) via 'build_stats' signal.
+- Implemented robust CPU percentage calculation algorithm.
 """
 
 import os
@@ -18,29 +21,28 @@ from datetime import datetime
 from typing import Dict, Optional, Any
 from pathlib import Path
 
-# Docker imports for Sidecar management
 import docker
 from docker.errors import NotFound, APIError
 
 from PySide6.QtCore import QObject, Signal
 
-# Import Builder types for configuration mapping
+# Import Builder types
 from orchestrator.Core.builder import BuildConfiguration, ModelFormat, OptimizationLevel, BuildStatus
 
 class DockerManager(QObject):
     """
     Manages Docker lifecycle and build process via BuildEngine.
     Bridge between GUI and Core Logic.
-    Also manages auxiliary containers (Sidecars) like Qdrant.
     """
     # Signals for GUI updates
     build_started = Signal(str)
     build_progress = Signal(str, int)
     build_completed = Signal(str, bool, str)
     build_output = Signal(str, str)
+    # NEW: Resource Telemetry Signal (CPU %, RAM MB, RAM Limit MB)
+    build_stats = Signal(str, float, float, float)
     
-    # New Signals for v1.5.0
-    sidecar_status = Signal(str, str) # service_name, status
+    sidecar_status = Signal(str, str)
     
     def __init__(self):
         super().__init__()
@@ -50,24 +52,13 @@ class DockerManager(QObject):
         self._monitor_active = False
 
     def initialize(self, framework_manager):
-        """
-        Initializes the manager with the framework context.
-        """
         self.framework = framework_manager
-        # Lazy import to avoid circular dependency if needed, or use framework's builder instance
         from orchestrator.Core.builder import BuildEngine
         self.builder = BuildEngine(framework_manager)
         self.logger.info("DockerManager initialized and connected to BuildEngine")
 
     def ensure_qdrant_service(self) -> Optional[str]:
-        """
-        DYNAMIC SIDECAR LOGIC (v1.5.0):
-        Checks if Qdrant is required and running. Starts it on-demand.
-        
-        Returns:
-            str: HTTP URL of the Qdrant service (internal Docker network) or None.
-        """
-        # 1. Check Configuration (Opt-In)
+        """DYNAMIC SIDECAR LOGIC (v1.5.0): Checks if Qdrant is required and running."""
         rag_enabled = False
         if hasattr(self.framework.config, 'enable_rag_knowledge'):
              rag_enabled = self.framework.config.enable_rag_knowledge
@@ -75,189 +66,160 @@ class DockerManager(QObject):
              rag_enabled = self.framework.config_manager.get("enable_rag_knowledge", False)
 
         if not rag_enabled:
-            self.logger.debug("Local RAG is disabled. Skipping Qdrant startup.")
             return None
 
-        self.logger.info("Local RAG enabled. Ensuring Qdrant service is running...")
         self.sidecar_status.emit("Qdrant", "Starting...")
-
         client = self.builder.docker_client
         container_name = "llm-qdrant"
-        image_tag = "qdrant/qdrant:v1.16.0" # Pinned Version from SSOT
+        image_tag = "qdrant/qdrant:v1.16.0"
 
         try:
-            # 2. Check if container exists
             container = client.containers.get(container_name)
-            
             if container.status != "running":
-                self.logger.info(f"Starting existing {container_name}...")
                 container.start()
-                
             self.sidecar_status.emit("Qdrant", "Running")
             return f"http://{container_name}:6333"
-
         except NotFound:
-            # 3. Create and Run if missing (First Run)
-            self.logger.info(f"Initializing {container_name} (Sidecar)...")
             try:
-                # Ensure Image exists
-                try:
-                    client.images.get(image_tag)
-                except NotFound:
-                    self.logger.info(f"Pulling {image_tag}...")
-                    self.sidecar_status.emit("Qdrant", "Pulling Image...")
-                    client.images.pull(image_tag)
+                try: client.images.get(image_tag)
+                except NotFound: client.images.pull(image_tag)
 
                 client.containers.run(
-                    image_tag,
-                    name=container_name,
-                    # Expose ports for local debugging if needed
-                    ports={'6333/tcp': 6333}, 
-                    # Persistence
+                    image_tag, name=container_name, ports={'6333/tcp': 6333},
                     volumes={'llm_qdrant_data': {'bind': '/qdrant/storage', 'mode': 'rw'}},
-                    # Network: Must be in same network as Orchestrator
-                    network="llm-framework", 
-                    detach=True,
-                    restart_policy={"Name": "on-failure"}
+                    network="llm-framework", detach=True, restart_policy={"Name": "on-failure"}
                 )
-                
-                self.logger.info(f"{container_name} started successfully.")
                 self.sidecar_status.emit("Qdrant", "Running")
                 return f"http://{container_name}:6333"
-                
             except Exception as e:
-                self.logger.error(f"Failed to start Qdrant Sidecar: {e}")
+                self.logger.error(f"Failed to start Qdrant: {e}")
                 self.sidecar_status.emit("Qdrant", "Error")
                 return None
-                
-        except Exception as e:
-            self.logger.error(f"Error managing Qdrant service: {e}")
-            return None
+        except Exception: return None
 
     def start_build(self, gui_config: Dict[str, Any]):
-        """
-        Starts a build process based on GUI input dictionary.
-        Maps the flat GUI config to the structured BuildConfiguration.
-        """
         if not self.builder:
-            self.logger.error("Builder not initialized. Call initialize() first.")
             self.build_completed.emit("error", False, "Builder not initialized")
             return
 
         try:
             self.logger.info(f"Preparing build for {gui_config.get('model_name')}")
 
-            # 1. Extract & Normalize Parameters
             model_path = gui_config.get("model_name", "")
-            target = gui_config.get("target", "generic")
-            task = gui_config.get("task", "LLM")
-            quant = gui_config.get("quantization", "Q4_K_M")
-            use_gpu = gui_config.get("use_gpu", False)
+            if os.path.exists(model_path): model_path = str(Path(model_path).resolve())
+            
             dataset_path = gui_config.get("dataset_path")
-            
-            # FORMAT HANDLING (NEW)
-            raw_format = gui_config.get("format", "GGUF")
-            try:
-                # Map string (e.g. "RKNN", "GGUF") to ModelFormat Enum
-                target_format = ModelFormat[raw_format.upper()]
-            except KeyError:
-                self.logger.warning(f"Unknown format '{raw_format}', defaulting to GGUF.")
-                target_format = ModelFormat.GGUF
-            
-            # Output Directory Generation
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            build_id = f"build_{target}_{timestamp}"
-            output_base = Path(self.framework.config.output_dir)
-            out_dir = output_base / build_id
-            
-            if os.path.exists(model_path):
-                model_path = str(Path(model_path).resolve())
-            
-            if dataset_path and os.path.exists(dataset_path):
-                dataset_path = str(Path(dataset_path).resolve())
+            if dataset_path and os.path.exists(dataset_path): dataset_path = str(Path(dataset_path).resolve())
 
-            # 2. Create Configuration Object
+            target = gui_config.get("target", "generic")
+            build_id = f"build_{target}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            out_dir = Path(self.framework.config.output_dir) / build_id
+            
+            # Map Format
+            raw_fmt = gui_config.get("format", "GGUF")
+            try: target_format = ModelFormat[raw_fmt.upper()]
+            except: target_format = ModelFormat.GGUF
+
             config = BuildConfiguration(
                 build_id=build_id,
-                timestamp=timestamp,
+                timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
                 model_source=model_path,
                 target_arch=target,
-                target_format=target_format, # Passing the correct Enum
+                target_format=target_format,
                 source_format=ModelFormat.HUGGINGFACE,
                 output_dir=str(out_dir),
-                quantization=quant,
-                model_task=task,
-                use_gpu=use_gpu,
+                quantization=gui_config.get("quantization", "Q4_K_M"),
+                model_task=gui_config.get("task", "LLM"),
+                use_gpu=gui_config.get("use_gpu", False),
                 dataset_path=dataset_path,
-                
                 base_image="debian:bookworm-slim",
                 build_timeout=self.framework.config.build_timeout,
                 parallel_jobs=self.framework.config.max_concurrent_builds
             )
             
-            # 3. Submit to Engine
             returned_id = self.builder.build_model(config)
-            
-            self.logger.info(f"Build submitted with ID: {returned_id}")
             self.build_started.emit(returned_id)
             
-            # 4. Start Monitoring Thread
             self._monitor_active = True
-            monitor_thread = threading.Thread(
-                target=self._monitor_build, 
-                args=(returned_id,), 
-                daemon=True,
-                name=f"Monitor-{returned_id}"
-            )
+            monitor_thread = threading.Thread(target=self._monitor_build, args=(returned_id,), daemon=True)
             monitor_thread.start()
             
         except Exception as e:
-            self.logger.error(f"Failed to start build: {e}", exc_info=True)
+            self.logger.error(f"Start build failed: {e}")
             self.build_completed.emit("error", False, str(e))
+
+    def _calculate_cpu_percent(self, stats):
+        """
+        Calculates CPU usage percentage from Docker stats object.
+        Logic adapted from Docker CLI implementation.
+        """
+        try:
+            cpu_stats = stats['cpu_stats']
+            precpu_stats = stats['precpu_stats']
+            
+            # Get CPU usage deltas
+            cpu_delta = cpu_stats['cpu_usage']['total_usage'] - precpu_stats['cpu_usage']['total_usage']
+            system_delta = cpu_stats['system_cpu_usage'] - precpu_stats['system_cpu_usage']
+            
+            if system_delta > 0.0 and cpu_delta > 0.0:
+                # Number of CPUs (Online CPUs)
+                # Some environments (WSL2) might miss online_cpus, fallback to length of percpu_usage
+                online_cpus = cpu_stats.get('online_cpus', len(cpu_stats['cpu_usage'].get('percpu_usage', []))) or 1
+                
+                cpu_percent = (cpu_delta / system_delta) * online_cpus * 100.0
+                return round(cpu_percent, 2)
+            return 0.0
+        except KeyError:
+            return 0.0
 
     def _monitor_build(self, build_id: str):
         """
-        Polls the build status and relays logs/progress to the GUI via Signals.
-        Runs in a separate thread.
+        Polls logs, progress AND resource stats.
         """
         last_log_idx = 0
+        client = self.builder.docker_client
         
         while self._monitor_active:
             status = self.builder.get_build_status(build_id)
+            if not status: break
             
-            if not status:
-                self.logger.warning(f"Build status for {build_id} lost.")
-                break
-            
-            # 1. Process New Logs
+            # 1. Logs & Progress
             current_logs = status.logs
             while last_log_idx < len(current_logs):
-                msg = current_logs[last_log_idx]
-                self.build_output.emit(build_id, msg)
+                self.build_output.emit(build_id, current_logs[last_log_idx])
                 last_log_idx += 1
-            
-            # 2. Update Progress
             self.build_progress.emit(build_id, status.progress_percent)
+            
+            # 2. Resource Monitoring (NEW v1.7.0)
+            # Only if container is running
+            try:
+                # Use cached container ref from Builder or fetch fresh
+                container = self.builder._active_containers.get(build_id)
+                if container:
+                    # Fetch snapshot (stream=False)
+                    stats = container.stats(stream=False)
+                    
+                    # CPU
+                    cpu_pct = self._calculate_cpu_percent(stats)
+                    
+                    # RAM
+                    mem_usage = stats['memory_stats'].get('usage', 0) / (1024 * 1024) # MB
+                    mem_limit = stats['memory_stats'].get('limit', 0) / (1024 * 1024) # MB
+                    
+                    self.build_stats.emit(build_id, cpu_pct, mem_usage, mem_limit)
+                    
+            except Exception:
+                pass # Stats fetching is non-critical, don't crash build monitoring
             
             # 3. Check Termination
             if status.status in [BuildStatus.COMPLETED, BuildStatus.FAILED, BuildStatus.CANCELLED]:
                 success = (status.status == BuildStatus.COMPLETED)
-                
-                # Determine primary artifact path
-                output_path = ""
-                if status.artifacts:
-                    output_path = status.artifacts[0]
-                elif success:
-                    output_path = "Check Output Directory"
-
-                self.logger.info(f"Build {build_id} finished. Success: {success}")
+                output_path = status.artifacts[0] if status.artifacts else "Check Output Directory"
                 self.build_completed.emit(build_id, success, output_path)
                 self._monitor_active = False
                 break
             
-            time.sleep(0.5)
+            time.sleep(1.0) # 1Hz update rate for stats is sufficient
 
     def stop_build(self, build_id: str):
-        """Cancels a running build."""
-        if self.builder:
-            self.builder.cancel_build(build_id)
+        if self.builder: self.builder.cancel_build(build_id)

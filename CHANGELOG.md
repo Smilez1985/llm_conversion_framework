@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2025-12-06
+**Deep Ingest Release.** Empowers the AI Agent "Ditto" to recursively crawl, filter, and learn from external documentation websites and PDFs.
+
+### Added
+- **Deep Crawler Engine:** Integrated `LangChain` based Recursive URL Loader to parse entire documentation sites (not just single pages).
+- **PDF Intelligence:** Native PDF parsing support using `pypdf`, enabling Ditto to read data sheets and technical manuals.
+- **Smart Filtering:** Implemented language detection (ignoring non-English content) and navigation/footer removal for cleaner knowledge.
+- **Knowledge Snapshots:** The Module Generator now automatically extracts learned knowledge from Qdrant and bundles it as `knowledge.json` within the target module for sharing.
+- **GUI Dialogs:** New `URLInputDialog` for batch-adding documentation links with configuration for crawl depth and page limits.
+- **Legal Compliance:** Mandatory "Robots.txt" respect and user disclaimer checkbox before crawling.
+
+### Changed
+- **Wizard Workflow:** Integrated "Deep Ingest" step into the module creation wizard with live progress logging.
+- **RAG Manager:** Expanded `ingest_url` to handle recursive crawling results and PDF streams.
+- **Config Manager:** Added settings for `crawler_max_depth`, `crawler_max_pages`, and input history.
+
+### Dependencies
+- Added `langchain`, `langchain-community`, `beautifulsoup4`, `tiktoken`, `pypdf`, `langdetect`.
+
 ## [1.5.0] - 2025-12-01
 **Expert Knowledge Release.** Transforms the AI Agent "Ditto" from a passive reader into an active expert system using local RAG technology.
 

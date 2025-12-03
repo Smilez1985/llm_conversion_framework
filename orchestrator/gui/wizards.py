@@ -8,25 +8,25 @@ Er unterstützt zwei Modi:
 1. Standard Import: Deterministisches Parsen von hardware_probe.sh/.ps1 Ausgaben.
 2. AI Auto-Discovery: Intelligente Analyse und Optimierungsvorschläge durch Ditto (LLM).
 
-Updates v1.7.0:
+Updates v1.7.1:
+- Added 'SpriteAnimationWidget' for manual sprite sheet animation (since source images are strips).
 - Integrated Dynamic Ditto Avatar (States: Thinking, Reading, Success, Error).
-- Visual Feedback for Long-Running Tasks.
 """
 
 import threading
 import re
 import os
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from PySide6.QtWidgets import (
     QWizard, QWizardPage, QVBoxLayout, QLabel, QFormLayout, 
     QLineEdit, QComboBox, QRadioButton, QButtonGroup, QTextEdit, 
     QMessageBox, QGroupBox, QPushButton, QFileDialog, QProgressBar,
-    QDialog, QHBoxLayout, QWidget, QPlainTextEdit
+    QDialog, QHBoxLayout, QWidget, QPlainTextEdit, QStackedWidget
 )
-from PySide6.QtCore import Qt, Signal, QObject, QThread
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, Signal, QObject, QThread, QSize, QTimer, QRect
+from PySide6.QtGui import QPixmap, QPainter
 
 from orchestrator.Core.module_generator import ModuleGenerator
 from orchestrator.gui.dialogs import AIConfigurationDialog, URLInputDialog
@@ -46,6 +46,57 @@ class WizardSignals(QObject):
     crawl_progress = Signal(str)
     crawl_finished = Signal(str)
     crawl_error = Signal(str)
+
+# --- CUSTOM WIDGET: SPRITE ANIMATOR ---
+class SpriteAnimationWidget(QLabel):
+    """
+    Spielt eine Animation basierend auf einem Sprite-Sheet (Horizontal Strip) ab.
+    """
+    def __init__(self, image_path: str, frame_count: int, interval: int = 150, parent=None):
+        super().__init__(parent)
+        self.frame_count = frame_count
+        self.interval = interval
+        self.current_frame = 0
+        
+        # Load full sprite sheet
+        self.sprite_sheet = QPixmap(image_path)
+        if self.sprite_sheet.isNull():
+            # Fallback: Create dummy pixmap if image missing
+            self.sprite_sheet = QPixmap(100, 100)
+            self.sprite_sheet.fill(Qt.red)
+            
+        # Calculate dimensions
+        self.total_width = self.sprite_sheet.width()
+        self.frame_width = self.total_width // frame_count
+        self.frame_height = self.sprite_sheet.height()
+        
+        self.setFixedSize(120, 120) # Fixed UI size
+        self.setAlignment(Qt.AlignCenter)
+        
+        # Timer setup
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self._update_frame)
+        
+        # Show first frame immediately
+        self._update_frame()
+
+    def start(self):
+        self.timer.start(self.interval)
+
+    def stop(self):
+        self.timer.stop()
+
+    def _update_frame(self):
+        # Extract current frame
+        x = self.current_frame * self.frame_width
+        frame_pixmap = self.sprite_sheet.copy(QRect(x, 0, self.frame_width, self.frame_height))
+        
+        # Scale to widget size (keeping aspect ratio)
+        scaled = frame_pixmap.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.setPixmap(scaled)
+        
+        # Next frame loop
+        self.current_frame = (self.current_frame + 1) % self.frame_count
 
 class CrawlWorker(QThread):
     """Worker Thread for Deep Ingest (prevents GUI freeze)."""
@@ -119,8 +170,9 @@ class ModuleCreationWizard(QWizard):
         self.signals.analysis_finished.connect(self.on_ai_finished)
         self.signals.analysis_error.connect(self.on_ai_error)
         
-        # UI Elements reference for updates
-        self.lbl_avatar = None
+        # Container for Avatar (Stacked to switch widgets)
+        self.avatar_container = QStackedWidget()
+        self.avatar_container.setFixedSize(120, 120)
         
         # Pages hinzufügen
         self.addPage(self.create_intro_page())
@@ -143,12 +195,9 @@ class ModuleCreationWizard(QWizard):
         # Ditto Avatar & Info
         header_layout = QHBoxLayout()
         
-        # Avatar Image Container
-        self.lbl_avatar = QLabel()
-        self.lbl_avatar.setMinimumSize(100, 100)
-        self.lbl_avatar.setAlignment(Qt.AlignCenter)
-        self._set_avatar("ditto.png") # Default State
-        header_layout.addWidget(self.lbl_avatar)
+        # Init Avatar (Default State)
+        self._set_avatar_state("default")
+        header_layout.addWidget(self.avatar_container)
         
         # Info Text
         info_lbl = QLabel(tr("wiz.lbl.ai_info") if tr("wiz.lbl.ai_info") != "wiz.lbl.ai_info" else "Let Ditto analyze your hardware probe.")
@@ -220,13 +269,65 @@ class ModuleCreationWizard(QWizard):
         page.setLayout(layout)
         return page
 
-    def _set_avatar(self, image_name: str):
-        """Updates the Ditto Avatar based on state."""
-        if self.assets_dir and self.lbl_avatar:
-            path = self.assets_dir / image_name
-            if path.exists():
-                pixmap = QPixmap(str(path))
-                self.lbl_avatar.setPixmap(pixmap.scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+    def _set_avatar_state(self, state: str):
+        """
+        Switches the Avatar Widget based on state.
+        Uses SpriteAnimationWidget for animated states.
+        """
+        if not self.assets_dir: return
+        
+        # Cleanup current widget
+        while self.avatar_container.count():
+            widget = self.avatar_container.widget(0)
+            if isinstance(widget, SpriteAnimationWidget):
+                widget.stop()
+            self.avatar_container.removeWidget(widget)
+            widget.deleteLater()
+
+        # Define mapping: state -> (filename, is_sprite, frame_count)
+        # filenames are looked up in assets/ folder. extension can be png or jpg.
+        # Based on user input:
+        # - ditto.png (Static)
+        # - ditto_think.png (Sprite Sheet, 4 frames)
+        # - ditto_read.png (Sprite Sheet, 6 frames)
+        # - ditto_success.png (Static)
+        # - ditto_fail.png (Static)
+        
+        mapping = {
+            "default": ("ditto.png", False, 1),
+            "think": ("ditto_think.png", True, 4),
+            "read": ("ditto_read.png", True, 6),
+            "success": ("ditto_success.png", False, 1),
+            "fail": ("ditto_fail.png", False, 1)
+        }
+        
+        config = mapping.get(state, mapping["default"])
+        filename, is_sprite, frames = config
+        path = self.assets_dir / filename
+        
+        # Fallback check for jpg if png missing (user migration)
+        if not path.exists():
+            path_jpg = path.with_suffix(".jpg")
+            if path_jpg.exists(): path = path_jpg
+        
+        if not path.exists():
+            # Fallback Label if asset missing
+            lbl = QLabel("Ditto")
+            lbl.setAlignment(Qt.AlignCenter)
+            self.avatar_container.addWidget(lbl)
+            return
+
+        if is_sprite:
+            # Animated Widget
+            widget = SpriteAnimationWidget(str(path), frame_count=frames, interval=200)
+            widget.start()
+            self.avatar_container.addWidget(widget)
+        else:
+            # Static Image
+            lbl = QLabel()
+            lbl.setPixmap(QPixmap(str(path)).scaled(100, 100, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            lbl.setAlignment(Qt.AlignCenter)
+            self.avatar_container.addWidget(lbl)
 
     def create_hardware_page(self):
         page = QWizardPage()
@@ -279,6 +380,7 @@ class ModuleCreationWizard(QWizard):
         
         layout.addWidget(QLabel(tr("wiz.lbl.packages")))
         self.packages_edit = QLineEdit()
+        # Standard-Pakete ohne Compiler, der wird dynamisch hinzugefügt
         self.packages_edit.setText("build-essential cmake git python3-pip")
         layout.addWidget(self.packages_edit)
         
@@ -372,7 +474,7 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
             if not urls:
                 return
 
-            self._set_avatar("ditto_read.png") # Visual Update: Reading
+            self._set_avatar_state("read") # ANIMATED SPRITE
             self.crawl_log.setVisible(True)
             self.crawl_log.clear()
             self.crawl_log.appendPlainText(f"Initializing Crawler for {len(urls)} URLs...")
@@ -392,14 +494,14 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
         self.crawl_log.verticalScrollBar().setValue(self.crawl_log.verticalScrollBar().maximum())
 
     def on_crawl_finished(self, msg):
-        self._set_avatar("ditto_success.png") # Visual Update: Success
+        self._set_avatar_state("success")
         self.btn_deep_ingest.setEnabled(True)
         self.ai_progress.setVisible(False)
         self.crawl_log.appendPlainText(f"\n✅ {msg}")
         QMessageBox.information(self, "Ingest Complete", msg)
 
     def on_crawl_error(self, err):
-        self._set_avatar("ditto_fail.png") # Visual Update: Fail
+        self._set_avatar_state("fail")
         self.btn_deep_ingest.setEnabled(True)
         self.ai_progress.setVisible(False)
         self.crawl_log.appendPlainText(f"\n❌ Error: {err}")
@@ -496,14 +598,14 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
             self.cpu_flags.setText(" ".join(cpu_flags))
             self.cmake_flags.setText(" ".join(cmake_flags))
             
-            self._set_avatar("ditto_success.png")
+            self._set_avatar_state("success")
             self.status_label.setText(tr("msg.import_success"))
             QMessageBox.information(self, tr("msg.import_success"), 
                                   f"Hardware profile loaded.\nDetected Arch: {detected_arch}\nSuggested SDK: {sdk}")
             self.next()
             
         except Exception as e:
-            self._set_avatar("ditto_fail.png")
+            self._set_avatar_state("fail")
             self.status_label.setText(tr("status.error"))
             QMessageBox.critical(self, tr("status.error"), f"Failed to parse probe file:\n{str(e)}")
 
@@ -528,7 +630,7 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
         path, _ = QFileDialog.getOpenFileName(self, tr("menu.import_profile"), "", "Config (*.txt);;All Files (*)")
         if not path: return
         
-        self._set_avatar("ditto_think.png") # Visual Update: Thinking
+        self._set_avatar_state("think") # ANIMATED SPRITE
         self.btn_import_ai.setEnabled(False)
         self.btn_import_std.setEnabled(False)
         self.ai_progress.setVisible(True)
@@ -556,7 +658,7 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
             self.signals.analysis_error.emit(str(e))
 
     def on_ai_error(self, err):
-        self._set_avatar("ditto_fail.png") # Visual Update: Fail
+        self._set_avatar_state("fail")
         self.btn_import_ai.setEnabled(True)
         self.btn_import_std.setEnabled(True)
         self.ai_progress.setVisible(False)
@@ -564,7 +666,7 @@ Quantization Script provided: {'Yes' if self.quant_logic.toPlainText() else 'No 
         QMessageBox.critical(self, "AI Error", err)
 
     def on_ai_finished(self, config):
-        self._set_avatar("ditto_success.png") # Visual Update: Success
+        self._set_avatar_state("success")
         self.btn_import_ai.setEnabled(True)
         self.btn_import_std.setEnabled(True)
         self.ai_progress.setVisible(False)

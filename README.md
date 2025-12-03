@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-20.10+-blue.svg)](https://docs.docker.com/get-docker/)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
-[![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-1.7.0-blue.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/Smilez1985/llm_conversion_framework?style=social)](https://github.com/Smilez1985/llm_conversion_framework)
 [![GitHub Forks](https://img.shields.io/github/forks/Smilez1985/llm_conversion_framework?style=social)](https://github.com/Smilez1985/llm_conversion_framework)
 
@@ -12,42 +12,45 @@
 
 **Professional Modular Framework for Cross-Compiling Large Language Models on Edge Hardware**
 
-A GUI-based LLM Deployment Framework capable of automating the optimization & quantization of any LLM. Perfectly optimized for specific Edge-Hardware like Rockchip NPUs, NVIDIA Jetson, Hailo, and more.
+A GUI-based LLM Deployment Framework capable of automating the optimization & quantization of any LLM. Perfectly optimized for specific Edge-Hardware like Rockchip NPUs, NVIDIA Jetson, Intel Arc/NPU, and more.
 
 ---
 
-## 🌟 What's New in v1.6.0
+## 🌟 What's New in v1.7.0
 
-**Deep Ingest Release.** We empowered the AI Agent "Ditto" to learn from the entire web, not just single pages.
+**Hardware & Deployment Update.** We bridged the gap between "Building" and "Running".
 
-* 🕷️ **Deep Crawler Engine:** Recursively crawls entire documentation sites (LangChain-based) to understand complex SDKs.
-* 📄 **PDF Intelligence:** Native parsing of technical datasheets and PDF manuals.
-* 🧠 **Knowledge Snapshots:** Automatically bundles learned RAG knowledge into the generated module for easy sharing with the community.
+* 🚢 **Zero-Dependency Deployment:** Deploy your optimized models directly to edge devices via SSH/SCP – no Ansible required. Credentials stay in RAM.
+* 🏎️ **Intel Ecosystem Support:** Full native support for **Intel IPEX-LLM** and **OpenVINO**. Run LLMs on Intel Arc GPUs, Iris Xe, and Core Ultra NPUs with ease.
+* 📊 **Live Resource Monitoring:** Watch CPU and RAM usage of your build containers in real-time directly in the GUI. No external tools needed.
+* 📦 **Golden Artifacts:** Every build automatically generates a deployment-ready ZIP package containing the model, runtimes, and a generated Model Card.
 
-[View Full Changelog](CHANGELOG.md) | [Upgrade Guide](docs/upgrade_v1.6.md)
+[View Full Changelog](CHANGELOG.md) | [Upgrade Guide](docs/upgrade_v1.7.md)
 
 ---
 
 ## ⚡ Key Features
 
 ### 🏗️ Multi-Architecture Support
-Compile models for any target architecture from a single x86 host. The framework automatically handles cross-compilation toolchains (GCC/G++ for AArch64, RISC-V) and detects CPU flags (NEON, AVX512) via the `hardware_probe.sh` script to produce highly optimized binaries.
+Compile models for any target architecture from a single x86 host. The framework automatically handles cross-compilation toolchains (GCC/G++ for AArch64, RISC-V) and detects CPU flags (NEON, AVX512, **AVX512-VNNI, AMX**) via the `hardware_probe.sh` (Linux) or `hardware_probe.ps1` (Windows) scripts.
 
 ### 🤖 AI-Powered Module Creation (Ditto)
-Don't know the compiler flags for your specific board? The "Ditto" AI Agent analyzes your hardware probe and automatically generates the complete Docker configuration. 
-**New in v1.6:** If Ditto doesn't know a board, feed it the documentation URL. It will crawl, read, and memorize the entire SDK manual in minutes.
+Don't know the compiler flags for your specific board? The "Ditto" AI Agent analyzes your hardware probe, queries its **Local Knowledge Base (RAG)**, and automatically generates the complete Docker configuration.
+
+### 🚀 Zero-Dependency Deployment (New!)
+Push your optimized models to the edge with a single click.
+* **Secure:** Passwords are never stored on disk (RAM only).
+* **Robust:** "Network Guard" technology pauses the transfer if the connection drops and resumes automatically.
+* **Simple:** Generates a `deploy.sh` on the target that handles setup and execution.
 
 ### 🛡️ Security-First Architecture
-Enterprise-grade security by design. The Orchestrator communicates with Docker via a strictly confined **Socket Proxy**. Every build image is scanned for vulnerabilities using **Trivy**. The new Crawler respects `robots.txt` and includes mandatory user disclaimers.
+Enterprise-grade security by design. The Orchestrator communicates with Docker via a strictly confined **Socket Proxy**. Every build image is scanned for vulnerabilities using **Trivy**. Inputs are sanitized, and API keys are AES-256 encrypted.
 
 ### 🐳 Docker-Native Build System
-No pollution of your host system. All builds happen in isolated, transient Docker containers. Uses multi-stage builds to keep images small and `BuildX` for performance. Volumes are mounted dynamically for caching and artifact extraction.
+No pollution of your host system. All builds happen in isolated, transient Docker containers. Uses multi-stage builds to keep images small and `BuildX` for performance. Supports **GPU Passthrough** for both NVIDIA (CUDA) and Intel (VAAPI/Level Zero).
 
 ### 🧠 Local Knowledge Base (RAG)
 An optional, privacy-focused RAG system based on **Qdrant**. It indexes SDK documentation locally. This allows the AI to answer complex questions about quantization parameters accurately without sending data to the cloud.
-
-### 📦 Auto-Packaging & Deployment
-The pipeline doesn't stop at compilation. It automatically bundles the quantized model (GGUF/RKNN/TensorRT), the compiled binaries, and necessary runtime scripts into a ready-to-deploy ZIP archive.
 
 ---
 
@@ -56,13 +59,15 @@ The pipeline doesn't stop at compilation. It automatically bundles the quantized
 ```text
 .
 ├── LLM-Builder.exe       # Main Entry Point (Windows)
+├── assets/               # UI Resources (Ditto Avatars, Icons)
 ├── scripts/
 │   ├── setup_windows.py  # Installer & Dependency Checker
 │   ├── setup_linux.sh    # Headless Setup Script
-│   └── hardware_probe.sh # Run this on your Target Device!
+│   ├── hardware_probe.sh # Probe for Linux Targets
+│   └── hardware_probe.ps1# Probe for Windows Targets
 ├── orchestrator/
 │   ├── gui/              # PySide6 GUI Components
-│   ├── Core/             # Logic: Builder, ModelManager, RAGManager, CrawlerManager
+│   ├── Core/             # Logic: Builder, DockerManager, RAGManager, DeploymentManager
 │   └── utils/            # Helpers: Logging, Security, Network
 ├── targets/              # Hardware Modules
 │   ├── Rockchip/         # Production Ready (RK3588/RK3566)
@@ -71,7 +76,7 @@ The pipeline doesn't stop at compilation. It automatically bundles the quantized
 ├── community/
 │   └── knowledge/        # Shared RAG Knowledge Snapshots (.json)
 ├── configs/              # SSOT & User Configs
-└── output/               # Build Artifacts appear here
+└── output/               # Build Artifacts & Golden Packages appear here
 ```
 
 ## 📟 Supported Hardware

@@ -6,8 +6,9 @@ DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 Core logic for orchestrating Docker builds, container execution, and artifact management.
 Handles security scans, GPU passthrough, and dynamic volume mounting.
 
-Updates v1.5.0:
-- Expanded ModelFormat Enum to support RKNN, TensorRT, OpenVINO, etc.
+Updates v1.7.0:
+- "Golden Artifact" creation (Auto-Zip).
+- Intel GPU (XPU/Arc) Passthrough support via /dev/dri.
 """
 
 import os
@@ -59,7 +60,7 @@ class ModelFormat(Enum):
     ONNX = "onnx"
     TENSORFLOW_LITE = "tflite"
     PYTORCH_MOBILE = "pytorch_mobile"
-    # NEU v1.5.0: Hardware-Specific Formats
+    # Hardware-Specific Formats
     RKNN = "rknn"          # Rockchip NPU
     TENSORRT = "tensorrt"  # NVIDIA GPU
     OPENVINO = "openvino"  # Intel NPU/CPU
@@ -107,7 +108,7 @@ class BuildConfiguration:
     enable_hadolint: bool = True
     poetry_version: str = "latest"
     
-    # NEW Features
+    # Features
     model_task: str = "LLM" 
     use_gpu: bool = False
     dataset_path: Optional[str] = None
@@ -326,7 +327,10 @@ class BuildEngine:
             # 7. Extract Artifacts
             self._extract_artifacts(config, prog)
             
-            # 8. Cleanup
+            # 8. Create Golden Artifact (v1.7.0)
+            self._create_golden_artifact(config, prog)
+            
+            # 9. Cleanup
             if config.cleanup_after_build: 
                 self.cleanup_build(bid)
                 
@@ -487,7 +491,6 @@ class BuildEngine:
             "OPTIMIZATION_LEVEL": config.optimization_level.value,
             "QUANTIZATION": config.quantization or "",
             "LLAMA_CPP_COMMIT": config.build_args.get("LLAMA_CPP_COMMIT", "b3626"),
-            # NEW: Output Format als ENV Variable
             "TARGET_FORMAT": config.target_format.value
         }
         
@@ -496,7 +499,6 @@ class BuildEngine:
             for k, v in self.framework_manager.config.source_repositories.items():
                 # Flatten dict keys for env vars
                 if isinstance(v, dict) and 'url' in v:
-                    # e.g. rockchip_npu.rknn_toolkit2 -> RKNN_TOOLKIT2_REPO_OVERRIDE
                     key_parts = k.split('.')
                     name = key_parts[-1].upper()
                     env[f"{name}_REPO_OVERRIDE"] = v['url']
@@ -510,11 +512,22 @@ class BuildEngine:
             env["DATASET_PATH"] = "/build-cache/dataset.txt"
             progress.add_log(f"Mounted Calibration Dataset: {config.dataset_path}")
 
-        # 4. GPU Logic
+        # 4. GPU Logic (v1.7.0 Update for Intel)
         device_requests = []
+        devices = []
+        
         if config.use_gpu:
-            progress.add_log("Enabling GPU Passthrough (NVIDIA)...")
-            device_requests = [DeviceRequest(count=-1, capabilities=[['gpu']])]
+            # Check for NVIDIA
+            if shutil.which("nvidia-smi"):
+                progress.add_log("Enabling GPU Passthrough (NVIDIA)...")
+                device_requests = [DeviceRequest(count=-1, capabilities=[['gpu']])]
+            # Check for Intel /dev/dri (Render/Compute)
+            elif os.path.exists("/dev/dri"):
+                progress.add_log("Enabling GPU Passthrough (Intel/VAAPI)...")
+                # Map standard render devices for OpenVINO/IPEX
+                devices = ["/dev/dri:/dev/dri"]
+            else:
+                progress.add_warning("GPU usage requested but no supported GPU (NVIDIA/Intel) detected on host.")
 
         # 5. Run Container
         container = self.docker_client.containers.create(
@@ -524,7 +537,8 @@ class BuildEngine:
             environment=env, 
             name=f"llm-build-{config.build_id}", 
             user="llmbuilder",
-            device_requests=device_requests
+            device_requests=device_requests,
+            devices=devices # Mapped devices (Intel)
         )
         
         with self._lock: 
@@ -545,7 +559,7 @@ class BuildEngine:
 
     def _extract_artifacts(self, config, progress):
         progress.current_stage = "Extracting"
-        progress.progress_percent = 90
+        progress.progress_percent = 85
         
         src = self.cache_dir / "builds" / config.build_id / "output"
         dst = Path(config.output_dir)
@@ -553,7 +567,6 @@ class BuildEngine:
         progress.add_log(f"Copying artifacts to {dst}...")
         ensure_directory(dst)
         
-        # Simple copy of the output folder content
         if src.exists():
             count = 0
             for f in src.rglob("*"):
@@ -565,3 +578,31 @@ class BuildEngine:
                     progress.artifacts.append(str(target))
                     count += 1
             progress.add_log(f"Extracted {count} artifacts.")
+
+    def _create_golden_artifact(self, config: BuildConfiguration, progress: BuildProgress):
+        """Creates a compressed archive of the build artifacts (The Golden Package)."""
+        progress.current_stage = "Archiving"
+        progress.progress_percent = 95
+        
+        output_dir = Path(config.output_dir)
+        
+        # Use simple shutil.make_archive
+        # We create the zip next to the folder, e.g. output/build_id.zip
+        archive_name = output_dir.name # Use same name as folder
+        root_dir = output_dir.parent
+        base_dir = output_dir.name
+        
+        try:
+            progress.add_log(f"Creating Golden Artifact ZIP...")
+            # make_archive(base_name, format, root_dir, base_dir)
+            # This creates root_dir/base_name.zip containing content of base_dir
+            zip_path = shutil.make_archive(
+                str(root_dir / archive_name), 
+                'zip', 
+                root_dir, 
+                base_dir
+            )
+            progress.add_log(f"✅ Golden Artifact created: {zip_path}")
+            progress.artifacts.append(zip_path)
+        except Exception as e:
+            progress.add_error(f"Failed to create Golden Artifact: {e}")

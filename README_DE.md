@@ -4,7 +4,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-20.10+-blue.svg)](https://docs.docker.com/get-docker/)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
-[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/Smilez1985/llm_conversion_framework?style=social)](https://github.com/Smilez1985/llm_conversion_framework)
 [![GitHub Forks](https://img.shields.io/github/forks/Smilez1985/llm_conversion_framework?style=social)](https://github.com/Smilez1985/llm_conversion_framework)
 
@@ -16,15 +16,15 @@ Ein GUI-basiertes LLM Deployment Framework, das beliebige LLMs automatisiert opt
 
 ---
 
-## 🌟 Was ist neu in v1.5.0
+## 🌟 Was ist neu in v1.6.0
 
-**Expert Knowledge Release.** Wir haben den KI-Agenten "Ditto" von einem passiven Leser in ein aktives Expertensystem verwandelt.
+**Deep Ingest Release.** Wir haben den KI-Agenten "Ditto" befähigt, vom gesamten Web zu lernen, nicht nur von einzelnen Seiten.
 
-* 🧠 **Lokales RAG mit Qdrant:** Semantische Suche über Hardware-Dokumentation statt naivem Web-Scraping.
-* 🤝 **Community Knowledge Sync:** Teilen und importieren Sie indizierte Wissens-Snapshots über Git – ein kollektives Gedächtnis ohne Cloud-Zwang.
-* 🏎️ **Dynamic Sidecar Architecture:** Die Vektor-Datenbank läuft als On-Demand Container. Null Ressourcenverbrauch, wenn sie nicht aktiviert ist.
+* 🕷️ **Deep Crawler Engine:** Rekursives Crawlen ganzer Dokumentations-Webseiten (basierend auf LangChain), um komplexe SDKs zu verstehen.
+* 📄 **PDF Intelligence:** Native Verarbeitung von technischen Datenblättern und PDF-Handbüchern.
+* 🧠 **Wissens-Snapshots:** Bündelt gelerntes RAG-Wissen automatisch in das generierte Modul zum einfachen Teilen mit der Community.
 
-[Vollständigen Changelog ansehen](CHANGELOG.md) | [Upgrade Guide](docs/upgrade_v1.5.md)
+[Vollständigen Changelog ansehen](CHANGELOG.md) | [Upgrade Guide](docs/upgrade_v1.6.md)
 
 ---
 
@@ -34,24 +34,26 @@ Ein GUI-basiertes LLM Deployment Framework, das beliebige LLMs automatisiert opt
 Kompilieren Sie Modelle für jede Zielarchitektur von einem einzigen x86-Host aus. Das Framework handhabt automatisch Cross-Compilation Toolchains (GCC/G++ für AArch64, RISC-V) und erkennt CPU-Flags (NEON, AVX512) über das `hardware_probe.sh` Skript, um hochoptimierte Binaries zu erzeugen.
 
 ### 🤖 KI-Gestützte Modulerstellung (Ditto)
-Sie kennen die Compiler-Flags für Ihr Board nicht? Der "Ditto" KI-Agent analysiert Ihren Hardware-Probe, befragt seine **Lokale Wissensdatenbank (RAG)** und generiert automatisch die komplette Docker-Konfiguration, CMake Toolchains und Build-Skripte. Unterstützt OpenAI, Anthropic und lokale LLMs (Ollama).
+Sie kennen die Compiler-Flags für Ihr Board nicht? Der "Ditto" KI-Agent analysiert Ihren Hardware-Probe und generiert automatisch die komplette Docker-Konfiguration.
+**Neu in v1.6:** Wenn Ditto ein Board nicht kennt, geben Sie ihm die Dokumentations-URL. Er wird das gesamte SDK-Handbuch in Minuten crawlen, lesen und memorieren.
 
 ### 🛡️ Security-First Architektur
-Enterprise-Sicherheit per Design. Der Orchestrator kommuniziert mit Docker über einen strikt begrenzten **Socket Proxy**, um Privilege Escalation zu verhindern. Jedes Build-Image wird automatisch mit **Trivy** auf Schwachstellen gescannt. Inputs werden bereinigt und API-Keys mit `SecretsManager` (AES-256) verschlüsselt.
+Enterprise-Sicherheit per Design. Der Orchestrator kommuniziert mit Docker über einen strikt begrenzten **Socket Proxy**, um Privilege Escalation zu verhindern. Jedes Build-Image wird automatisch mit **Trivy** auf Schwachstellen gescannt. Der neue Crawler respektiert `robots.txt` und beinhaltet verbindliche Nutzer-Disclaimer.
 
 ### 🐳 Docker-Native Build System
 Keine Verschmutzung Ihres Host-Systems. Alle Builds finden in isolierten, flüchtigen Docker-Containern statt. Nutzt Multi-Stage Builds für kleine Images und `BuildX` für Performance. Volumes werden dynamisch für Caching und Artefakt-Extraktion gemountet.
 
-### 🧠 Lokale Wissensdatenbank (Neu!)
-Ein optionales, datenschutzorientiertes RAG-System basierend auf **Qdrant**. Es indiziert SDK-Dokumentation (z.B. RKNN Toolkit, TensorRT) lokal. Dies ermöglicht der KI, komplexe Fragen zu Quantisierungsparametern präzise zu beantworten, ohne sensible Daten in die Cloud zu senden.
+### 🧠 Lokale Wissensdatenbank (RAG)
+Ein optionales, datenschutzorientiertes RAG-System basierend auf **Qdrant**. Es indiziert SDK-Dokumentation lokal. Dies ermöglicht der KI, komplexe Fragen zu Quantisierungsparametern präzise zu beantworten, ohne sensible Daten in die Cloud zu senden.
 
 ### 📦 Auto-Packaging & Deployment
-Die Pipeline endet nicht bei der Kompilierung. Sie bündelt automatisch das quantisierte Modell (GGUF/RKNN), die kompilierten Binaries und notwendige Laufzeit-Skripte (`deploy.sh`, `test_model.sh`) in einem einsatzbereiten ZIP-Archiv oder Tarball. Inklusive generierter Model Card (`README.md`).
+Die Pipeline endet nicht bei der Kompilierung. Sie bündelt automatisch das quantisierte Modell (GGUF/RKNN/TensorRT), die kompilierten Binaries und notwendige Laufzeit-Skripte in einem einsatzbereiten ZIP-Archiv.
 
 ---
 
 ## 📂 Projektstruktur
-```
+
+```text
 .
 ├── LLM-Builder.exe       # Hauptanwendung (Windows)
 ├── scripts/
@@ -60,10 +62,10 @@ Die Pipeline endet nicht bei der Kompilierung. Sie bündelt automatisch das quan
 │   └── hardware_probe.sh # Auf dem Zielgerät ausführen!
 ├── orchestrator/
 │   ├── gui/              # PySide6 GUI Komponenten
-│   ├── Core/             # Logik: Builder, ModelManager, RAGManager
+│   ├── Core/             # Logik: Builder, ModelManager, RAGManager, CrawlerManager
 │   └── utils/            # Helfer: Logging, Security, Network
 ├── targets/              # Hardware Module
-│   ├── rockchip/         # Production Ready (RK3588/RK3566)
+│   ├── Rockchip/         # Production Ready (RK3588/RK3566)
 │   ├── _template/        # Vorlage für neue Module
 │   └── README.md
 ├── community/

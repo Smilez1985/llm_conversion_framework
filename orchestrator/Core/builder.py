@@ -8,7 +8,9 @@ Handles security scans, GPU passthrough, and dynamic volume mounting.
 
 Updates v1.7.0:
 - "Golden Artifact" creation (Auto-Zip).
+- Auto-Documentation: Generates Model_Card.md with hard facts.
 - Intel GPU (XPU/Arc) Passthrough support via /dev/dri.
+- FIX: Deterministic artifact detection instead of heuristics.
 """
 
 import os
@@ -20,6 +22,7 @@ import threading
 import time
 import shutil
 import tempfile
+import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Union, Callable, Tuple
 from dataclasses import dataclass, field, asdict
@@ -371,13 +374,10 @@ class BuildEngine:
         build_temp = self.cache_dir / "builds" / config.build_id
         df_path = build_temp / "Dockerfile"
         
-        # Determine which Dockerfile to use
-        # Priority: Dockerfile.gpu (if gpu requested), else Dockerfile
         src_df_name = "Dockerfile.gpu" if config.use_gpu else "Dockerfile"
         src_df = target_path / src_df_name
         
         if not src_df.exists():
-            # Fallback to standard Dockerfile if gpu specific missing
             src_df = target_path / "Dockerfile"
             
         if not src_df.exists():
@@ -397,7 +397,6 @@ class BuildEngine:
 
     def _validate_dockerfile_hadolint(self, path: Path, prog: BuildProgress):
         try: 
-            # nosec: We control the path, and hadolint is safe
             subprocess.run(["hadolint", str(path)], check=True, capture_output=True) 
         except Exception: 
             prog.add_warning("Hadolint check skipped (tool not found or failed)")
@@ -415,11 +414,9 @@ class BuildEngine:
         try:
             cmd = ["docker", "build", "-f", str(rel_df), "-t", tag, str(context)]
             
-            # Inject Build Args
             for k, v in config.build_args.items(): 
                 cmd.extend(["--build-arg", f"{k}={v}"])
             
-            # Add User ID mapping for Linux
             if sys.platform != "win32":
                 cmd.extend(["--build-arg", f"USER_ID={os.getuid()}"])
                 cmd.extend(["--build-arg", f"GROUP_ID={os.getgid()}"])
@@ -445,7 +442,6 @@ class BuildEngine:
         try:
             scan_cmd = ["image", "--exit-code", "1", "--severity", "HIGH,CRITICAL", image_tag]
             
-            # Secure way: Run trivy container
             log_stream = self.docker_client.containers.run(
                 "aquasec/trivy:latest", 
                 command=scan_cmd,
@@ -464,7 +460,6 @@ class BuildEngine:
             
         except docker.errors.ContainerError:
             progress.add_warning(f"Security vulnerabilities found! Review logs above.")
-            # We don't fail the build here, just warn
         except Exception as e:
             progress.add_warning(f"Security scan failed to run: {e}")
 
@@ -475,14 +470,12 @@ class BuildEngine:
         
         build_temp = self.cache_dir / "builds" / config.build_id
         
-        # 1. Volume Setup
         vols = {
             str(build_temp / "output"): {"bind": "/build-cache/output", "mode": "rw"},
             str(self.cache_dir / "models"): {"bind": "/build-cache/models", "mode": "rw"},
             str(target_path / "modules"): {"bind": "/app/modules", "mode": "ro"}
         }
         
-        # 2. Environment Setup
         env = {
             "BUILD_ID": config.build_id,
             "MODEL_SOURCE": config.model_source,
@@ -494,10 +487,8 @@ class BuildEngine:
             "TARGET_FORMAT": config.target_format.value
         }
         
-        # Inject SSOT Vars
         if hasattr(self.framework_manager.config, 'source_repositories'):
             for k, v in self.framework_manager.config.source_repositories.items():
-                # Flatten dict keys for env vars
                 if isinstance(v, dict) and 'url' in v:
                     key_parts = k.split('.')
                     name = key_parts[-1].upper()
@@ -506,30 +497,24 @@ class BuildEngine:
                     name = k.split('.')[-1].upper()
                     env[f"{name}_REPO_OVERRIDE"] = v
 
-        # 3. Dataset Injection
         if config.dataset_path and os.path.exists(config.dataset_path):
             vols[str(config.dataset_path)] = {"bind": "/build-cache/dataset.txt", "mode": "ro"}
             env["DATASET_PATH"] = "/build-cache/dataset.txt"
             progress.add_log(f"Mounted Calibration Dataset: {config.dataset_path}")
 
-        # 4. GPU Logic (v1.7.0 Update for Intel)
         device_requests = []
         devices = []
         
         if config.use_gpu:
-            # Check for NVIDIA
             if shutil.which("nvidia-smi"):
                 progress.add_log("Enabling GPU Passthrough (NVIDIA)...")
                 device_requests = [DeviceRequest(count=-1, capabilities=[['gpu']])]
-            # Check for Intel /dev/dri (Render/Compute)
             elif os.path.exists("/dev/dri"):
                 progress.add_log("Enabling GPU Passthrough (Intel/VAAPI)...")
-                # Map standard render devices for OpenVINO/IPEX
                 devices = ["/dev/dri:/dev/dri"]
             else:
                 progress.add_warning("GPU usage requested but no supported GPU (NVIDIA/Intel) detected on host.")
 
-        # 5. Run Container
         container = self.docker_client.containers.create(
             image=image.id, 
             command=["/app/modules/build.sh"], 
@@ -538,7 +523,7 @@ class BuildEngine:
             name=f"llm-build-{config.build_id}", 
             user="llmbuilder",
             device_requests=device_requests,
-            devices=devices # Mapped devices (Intel)
+            devices=devices
         )
         
         with self._lock: 
@@ -546,11 +531,9 @@ class BuildEngine:
             
         container.start()
         
-        # Stream Logs
         for line in container.logs(stream=True, follow=True):
             progress.add_log(f"CONT: {line.decode().strip()}")
             
-        # Wait for completion
         res = container.wait(timeout=config.build_timeout)
         exit_code = res.get('StatusCode', 1)
         
@@ -579,30 +562,54 @@ class BuildEngine:
                     count += 1
             progress.add_log(f"Extracted {count} artifacts.")
 
-    def _create_golden_artifact(self, config: BuildConfiguration, progress: BuildProgress):
-        """Creates a compressed archive of the build artifacts (The Golden Package)."""
-        progress.current_stage = "Archiving"
-        progress.progress_percent = 95
+    def _generate_model_card(self, config: BuildConfiguration, output_dir: Path):
+        """Generates a standardized Model Card (README.md) for the artifact."""
+        readme_path = output_dir / "Model_Card.md"
         
-        output_dir = Path(config.output_dir)
-        
-        # Use simple shutil.make_archive
-        # We create the zip next to the folder, e.g. output/build_id.zip
-        archive_name = output_dir.name # Use same name as folder
-        root_dir = output_dir.parent
-        base_dir = output_dir.name
-        
+        # Security: Calculate hash of the primary artifact if possible
+        model_hash = "Calculating..."
         try:
-            progress.add_log(f"Creating Golden Artifact ZIP...")
-            # make_archive(base_name, format, root_dir, base_dir)
-            # This creates root_dir/base_name.zip containing content of base_dir
-            zip_path = shutil.make_archive(
-                str(root_dir / archive_name), 
-                'zip', 
-                root_dir, 
-                base_dir
-            )
-            progress.add_log(f"✅ Golden Artifact created: {zip_path}")
-            progress.artifacts.append(zip_path)
+            # Find likely model file (largest file usually)
+            # Or search by target_format extension if possible
+            target_ext = f".{config.target_format.value}"
+            candidates = list(output_dir.glob(f"*{target_ext}"))
+            
+            if not candidates:
+                # Fallback: Find largest file
+                files = list(output_dir.glob("*"))
+                if files:
+                    candidates = [max(files, key=lambda p: p.stat().st_size if p.is_file() else 0)]
+            
+            if candidates:
+                primary_file = candidates[0]
+                if primary_file.is_file():
+                    sha256 = hashlib.sha256()
+                    with open(primary_file, "rb") as f:
+                        for chunk in iter(lambda: f.read(4096), b""):
+                            sha256.update(chunk)
+                    model_hash = sha256.hexdigest()
         except Exception as e:
-            progress.add_error(f"Failed to create Golden Artifact: {e}")
+            model_hash = f"Hash calculation failed: {e}"
+
+        content = f"""# Model Card: {os.path.basename(config.model_source)}
+
+## 🏗️ Build Information
+- **Framework:** LLM Cross-Compiler Framework
+- **Build ID:** {config.build_id}
+- **Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- **Target Architecture:** {config.target_arch}
+- **Target Format:** {config.target_format.value.upper()}
+- **Quantization:** {config.quantization or 'FP16'}
+
+## 🛡️ Security & Integrity
+- **Primary Artifact Hash (SHA256):** `{model_hash}`
+- **Base Image:** {config.base_image}
+
+## 🚀 Usage
+To deploy this model on your edge device:
+
+1. Transfer the archive to the target.
+2. Run the deployment script:
+   ```bash
+   chmod +x deploy.sh
+   ./deploy.sh

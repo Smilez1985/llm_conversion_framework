@@ -63,7 +63,7 @@ class InstallerGUI(tk.Tk):
         self.var_app_path = tk.StringVar(value=str(DEFAULT_APP_PATH))
         e_app = ttk.Entry(grp_app, textvariable=self.var_app_path)
         e_app.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        btn_app = ttk.Button(grp_app, text="Browse...", command=lambda: self._browse(self.var_app_path))
+        btn_app = ttk.Button(grp_app, text="Browse", command=lambda: self._browse(self.var_app_path))
         btn_app.pack(side=tk.RIGHT)
         
         # Options
@@ -117,7 +117,7 @@ class InstallerGUI(tk.Tk):
             if not target.exists(): target.mkdir(parents=True, exist_ok=True)
             
             # 1. Copy Content
-            self.log("Copying files...")
+            self.log("Copying files")
             total_items = len(INCLUDE_DATA_DIRS) + len(INCLUDE_DATA_FILES) + len(INCLUDE_APP_FILES)
             current = 0
             
@@ -140,12 +140,12 @@ class InstallerGUI(tk.Tk):
                 self.progress['value'] = (current / total_items) * 60
 
             # 2. Setup VENV (im Zielordner)
-            self.log("Setting up Python Environment (VENV)...")
+            self.log("Setting up Python Environment (VENV)")
             venv_path = target / ".venv"
             subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
             
             # 3. Install Dependencies
-            self.log("Installing dependencies...")
+            self.log("Installing dependencies")
             pip_exe = venv_path / "Scripts" / "pip.exe"
             
             subprocess.run([str(pip_exe), "install", "--upgrade", "pip"], 
@@ -166,13 +166,13 @@ class InstallerGUI(tk.Tk):
                 self._create_shortcut(target, "Desktop")
 
             # 5. Central Checkfile
-            self.log("Writing Configuration...")
+            self.log("Writing Configuration")
             
             # Ordner erstellen falls nicht da
             if not CHECKFILE_DIR.exists():
                 CHECKFILE_DIR.mkdir(parents=True, exist_ok=True)
             
-            # Datei schreiben: Path=C:\...
+            # Datei schreiben: Path=C:\
             with open(CHECKFILE_PATH, "w") as f:
                 f.write(f"Path={target}")
             
@@ -219,7 +219,7 @@ class InstallerGUI(tk.Tk):
             
         except ImportError:
             # Fallback: PowerShell
-            self.log("Using PowerShell fallback for shortcut...")
+            self.log("Using PowerShell fallback for shortcut")
             target_bat = str(target_dir / "Launch-LLM-Conversion-Framework.bat")
             icon_path = str(target_dir / "assets" / "logo.ico")
             desktop = os.path.join(os.environ["USERPROFILE"], "Desktop", f"{APP_NAME}.lnk")

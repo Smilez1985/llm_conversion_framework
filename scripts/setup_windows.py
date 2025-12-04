@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.17 FINAL)
-DIREKTIVE: Goldstandard. KORRIGIERTER SCOPE-FEHLER (SOURCE_DIR).
-  FIX: Verschiebt alle Pfad-Definitionen an den Anfang des Moduls, um NameError in Threads zu vermeiden.
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.18 FINAL UX/CRASH FIX)
+DIREKTIVE: Goldstandard. KORRIGIERTER STARTUP-CRASH und VERBESSERTE ERFOLGSMELDUNG.
+  FIX: Launcher-BAT wird überschrieben, um die Current Working Directory (CWD) zu setzen (cd /d).
 """
 
 import os
@@ -71,7 +71,7 @@ IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "bui
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_TITLE} Installer v2.17")
+        self.title(f"{APP_TITLE} Installer v2.18")
         self.geometry("800x700")
         self.resizable(True, True)
         
@@ -220,7 +220,47 @@ class InstallerGUI(tk.Tk):
         else:
             self.lbl_status.config(text="Docker Error.", foreground="red")
             self.log("Docker daemon not responding.")
+    
+    def _create_robust_launcher(self) -> str:
+        # VENV path is relative to the installation root
+        VENV_PATH_RELATIVE = Path(".venv") / "Scripts" / "python.exe"
+        MAIN_SCRIPT_RELATIVE = Path("orchestrator") / "main.py"
+        
+        # Die Logik, um die CWD zu setzen und absolute Pfade aufzulösen (FIX für Abstürze)
+        content = f"""@echo off
+setlocal
 
+:: Gehe in das Verzeichnis, in dem dieses Skript liegt (Installations-Root)
+cd /d "%~dp0"
+
+set "PYTHON_EXE={VENV_PATH_RELATIVE}"
+set "MAIN_SCRIPT={MAIN_SCRIPT_RELATIVE}"
+
+echo Starte LLM Conversion Framework...
+
+if not exist "%PYTHON_EXE%" (
+    echo FEHLER: Python Environment nicht gefunden.
+    echo Bitte deinstallieren und neu installieren (FEHLERCODE 1).
+    goto :error
+)
+
+"%PYTHON_EXE%" "%MAIN_SCRIPT%"
+
+if %errorlevel% NEQ 0 (
+    echo.
+    echo FEHLER: Das Framework ist abgestuerzt (Exit Code %errorlevel%).
+    echo Ueberpruefen Sie das Log im Data-Ordner auf Details.
+    echo (Pfad: {str(self.var_data_path.get())}\logs)
+    goto :error
+)
+
+goto :eof
+
+:error
+pause
+exit /b %errorlevel%"""
+        
+        return content
 
     def _start_install(self):
         target_dir = Path(self.var_app_path.get())
@@ -254,7 +294,7 @@ class InstallerGUI(tk.Tk):
             
             # Kopiere Code-Ordner (orchestrator, configs, assets, Docker Setup)
             for item in CODE_DIRS:
-                src = SOURCE_DIR / item # SOURCE_DIR ist nun garantiert definiert
+                src = SOURCE_DIR / item
                 dst = app_dir / item
                 if src.exists():
                     if dst.exists(): shutil.rmtree(dst)
@@ -279,13 +319,23 @@ class InstallerGUI(tk.Tk):
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
             
-            # Launcher kopieren
+            # *** KORREKTUR: Launcher kopieren und ROBSTE LOGIK überschreiben ***
+            DST_LAUNCHER_PATH = app_dir / LAUNCHER_FILE_NAME
+            
+            # 3a. Kopiere Launcher-Template
             SRC_LAUNCHER = SOURCE_DIR / "scripts" / LAUNCHER_FILE_NAME
             if SRC_LAUNCHER.exists():
-                shutil.copy2(SRC_LAUNCHER, app_dir / LAUNCHER_FILE_NAME)
-                self.log(f"  Kopiert (Launcher): {LAUNCHER_FILE_NAME}")
+                shutil.copy2(SRC_LAUNCHER, DST_LAUNCHER_PATH)
             else:
-                self.log(f"  FEHLER: Launcher-Quelle nicht gefunden: {SRC_LAUNCHER}")
+                self.log(f"  FEHLER: Launcher-Quelle nicht gefunden: {SRC_LAUNCHER}. Wird leer erstellt.")
+            
+            # 3b. Überschreibe mit ROBSTER LOGIK (FIX für Absturz)
+            self.log(f"  Sichere Launcher-Logik wird implementiert...")
+            launcher_content = self._create_robust_launcher()
+            with open(DST_LAUNCHER_PATH, "w") as f:
+                f.write(launcher_content)
+                
+            self.log(f"  Kopiert und gesichert (Launcher): {LAUNCHER_FILE_NAME}")
             current += 1
 
             # Kopiere Uninstaller
@@ -389,7 +439,12 @@ class InstallerGUI(tk.Tk):
             self.progress['value'] = 100
             self.log("Installation Complete!")
             
-            messagebox.showinfo("Success", "Installation erfolgreich abgeschlossen!\n\nDas Framework ist nun in den Programmen und die Datenpfade getrennt.")
+            # UX FIX: Verbesserte Erfolgsmeldung
+            messagebox.showinfo("Installation Erfolgreich!", 
+                                f"Das LLM Conversion Framework wurde erfolgreich installiert und ist startbereit.\n\n"
+                                f"Starten Sie die Anwendung über die Desktop-Verknüpfung.\n"
+                                f"Ihre Daten (Modelle, Logs, Artefakte) finden Sie unter:\n\n"
+                                f"{str(data_dir)}")
             self.destroy()
             
         except Exception as e:
@@ -415,7 +470,6 @@ class InstallerGUI(tk.Tk):
         # --- Shortcut 1: Die App Launcher
         name_app = f"{APP_TITLE}"
         path_app = os.path.join(desktop, f"{name_app}.lnk")
-        # ZIEL: Muss auf den korrekten Dateinamen zeigen (keine Altlast)
         target_bat = str(app_dir / LAUNCHER_FILE_NAME)
         
         shortcut_app = shell.CreateShortCut(path_app)

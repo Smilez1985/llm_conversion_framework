@@ -3,13 +3,30 @@ TITLE LLM Cross-Compiler Framework - Launcher
 CLS
 SETLOCAL ENABLEDELAYEDEXPANSION
 
+:: --- 0. SELF-CHECK (Goldstandard) ---
+:: Sicherstellen, dass wir im richtigen Verzeichnis sind (Root)
+cd /d "%~dp0"
+
+IF NOT EXIST "orchestrator\main.py" (
+    echo [CRITICAL] Falsches Installationsverzeichnis!
+    echo.
+    echo Diese Datei (Launcher) befindet sich scheinbar im falschen Ordner.
+    echo Aktueller Pfad: %CD%
+    echo.
+    echo Bitte verschieben Sie diese .bat Datei in das HAUPTVERZEICHNIS des Projekts
+    echo (dort wo auch 'README.md' und der Ordner 'orchestrator' liegen).
+    echo.
+    PAUSE
+    EXIT /B 1
+)
+
 :: --- KONFIGURATION ---
 SET "VENV_DIR=.venv"
 SET "MARKER_FILE=.install_complete"
-SET "INSTALLER_SCRIPT=setup_windows.py"
+SET "INSTALLER_SCRIPT=scripts\setup_windows.py"
 SET "MAIN_SCRIPT=orchestrator\main.py"
 
-:: --- 1. UMWELT PRÜFEN (Goldstandard) ---
+:: --- 1. UMWELT PRÜFEN ---
 echo [INIT] Pruefe Systemumgebung...
 
 :: Check: Python
@@ -20,7 +37,6 @@ IF %ERRORLEVEL% NEQ 0 (
     echo Das Framework benoetigt Python 3.10+.
     echo Versuche automatischen Download des Python-Installers...
     
-    :: Download Python Installer via Powershell (Secure)
     powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe' -OutFile 'python_installer.exe'"
     
     IF EXIST "python_installer.exe" (
@@ -29,7 +45,6 @@ IF %ERRORLEVEL% NEQ 0 (
         start /wait python_installer.exe /passive PrependPath=1
         del python_installer.exe
         
-        :: Re-Check nach Installation
         python --version >nul 2>&1
         IF !ERRORLEVEL! NEQ 0 (
             echo [ERROR] Python Installation fehlgeschlagen oder PATH nicht aktualisiert.
@@ -72,17 +87,15 @@ echo [SETUP] Starte GUI-Installer...
 echo Dies richtet Dependencies ein, laedt MSVC Runtimes und erstellt Shortcuts.
 echo.
 
-:: Aufruf des existierenden Python-Installers (setup_windows.py)
+:: Aufruf des Python-Installers
 python %INSTALLER_SCRIPT%
 
-:: Prüfen, ob der Python-Installer erfolgreich war
 IF %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Der Installer meldete einen Fehler.
     PAUSE
     EXIT /B 1
 )
 
-:: Marker setzen (falls das Python script es nicht tut)
 echo Installed > "%MARKER_FILE%"
 echo [SUCCESS] Installation abgeschlossen.
 echo.
@@ -92,12 +105,11 @@ echo [UPDATE] Pruefe auf Updates...
 git pull >nul 2>&1
 
 echo [BOOT] Starte Framework...
-:: Virtuelle Umgebung nutzen, falls vom Installer angelegt
 IF EXIST "%VENV_DIR%\Scripts\activate.bat" (
     CALL "%VENV_DIR%\Scripts\activate.bat"
 )
 
-:: Abhängigkeiten sicherstellen (falls Update neue braucht)
+:: Ensure deps are sync (quietly)
 pip install -r requirements.txt >nul 2>&1
 
 python %MAIN_SCRIPT%

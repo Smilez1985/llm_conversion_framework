@@ -10,7 +10,7 @@ cd /d "%~dp0"
 :: 2. Check: Sind wir im 'scripts' Ordner? (Indikator: orchestrator liegt eins drueber)
 IF EXIST "..\orchestrator\main.py" (
     echo [INFO] Launcher im Unterordner erkannt.
-    echo [INFO] Wechsle in das Hauptverzeichnis (cd ..)...
+    echo [INFO] Wechsle in das Hauptverzeichnis (cd ..)
     cd ..
 )
 
@@ -36,18 +36,18 @@ SET "INSTALLER_SCRIPT=scripts\setup_windows.py"
 SET "MAIN_SCRIPT=orchestrator\main.py"
 
 :: --- 1. UMWELT PRÜFEN ---
-echo [INIT] Pruefe Systemumgebung...
+echo [INIT] Pruefe Systemumgebung
 
 :: Check: Python
 python --version >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
     echo [CRITICAL] Python nicht gefunden!
-    echo Versuche automatischen Download...
+    echo Versuche automatischen Download
     
     powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe' -OutFile 'python_installer.exe'"
     
     IF EXIST "python_installer.exe" (
-        echo [INFO] Starte Python Installation...
+        echo [INFO] Starte Python Installation
         echo BITTE WAEHLEN SIE: "Add Python to PATH" im Installer!
         start /wait python_installer.exe /passive PrependPath=1
         del python_installer.exe
@@ -70,11 +70,11 @@ IF %ERRORLEVEL% NEQ 0 (
 git --version >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
     echo [CRITICAL] Git nicht gefunden!
-    echo Versuche automatischen Download...
+    echo Versuche automatischen Download
     powershell -Command "Invoke-WebRequest -Uri 'https://github.com/git-for-windows/git/releases/download/v2.44.0.windows.1/Git-2.44.0-64-bit.exe' -OutFile 'git_installer.exe'"
     
     IF EXIST "git_installer.exe" (
-        echo [INFO] Starte Git Installation...
+        echo [INFO] Starte Git Installation
         start /wait git_installer.exe /VERYSILENT /NORESTART
         del git_installer.exe
     ) ELSE (
@@ -89,7 +89,7 @@ IF EXIST "%MARKER_FILE%" (
 
 :RUN_INSTALLER
 echo.
-echo [SETUP] Starte GUI-Installer (Ersteinrichtung)...
+echo [SETUP] Starte GUI-Installer (Ersteinrichtung)
 echo.
 
 :: Aufruf des Python-Installers
@@ -106,10 +106,10 @@ echo [SUCCESS] Installation abgeschlossen.
 echo.
 
 :START_APP
-echo [UPDATE] Pruefe auf Updates...
+echo [UPDATE] Pruefe auf Updates
 git pull >nul 2>&1
 
-echo [BOOT] Starte Framework...
+echo [BOOT] Starte Framework
 
 :: Virtuelle Umgebung aktivieren (falls vorhanden)
 IF EXIST "%VENV_DIR%\Scripts\activate.bat" (

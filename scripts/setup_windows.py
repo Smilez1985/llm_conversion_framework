@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.9 FINAL)
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.11 FINAL UX)
 DIREKTIVE: Goldstandard. KORRIGIERTE PFADTRENUNG und VOLLSTÄNDIGER DOCKER CHECK.
-  1. App-Code/VENV/Assets -> Application Path (C:/Program Files/...)
-  2. Output/Logs/Cache/Models/Targets -> Data Path (C:/Users/Public/Documents/...)
-  3. Zwei korrekte Desktop-Shortcuts mit Icons.
-  4. KEIN VERSTECKEN des Data Path.
+  FIX: Defensive Browsing: Stellt sicher, dass der 'Browse'-Dialog den finalen Pfad vorschlägt.
 """
 
 import os
@@ -61,7 +58,7 @@ IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "bui
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_TITLE} Installer v2.9")
+        self.title(f"{APP_TITLE} Installer v2.11")
         self.geometry("800x700")
         self.resizable(True, True)
         
@@ -125,8 +122,27 @@ class InstallerGUI(tk.Tk):
         self.btn_cancel.pack(side=tk.RIGHT, padx=10)
 
     def _browse(self, var):
-        d = filedialog.askdirectory(initialdir=var.get())
-        if d: var.set(d)
+        # UX FIX: Stellt sicher, dass der Zielordnername angehängt wird, wenn der Benutzer einen Elternpfad auswählt.
+        path_str = var.get()
+        p = Path(path_str) 
+        
+        # 1. Bestimme den existierenden Startpfad (Elternordner, z.B. C:\Program Files)
+        initial_dir = p.parent 
+        
+        # Defensiver Fallback
+        if not initial_dir.exists():
+            initial_dir = Path.home()
+        
+        # 2. Öffne den Dialog im existierenden Elternordner
+        d = filedialog.askdirectory(initialdir=str(initial_dir))
+        
+        if d:
+            # 3. Hänge den gewünschten Anwendungsnamen (p.name: LLM-Conversion-Framework)
+            # an den vom Benutzer ausgewählten Pfad (d) an.
+            final_path = Path(d) / p.name
+            
+            # 4. Aktualisiere das Eingabefeld mit dem vollständigen Zielpfad
+            var.set(str(final_path))
 
     def log(self, msg):
         self.log_text.config(state='normal')
@@ -290,7 +306,7 @@ class InstallerGUI(tk.Tk):
             # Sicherstellen, dass die Data-Ordner existieren (Output, Logs, Cache)
             (data_dir / "output").mkdir(parents=True, exist_ok=True)
             (data_dir / "logs").mkdir(parents=True, exist_ok=True)
-            (data_dir / "cache").mkdir(parents=True, exist_ok=True) # Stelle sicher, dass Cache auch existiert
+            (data_dir / "cache").mkdir(parents=True, exist_ok=True) 
             
             config_file = app_dir / "configs" / "user_config.yml" 
             config_data = {}
@@ -304,8 +320,8 @@ class InstallerGUI(tk.Tk):
             config_data["output_dir"] = str(data_dir / "output")
             config_data["logs_dir"] = str(data_dir / "logs")
             config_data["cache_dir"] = str(data_dir / "cache")
-            config_data["targets_dir"] = str(data_dir / "targets")
-            config_data["models_dir"] = str(data_dir / "models")
+            config_data["targets_dir"] = str(data_dir / "targets") 
+            config_data["models_dir"] = str(data_dir / "models")   
             
             with open(config_file, "w") as f:
                 yaml.dump(config_data, f, default_flow_style=False)

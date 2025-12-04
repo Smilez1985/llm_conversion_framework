@@ -3,25 +3,35 @@ TITLE LLM Cross-Compiler Framework - Launcher
 CLS
 SETLOCAL ENABLEDELAYEDEXPANSION
 
+:: --- 0. ADMIN CHECK & AUTO-ELEVATION ---
+fsutil dirty query %systemdrive% >nul
+IF %ERRORLEVEL% NEQ 0 (
+    echo [INFO] Keine Admin-Rechte. Fordere an...
+    echo Set UAC = CreateObject^("Shell.Application"^) > "%temp%\getadmin.vbs"
+    echo UAC.ShellExecute "%~s0", "", "", "runas", 1 >> "%temp%\getadmin.vbs"
+    "%temp%\getadmin.vbs"
+    del "%temp%\getadmin.vbs"
+    exit /B
+)
+
+:: --- 1. PFAD-NORMALISIERUNG ---
+cd /d "%~dp0"
+IF EXIST "..\orchestrator\main.py" (
+    echo [INFO] Launcher im Unterordner. Wechsle zu Root...
+    cd ..
+)
+SET "ROOT_DIR=%CD%"
+
 :: --- KONFIGURATION ---
-:: ZENTRALER PFAD für die Checkfile (Wie angefordert)
 SET "CHECKFILE_DIR=C:\Users\Public\Documents\llm_conversion_framework"
 SET "CHECKFILE=%CHECKFILE_DIR%\checkfile.txt"
 SET "PYTHON_CMD=python"
 
-:: --- 0. SELF-PATH ---
-cd /d "%~dp0"
-IF EXIST "..\orchestrator\main.py" (
-    echo [INFO] Launcher im Unterordner. Wechsle zu Root
-    cd ..
-)
-SET "SOURCE_ROOT=%CD%"
-
-:: --- 1. SYSTEM-CHECK ---
-echo [INIT] Pruefe Systemumgebung
+:: --- 2. SYSTEM-CHECK ---
+echo [INIT] Pruefe Systemumgebung (Admin-Mode)...
 python --version >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
-    echo [CRITICAL] Python fehlt! Auto-Download
+    echo [CRITICAL] Python fehlt! Auto-Download...
     powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe' -OutFile 'python_installer.exe'"
     start /wait python_installer.exe /passive PrependPath=1
     del python_installer.exe
@@ -34,39 +44,37 @@ IF %ERRORLEVEL% NEQ 0 (
     )
 )
 
-:: --- 2. CHECKFILE PRÜFUNG ---
+:: --- 3. CHECKFILE PRÜFUNG ---
 IF EXIST "%CHECKFILE%" (
-    :: Lese Pfad aus Datei
     FOR /F "usebackq tokens=1,* delims==" %%A IN ("%CHECKFILE%") DO (
         IF /I "%%A"=="Path" SET "INSTALL_PATH=%%B"
     )
     
-    :: Trimmen (Sicherheitsmaßnahme)
     IF DEFINED INSTALL_PATH (
         echo [INFO] Installation gefunden: "!INSTALL_PATH!"
         
         IF EXIST "!INSTALL_PATH!\orchestrator\main.py" (
             GOTO :LAUNCH_APP
         ) ELSE (
-            echo [WARN] Pfad aus Checkfile ist ungueltig oder App wurde verschoben.
-            echo [INFO] Starte Reparatur/Neu-Installation
+            echo [WARN] Pfad aus Checkfile ist ungueltig.
+            echo [INFO] Starte Reparatur...
         )
     )
 )
 
-:: --- 3. SETUP MODE (Wenn Checkfile fehlt oder ungültig) ---
+:: --- 4. SETUP MODE ---
 :RUN_SETUP
-echo [SETUP] Starte Installer
+echo [SETUP] Starte Installer...
 
 :: Installer-Dependencies (Minimal)
 python -c "import win32com.client, winshell" >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
-    echo [INSTALL] Installiere Hilfs-Pakete (pywin32, winshell)
-    python -m pip install --upgrade pywin32 winshell requests >nul
+    echo [INSTALL] Installiere Hilfs-Pakete (pywin32, winshell)...
+    python -m pip install --upgrade pywin32 winshell requests psutil >nul
 )
 
 :: Starte GUI Installer
-python "%SOURCE_ROOT%\scripts\setup_windows.py"
+python "%ROOT_DIR%\scripts\setup_windows.py"
 
 IF %ERRORLEVEL% EQU 0 (
     :: Re-Check nach erfolgreichem Installer
@@ -82,24 +90,22 @@ echo [ERROR] Setup fehlgeschlagen oder abgebrochen.
 PAUSE
 EXIT /B
 
-:: --- 4. LAUNCH APP ---
+:: --- 5. LAUNCH APP ---
 :LAUNCH_APP
-:: Wechsel in das Installationsverzeichnis (WICHTIG für relative Pfade im Code)
 pushd "!INSTALL_PATH!"
 echo [BOOT] Starte Framework aus: %CD%
 
-:: Update Check (Nur wenn git verfügbar)
+:: Update Check
 git --version >nul 2>&1
 IF %ERRORLEVEL% EQU 0 (
     git pull >nul 2>&1
 )
 
-:: VENV nutzen (Falls vorhanden)
+:: VENV nutzen
 IF EXIST ".venv\Scripts\activate.bat" (
     CALL ".venv\Scripts\activate.bat"
 )
 
-:: Start
 python orchestrator\main.py
 IF %ERRORLEVEL% NEQ 0 PAUSE
 popd

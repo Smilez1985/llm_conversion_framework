@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Windows GUI Installer (v2.7 FINAL)
-DIREKTIVE: Goldstandard. KORRIGIERTE PFADTRENUNG.
+DIREKTIVE: Goldstandard. KORRIGIERTE PFADTRENUNG und VOLLSTÄNDIGER DOCKER CHECK.
   1. App-Code/VENV/Assets -> Application Path (C:\Program Files\...)
   2. Output/Logs/Cache -> Data Path (C:\Users\Public\Documents\...)
   3. Zwei korrekte Desktop-Shortcuts mit Icons.
@@ -28,6 +28,7 @@ try:
     import winshell
     from win32com.client import Dispatch
 except ImportError:
+    # Kann passieren, wenn die install.bat nicht korrekt vorbereitet hat
     pass
 
 # GUI Imports
@@ -133,18 +134,70 @@ class InstallerGUI(tk.Tk):
         self.update_idletasks()
 
     def _check_docker_background(self):
-        # ... (Docker Check bleibt gleich)
-        # Nur um den Code kurz zu halten, wird der Docker Check Block hier ausgelassen.
-        # Im echten Skript muss dieser Code intakt bleiben.
-        self.lbl_status.config(text="System Ready.", foreground="green")
-        self.btn_install.config(state='normal')
-        self.log("Docker check passed.")
+        threading.Thread(target=self._check_docker, daemon=True).start()
+
+    def _check_docker(self):
+        self.log("Checking Docker environment...")
+        
+        docker_exe = shutil.which("docker")
+        if not docker_exe:
+            self.lbl_status.config(text="Docker not found!", foreground="red")
+            self.log("CRITICAL: Docker not found.")
+            # Es wird davon ausgegangen, dass psutil/requests vorhanden ist
+            if messagebox.askyesno("Docker Missing", "Docker Desktop is required. Download now?"):
+                webbrowser.open("https://www.docker.com/products/docker-desktop/")
+            return
+
+        running = False
+        try:
+            # Check if process is running
+            for proc in psutil.process_iter(['name']):
+                if "Docker Desktop" in proc.info['name']:
+                    running = True
+                    break
+        except:
+            # Fallback if psutil fails or access denied
+            pass
+        
+        if not running:
+            self.log("Starting Docker Desktop...")
+            try:
+                # Versuche Docker Desktop manuell zu starten
+                dd_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
+                if os.path.exists(dd_path):
+                    subprocess.Popen([dd_path], creationflags=subprocess.CREATE_NO_WINDOW)
+                    # Warte auf den Docker Daemon
+                    for i in range(30):
+                        time.sleep(1)
+                        try:
+                            # Finaler Check über die CLI
+                            if subprocess.run(["docker", "info"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0:
+                                running = True
+                                break
+                        except: pass
+            except Exception as e:
+                self.log(f"Start failed: {e}")
+
+        # Final check via CLI
+        try:
+            if subprocess.run(["docker", "info"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0:
+                running = True
+        except: pass
+
+        if running:
+            self.docker_ok = True
+            self.lbl_status.config(text="System Ready.", foreground="green")
+            self.btn_install.config(state='normal')
+            self.log("Docker check passed.")
+        else:
+            self.lbl_status.config(text="Docker Error.", foreground="red")
+            self.log("Docker daemon not responding.")
+
 
     def _start_install(self):
         target_dir = Path(self.var_app_path.get())
         data_dir = Path(self.var_data_path.get())
         
-        # Grundlegende Pfadvalidierung
         if not target_dir.is_absolute() or not data_dir.is_absolute():
              messagebox.showerror("Fehler", "Pfade muessen absolut sein!")
              return
@@ -164,8 +217,6 @@ class InstallerGUI(tk.Tk):
             if not app_dir.exists(): app_dir.mkdir(parents=True, exist_ok=True)
             if not data_dir.exists(): data_dir.mkdir(parents=True, exist_ok=True)
             
-            # WICHTIG: KEINE HIDDEN ATTRIBUTE FÜR DATA_DIR!
-
             # 2. Copy Content: Source Code in den App-Pfad
             self.log("Kopiere Framework-Dateien in den App-Pfad...")
             total_items = len(INCLUDE_APP_DIRS) + len(INCLUDE_APP_FILES) + len(INCLUDE_LAUNCHER_FILES) + 2
@@ -228,12 +279,18 @@ class InstallerGUI(tk.Tk):
             (data_dir / "output").mkdir(parents=True, exist_ok=True)
             (data_dir / "logs").mkdir(parents=True, exist_ok=True)
             
+            # Lese die vorhandene user_config.yml ein (falls vorhanden)
             config_file = app_dir / "configs" / "user_config.yml" 
-            # Wir schreiben eine neue User Config, die output_dir und logs_dir ueberschreibt
-            config_data = {
-                "output_dir": str(data_dir / "output"),
-                "logs_dir": str(data_dir / "logs")
-            }
+            config_data = {}
+            if config_file.exists():
+                try:
+                    with open(config_file, 'r') as f:
+                        config_data = yaml.safe_load(f) or {}
+                except: pass
+            
+            # Setze oder überschreibe die Pfade
+            config_data["output_dir"] = str(data_dir / "output")
+            config_data["logs_dir"] = str(data_dir / "logs")
             
             with open(config_file, "w") as f:
                 yaml.dump(config_data, f, default_flow_style=False)
@@ -245,13 +302,12 @@ class InstallerGUI(tk.Tk):
             if not CHECKFILE_DIR.exists():
                 CHECKFILE_DIR.mkdir(parents=True, exist_ok=True)
             
-            # Checkfile zeigt auf den App-Pfad
+            # Checkfile zeigt auf den App-Pfad (Source Code + VENV)
             with open(CHECKFILE_PATH, "w") as f:
                 f.write(f'Path="{app_dir}"') 
             
-            # Nur Checkfile verstecken, nicht den Ordner!
+            # Nur Checkfile verstecken
             try:
-                # 0x02 ist das 'Hidden' Attribut
                 ctypes.windll.kernel32.SetFileAttributesW(str(CHECKFILE_PATH), 0x02)
             except: pass
 
@@ -275,7 +331,6 @@ class InstallerGUI(tk.Tk):
             self.btn_cancel.config(state='normal')
 
     def _create_shortcut_pair(self, app_dir: Path, data_dir: Path):
-        # Stellt sicher, dass die Imports funktionieren
         if 'winshell' not in sys.modules or 'Dispatch' not in globals():
             self.log("Shortcuts konnten nicht erstellt werden (winshell/pywin32 fehlt).")
             return
@@ -308,7 +363,7 @@ class InstallerGUI(tk.Tk):
         shortcut_data = shell.CreateShortCut(path_data)
         shortcut_data.Targetpath = str(data_dir) # Ziel ist das Verzeichnis selbst
         shortcut_data.WorkingDirectory = str(data_dir)
-        shortcut_data.Description = "Öffnet den Daten- und Ausgabeordner"
+        shortcut_data.Description = "Öffnet den Daten- und Ausgabeordner (Goldenes Artefakt)"
         if Path(icon_data_path).exists():
             shortcut_data.IconLocation = icon_data_path
         shortcut_data.save()

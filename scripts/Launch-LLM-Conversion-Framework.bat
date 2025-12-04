@@ -3,22 +3,35 @@ TITLE LLM Cross-Compiler Framework - Launcher
 CLS
 SETLOCAL ENABLEDELAYEDEXPANSION
 
-:: --- 0. SELF-CHECK (Goldstandard) ---
-:: Sicherstellen, dass wir im richtigen Verzeichnis sind (Root)
-cd /d "%~dp0"
+:: --- 0. INTELLIGENTE PFAD-ERKENNUNG ---
+:: Wo bin ich?
+SET "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
 
-IF NOT EXIST "orchestrator\main.py" (
-    echo [CRITICAL] Falsches Installationsverzeichnis!
-    echo.
-    echo Diese Datei (Launcher) befindet sich scheinbar im falschen Ordner.
-    echo Aktueller Pfad: %CD%
-    echo.
-    echo Bitte verschieben Sie diese .bat Datei in das HAUPTVERZEICHNIS des Projekts
-    echo (dort wo auch 'README.md' und der Ordner 'orchestrator' liegen).
-    echo.
-    PAUSE
-    EXIT /B 1
+:: Check 1: Bin ich schon im Root? (Existiert orchestrator hier?)
+IF EXIST "orchestrator\main.py" (
+    SET "ROOT_DIR=%SCRIPT_DIR%"
+    echo [INFO] Launcher im Root-Verzeichnis erkannt.
+) ELSE (
+    :: Check 2: Bin ich im 'scripts' Ordner? (Existiert orchestrator eins drueber?)
+    IF EXIST "..\orchestrator\main.py" (
+        SET "ROOT_DIR=%SCRIPT_DIR%..\"
+        cd /d "%ROOT_DIR%"
+        echo [INFO] Launcher im Scripts-Ordner erkannt. Wechsle zu Root...
+    ) ELSE (
+        echo [CRITICAL] Konnte Projekt-Struktur nicht erkennen!
+        echo.
+        echo Bitte stellen Sie sicher, dass der Ordner 'orchestrator' existiert
+        echo und sich entweder im selben Verzeichnis oder einen Ordner darueber befindet.
+        echo.
+        echo Aktueller Pfad: %CD%
+        PAUSE
+        EXIT /B 1
+    )
 )
+
+:: Ab hier sind wir garantiert im Root-Verzeichnis.
+:: Alle Pfade koennen nun relativ vom Root angegeben werden.
 
 :: --- KONFIGURATION ---
 SET "VENV_DIR=.venv"
@@ -33,9 +46,7 @@ echo [INIT] Pruefe Systemumgebung...
 python --version >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
     echo [CRITICAL] Python nicht gefunden!
-    echo.
-    echo Das Framework benoetigt Python 3.10+.
-    echo Versuche automatischen Download des Python-Installers...
+    echo Versuche automatischen Download...
     
     powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe' -OutFile 'python_installer.exe'"
     
@@ -63,8 +74,7 @@ IF %ERRORLEVEL% NEQ 0 (
 git --version >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
     echo [CRITICAL] Git nicht gefunden!
-    echo.
-    echo Versuche automatischen Download von Git...
+    echo Versuche automatischen Download...
     powershell -Command "Invoke-WebRequest -Uri 'https://github.com/git-for-windows/git/releases/download/v2.44.0.windows.1/Git-2.44.0-64-bit.exe' -OutFile 'git_installer.exe'"
     
     IF EXIST "git_installer.exe" (
@@ -72,7 +82,7 @@ IF %ERRORLEVEL% NEQ 0 (
         start /wait git_installer.exe /VERYSILENT /NORESTART
         del git_installer.exe
     ) ELSE (
-        echo [WARNUNG] Git Download fehlgeschlagen. Auto-Updates werden nicht funktionieren.
+        echo [WARNUNG] Git Download fehlgeschlagen. Auto-Updates deaktiviert.
     )
 )
 
@@ -83,8 +93,7 @@ IF EXIST "%MARKER_FILE%" (
 
 :RUN_INSTALLER
 echo.
-echo [SETUP] Starte GUI-Installer...
-echo Dies richtet Dependencies ein, laedt MSVC Runtimes und erstellt Shortcuts.
+echo [SETUP] Starte GUI-Installer (Ersteinrichtung)...
 echo.
 
 :: Aufruf des Python-Installers
@@ -105,17 +114,21 @@ echo [UPDATE] Pruefe auf Updates...
 git pull >nul 2>&1
 
 echo [BOOT] Starte Framework...
+
+:: Virtuelle Umgebung aktivieren (falls vorhanden)
 IF EXIST "%VENV_DIR%\Scripts\activate.bat" (
     CALL "%VENV_DIR%\Scripts\activate.bat"
 )
 
-:: Ensure deps are sync (quietly)
+:: Dependencies sicherstellen (Quiet Mode)
 pip install -r requirements.txt >nul 2>&1
 
+:: Hauptanwendung starten
 python %MAIN_SCRIPT%
 
 IF %ERRORLEVEL% NEQ 0 (
     echo.
     echo [CRASH] Anwendung unerwartet beendet.
+    echo Pfad war: %CD%
     PAUSE
 )

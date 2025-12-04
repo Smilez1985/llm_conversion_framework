@@ -3,11 +3,9 @@
 LLM Cross-Compiler Framework - Core Framework Manager
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 
-Updates v2.0.0:
-- Version Bump to 2.0.0 (The Brain Update).
-- Initialization of Guardian Layers (Consistency, Self-Healing, Telemetry).
-- Integration of Deployment and Model Managers.
-- Enhanced Configuration Model.
+Updates v2.0.1:
+- Added granular logging to initialization process for better UX transparency.
+- Fixed potential hang-ups during Docker discovery.
 """
 
 import os
@@ -29,38 +27,22 @@ from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, check_command_exists, safe_json_load
 
-# --- COMPONENT IMPORTS (Lazy/Optional) ---
-try:
-    from orchestrator.Core.dataset_manager import DatasetManager
+# Lazy Imports for Managers to speed up initial load
+try: from orchestrator.Core.dataset_manager import DatasetManager
 except ImportError: DatasetManager = None
-
-try:
-    from orchestrator.Core.rag_manager import RAGManager
+try: from orchestrator.Core.rag_manager import RAGManager
 except ImportError: RAGManager = None
-
-try:
-    from orchestrator.Core.crawler_manager import CrawlerManager
+try: from orchestrator.Core.crawler_manager import CrawlerManager
 except ImportError: CrawlerManager = None
-
-try:
-    from orchestrator.Core.deployment_manager import DeploymentManager
+try: from orchestrator.Core.deployment_manager import DeploymentManager
 except ImportError: DeploymentManager = None
-
-try:
-    from orchestrator.Core.model_manager import ModelManager
+try: from orchestrator.Core.model_manager import ModelManager
 except ImportError: ModelManager = None
-
-# v2.0 Guardian Layers
-try:
-    from orchestrator.Core.consistency_manager import ConsistencyManager
+try: from orchestrator.Core.consistency_manager import ConsistencyManager
 except ImportError: ConsistencyManager = None
-
-try:
-    from orchestrator.Core.self_healing_manager import SelfHealingManager
+try: from orchestrator.Core.self_healing_manager import SelfHealingManager
 except ImportError: SelfHealingManager = None
-
-try:
-    from orchestrator.utils.telemetry import TelemetryManager
+try: from orchestrator.utils.telemetry import TelemetryManager
 except ImportError: TelemetryManager = None
 
 
@@ -108,16 +90,11 @@ class FrameworkConfig:
     api_host: str = "127.0.0.1"
     source_repositories: Dict[str, str] = field(default_factory=dict)
     
-    # v1.5+ Features
     enable_rag_knowledge: bool = False
-    
-    # v1.6+ Crawler Settings
     crawler_respect_robots: bool = True
     crawler_max_depth: int = 2
     crawler_max_pages: int = 50
     input_history: List[str] = field(default_factory=list)
-    
-    # v2.0+ Brain Settings
     chat_context_limit: int = 4096
     enable_telemetry: bool = False
     offline_mode: bool = False
@@ -135,7 +112,6 @@ class FrameworkManager:
         
         if isinstance(config, dict):
             known = FrameworkConfig.__annotations__.keys()
-            # Safe filtering of unknown keys
             valid_config = {k:v for k,v in config.items() if k in known}
             self.config = FrameworkConfig(**valid_config)
         elif isinstance(config, FrameworkConfig): 
@@ -143,13 +119,9 @@ class FrameworkManager:
         else: 
             self.config = FrameworkConfig()
         
-        # UPDATE: Version 2.0.0 (The Brain Update)
-        self.info = FrameworkInfo("2.0.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
+        self.info = FrameworkInfo("2.0.1", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
         
-        # Components Registry
-        self._components = {}
-        
-        # Manager References (Properties)
+        # Component Placeholders
         self.dataset_manager = None
         self.rag_manager = None
         self.crawler_manager = None
@@ -158,39 +130,55 @@ class FrameworkManager:
         self.consistency_manager = None
         self.healing_manager = None
         self.telemetry_manager = None
-        self.config_manager = None # Reference usually passed externally or init here if needed
         
-        self._event_queue = queue.Queue()
-        self._build_counter = 0
+        self._components = {}
         self._active_builds = {}
         
-        self.logger.info(f"Framework Manager initialized (v{self.info.version})")
+        self.logger.info(f"Framework Manager instantiated (v{self.info.version})")
 
     def initialize(self) -> bool:
+        """
+        Main initialization sequence with granular logging for transparency.
+        """
         with self._lock:
             if self._initialized: return True
+            
             try:
-                self.logger.info("Initializing...")
+                self.logger.info("--- Starting Initialization Sequence ---")
+                
+                self.logger.info("[1/5] Validating System Requirements...")
                 self._validate_system_requirements()
+                
+                self.logger.info("[2/5] Setting up Directory Structure...")
                 self._setup_directories()
+                
+                self.logger.info("[3/5] Loading Extended Configuration (SSOT)...")
                 self._load_extended_configuration()
+                
+                self.logger.info("[4/5] Initializing Docker Interface (This may take a few seconds)...")
+                # Docker init is a common hang point, explicit log helps user know we are waiting
                 self._initialize_docker()
+                
+                self.logger.info("[5/5] Loading Core Managers & Guardian Layers...")
                 self._initialize_core_components()
                 
                 self._initialized = True
+                self.logger.info("--- Framework Ready ---")
                 return True
+                
             except Exception as e:
-                self.logger.error(f"Init failed: {e}")
+                self.logger.error(f"Initialization FAILED: {e}", exc_info=True)
                 return False
 
     def _validate_system_requirements(self):
         req = SystemRequirements()
         if version.parse(f"{sys.version_info.major}.{sys.version_info.minor}") < version.parse(req.min_python_version):
             raise Exception(f"Python {req.min_python_version}+ required")
+        
+        # Check commands but don't fail hard on windows if git is missing in PATH (might be portable)
         for cmd in req.required_commands:
             if not check_command_exists(cmd): 
-                # Don't fail hard on windows if git is missing in path but installed, just warn
-                self.logger.warning(f"Command might be missing: {cmd}")
+                self.logger.warning(f"System Command missing in PATH: {cmd} (Functionality might be limited)")
 
     def _setup_directories(self):
         for d in [self.config.targets_dir, self.config.models_dir, self.config.output_dir, self.config.configs_dir, self.config.cache_dir, self.config.logs_dir]:
@@ -204,36 +192,40 @@ class FrameworkManager:
                     data = yaml.safe_load(f)
                     if data:
                         self.config.source_repositories = data
-            except Exception as e: self.logger.warning(f"Sources load failed: {e}")
+            except Exception as e: 
+                self.logger.warning(f"Failed to load SSOT {src_file}: {e}")
+        else:
+            self.logger.warning(f"SSOT file not found at {src_file}. Using defaults.")
 
     def _initialize_docker(self):
         try:
-            c = docker.from_env()
+            # Timeout setzen, damit es nicht ewig hängt
+            c = docker.from_env(timeout=10)
             c.ping()
             self.register_component("docker_client", c)
             self.info.docker_available = True
+            self.logger.info("Docker connection established.")
         except Exception as e:
-            self.logger.error(f"Docker init failed: {e}")
+            self.logger.error(f"Docker unavailable: {e}")
+            self.logger.error("Ensure Docker Desktop is running!")
             self.info.docker_available = False
 
     def _initialize_core_components(self):
-        """Initializes and registers all internal manager components."""
-        
-        # 1. Telemetry (First, to catch errors in others)
+        # 1. Telemetry
         if TelemetryManager:
             try:
                 self.telemetry_manager = TelemetryManager(self)
                 self.register_component("telemetry_manager", self.telemetry_manager)
             except Exception as e: self.logger.error(f"Telemetry init failed: {e}")
 
-        # 2. Dataset Manager
+        # 2. Dataset
         if DatasetManager:
             try:
                 self.dataset_manager = DatasetManager(self)
                 self.register_component("dataset_manager", self.dataset_manager)
             except Exception as e: self.logger.error(f"DatasetManager init failed: {e}")
 
-        # 3. Model Manager (Needs to be before RAG/Ditto for offline models)
+        # 3. Models
         if ModelManager:
             try:
                 self.model_manager = ModelManager(self)
@@ -241,45 +233,43 @@ class FrameworkManager:
                 self.register_component("model_manager", self.model_manager)
             except Exception as e: self.logger.error(f"ModelManager init failed: {e}")
 
-        # 4. RAG Manager (Optional)
+        # 4. RAG
         if RAGManager:
             if self.config.enable_rag_knowledge:
                 try:
                     self.rag_manager = RAGManager(self)
                     self.register_component("rag_manager", self.rag_manager)
-                    self.logger.info("RAGManager initialized (Knowledge Base Active)")
+                    self.logger.info("RAGManager active (Qdrant)")
                 except Exception as e: self.logger.error(f"RAGManager init failed: {e}")
             else:
-                self.logger.info("RAGManager disabled via config.")
+                self.logger.info("RAGManager disabled (Config).")
 
-        # 5. Crawler Manager (Optional)
+        # 5. Crawler
         if CrawlerManager:
             try:
                 self.crawler_manager = CrawlerManager(self)
                 self.register_component("crawler_manager", self.crawler_manager)
             except Exception as e: self.logger.error(f"CrawlerManager init failed: {e}")
 
-        # 6. Deployment Manager (v1.7)
+        # 6. Deployment
         if DeploymentManager:
             try:
                 self.deployment_manager = DeploymentManager(self)
                 self.register_component("deployment_manager", self.deployment_manager)
             except Exception as e: self.logger.error(f"DeploymentManager init failed: {e}")
 
-        # 7. Consistency Manager (v2.0 Guardian)
+        # 7. Consistency (Guardian)
         if ConsistencyManager:
             try:
                 self.consistency_manager = ConsistencyManager(self)
                 self.register_component("consistency_manager", self.consistency_manager)
-                self.logger.info("Consistency Manager activated")
             except Exception as e: self.logger.error(f"ConsistencyManager init failed: {e}")
 
-        # 8. Self-Healing Manager (v2.0 Guardian)
+        # 8. Self-Healing (Guardian)
         if SelfHealingManager:
             try:
                 self.healing_manager = SelfHealingManager(self)
                 self.register_component("healing_manager", self.healing_manager)
-                self.logger.info("Self-Healing Manager activated")
             except Exception as e: self.logger.error(f"SelfHealingManager init failed: {e}")
 
     def register_component(self, n, c):

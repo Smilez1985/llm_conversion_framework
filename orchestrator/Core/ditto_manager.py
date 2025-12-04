@@ -10,6 +10,7 @@ Updates v2.0.0:
 - Implemented 'Rolling Context Memory' (Token counting & summarization).
 - Added 'NativeInferenceEngine' for offline usage (via transformers).
 - LiteLLM abstraction for Cloud/Local switching.
+- Full implementation of Module Generation via new abstraction layer.
 """
 
 import json
@@ -37,6 +38,7 @@ except ImportError:
     TRANSFORMERS_AVAILABLE = False
 
 from orchestrator.utils.logging import get_logger
+from orchestrator.Core.module_generator import ModuleGenerator
 
 # RAG Integration
 try:
@@ -82,12 +84,10 @@ class NativeInferenceEngine:
             self.logger.error(f"Failed to load native model: {e}")
             raise e
 
-    def generate(self, messages: List[Dict[str, str]], max_new_tokens=512) -> str:
+    def generate(self, messages: List[Dict[str, str]], max_new_tokens=1024) -> str:
         if not self._loaded: self.load()
         
         # Simple Chat Template applying
-        # Note: Requires model with chat template support or manual formatting
-        # Fallback manual formatting for standard ChatML/Alpaca if apply_chat_template fails
         try:
             prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         except Exception:
@@ -104,7 +104,7 @@ class NativeInferenceEngine:
                 **inputs, 
                 max_new_tokens=max_new_tokens,
                 do_sample=True,
-                temperature=0.7
+                temperature=0.2 # Low temp for deterministic code generation
             )
             
         response = self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
@@ -149,12 +149,33 @@ class DittoCoder:
 
     def _format_model_name(self, provider: str, model: str) -> str:
         if "Ollama" in provider: return f"ollama/{model}"
+        if "Google" in provider: return f"gemini/{model}"
         return model
 
     def _get_rag_manager(self) -> Optional[RAGManager]:
         if not self.framework: return None
         if not self.framework.config.enable_rag_knowledge: return None
         return self.framework.get_component("rag_manager")
+
+    # --- RAG / DOCS ---
+    
+    def _fetch_documentation(self, sdk_name: str) -> str:
+        """Fetches documentation context (RAG or Web Fallback)."""
+        context_text = ""
+        rag = self._get_rag_manager()
+        
+        if rag:
+            self.logger.info(f"Querying Knowledge Base for '{sdk_name}'...")
+            query = f"{sdk_name} SDK compilation flags build configuration optimization parameters"
+            results = rag.search(query, limit=5, score_threshold=0.65)
+            
+            if results:
+                context_text += "--- EXPERT KNOWLEDGE (Local RAG) ---\n"
+                for res in results:
+                    context_text += f"\n[Source: {res.source}]\n{res.content}\n"
+                return context_text 
+
+        return ""
 
     # --- CONTEXT MEMORY MANAGEMENT (v2.0) ---
 
@@ -216,12 +237,13 @@ class DittoCoder:
         # A. Offline Mode
         if self.offline_mode:
             if not self.native_engine:
-                # Try to find a downloaded model
-                model_dir = Path(self.framework.config.models_dir) / "tiny_models"
+                # Try to find a downloaded model in models/tiny_models
+                # We check if config points to a dir or use default
+                model_base = Path(self.framework.config.models_dir) / "tiny_models"
                 # Pick first available or configured
-                # Logic simplified for this snippet
-                if model_dir.exists() and any(model_dir.iterdir()):
-                    target = next(x for x in model_dir.iterdir() if x.is_dir())
+                if model_base.exists() and any(model_base.iterdir()):
+                    # Naive pick: first folder
+                    target = next(x for x in model_base.iterdir() if x.is_dir())
                     self.native_engine = NativeInferenceEngine(str(target))
                 else:
                     return "Error: Offline Mode active but no Tiny Model found. Please download one via Wizard."
@@ -231,13 +253,16 @@ class DittoCoder:
         # B. Cloud/Ollama Mode (LiteLLM)
         if not completion: return "Error: LiteLLM library missing."
         
-        response = completion(
-            model=self.litellm_model,
-            messages=messages,
-            temperature=0.2,
-            api_base=self.base_url
-        )
-        return response.choices[0].message.content
+        try:
+            response = completion(
+                model=self.litellm_model,
+                messages=messages,
+                temperature=0.2, # Low temp for code
+                api_base=self.base_url
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"LLM API Error: {str(e)}"
 
     # --- PUBLIC API ---
 
@@ -254,9 +279,6 @@ class DittoCoder:
                 rag_context = "\n".join([f"- {r.content}" for r in results])
 
         # 2. Construct/Update History
-        # (Note: The Caller (GUI) manages the main list, but we prepare the specific prompt list)
-        
-        # Inject RAG into System Prompt for this turn
         base_system = "You are Ditto, an AI Hardware Expert. Help the user configure their build."
         if rag_context:
             base_system += f"\n\nRELEVANT KNOWLEDGE BASE:\n{rag_context}"
@@ -264,23 +286,125 @@ class DittoCoder:
         # Prepare messages list for LLM
         messages_for_llm = [{"role": "system", "content": base_system}]
         
-        # Append existing history (User/Assistant turns)
-        # We assume 'history' passed from GUI contains only User/Assistant dicts, not System
         if history:
             messages_for_llm.extend(history)
             
         messages_for_llm.append({"role": "user", "content": question})
 
-        # 3. Compress if needed (Operates on the list we just built)
-        # We don't modify the GUI history object directly, but we ensure we don't send too much
+        # 3. Compress if needed
         optimized_messages = self._compress_history(messages_for_llm)
 
         # 4. Generate
         return self._query_llm(optimized_messages)
 
     def generate_module_content(self, probe_file: Path) -> Dict[str, Any]:
-        """Legacy Wizard Method (kept for v1.6 compatibility)."""
-        # Reads probe, calls _query_llm with JSON schema (if supported by provider) or raw prompt
-        # ... Implementation similar to v1.7 but using _query_llm ...
-        # Returning Empty dict for brevity in this update snippet
-        return {}
+        """
+        Analysiert die Probe-Datei und generiert die Modul-Konfiguration.
+        Nutzt _query_llm für Cloud/Offline Abstraktion.
+        """
+        if not probe_file.exists():
+            raise FileNotFoundError(f"Probe file not found: {probe_file}")
+
+        # 1. Hardware Daten lesen
+        probe_data = probe_file.read_text(encoding="utf-8", errors="ignore")
+        
+        # 2. Determine SDK Hint for Doc Fetching
+        sdk_hint = "generic"
+        lower_probe = probe_data.lower()
+        if "nvidia" in lower_probe or "tegra" in lower_probe: sdk_hint = "nvidia"
+        elif "rockchip" in lower_probe or "rk3" in lower_probe: sdk_hint = "rockchip"
+        elif "hailo" in lower_probe: sdk_hint = "hailo"
+        elif "intel" in lower_probe: sdk_hint = "intel"
+        elif "riscv" in lower_probe: sdk_hint = "riscv"
+        
+        # 3. Fetch Context (RAG or Web)
+        doc_context = self._fetch_documentation(sdk_hint)
+
+        # 4. Construct System Prompt
+        system_prompt = """
+        You are 'Ditto', an expert Embedded Systems Engineer.
+        Analyze the hardware probe and generate a JSON configuration to fill the framework templates.
+        
+        TASKS:
+        1. Analyze Hardware (Arch, CPU Flags, NPU).
+        2. Generate Bash Code blocks for 'build.sh'.
+        
+        REQUIRED JSON STRUCTURE:
+        {
+            "module_name": "Str",
+            "architecture": "aarch64|x86_64",
+            "sdk": "Str",
+            "base_os": "Docker Image Name",
+            "packages": ["list", "of", "packages"],
+            "cpu_flags": "GCC Flags",
+            "cmake_flags": "CMake Flags",
+            "setup_commands": "Bash code for Dockerfile setup (optional)",
+            "quantization_logic": "Bash CASE block content for build.sh"
+        }
+        
+        CRITICAL RULES for 'quantization_logic':
+        - Generate ONLY the case content lines (cases and commands).
+        - Do not wrap in 'case ... esac', just the body.
+        - Example for RKNN:
+        "INT8"|"i8")
+            echo "Converting to INT8..."
+            /app/modules/rknn_module.sh ;;
+        "FP16")
+            echo "Keeping FP16..." ;;
+            
+        Documentation Context:
+        {doc_context}
+        """
+
+        user_prompt = f"""
+        --- INPUT: target_hardware_config.txt ---
+        {probe_data[:8000]}
+        
+        Based on this probe, generate the optimal configuration JSON.
+        """
+        
+        messages = [
+            {"role": "system", "content": system_prompt.replace("{doc_context}", doc_context)},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        # 5. Call LLM via Unified Interface
+        try:
+            content = self._query_llm(messages)
+            
+            # Clean Markdown blocks if present
+            if "```" in content:
+                import re
+                match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
+                if match: content = match.group(1).strip()
+
+            return json.loads(content)
+            
+        except Exception as e:
+            self.logger.error(f"AI Analysis failed: {e}")
+            raise e
+
+    def save_module(self, module_name: str, config: Dict[str, Any], targets_dir: Path):
+        """Wrapper um den ModuleGenerator aufzurufen."""
+        
+        packages = config.get("packages", "")
+        if isinstance(packages, str):
+            packages = packages.split()
+            
+        gen_data = {
+            "module_name": module_name,
+            "architecture": config.get("architecture", "aarch64"),
+            "sdk": config.get("sdk", "none"),
+            "description": f"AI-generated target for {module_name}",
+            "base_os": config.get("base_os", "debian:bookworm-slim"),
+            "packages": packages,
+            "cpu_flags": config.get("cpu_flags", ""),
+            "cmake_flags": config.get("cmake_flags", ""),
+            "quantization_logic": config.get("quantization_logic", ""), # Hier übergeben wir die Logik
+            "setup_commands": config.get("setup_commands", "# Auto-generated setup by Ditto"),
+            "detection_commands": "lscpu",
+            "supported_boards": [module_name]
+        }
+        
+        generator = ModuleGenerator(targets_dir)
+        return generator.generate_module(gen_data, self.framework)

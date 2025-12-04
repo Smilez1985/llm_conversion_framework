@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.16 FINAL)
-DIREKTIVE: Goldstandard. KORRIGIERTER PFAD-MERGE.
-  FIX: Konsolidiert CHECKFILE_DIR mit DEFAULT_DATA_PATH, um nur einen Datenordner zu erstellen.
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.17 FINAL)
+DIREKTIVE: Goldstandard. KORRIGIERTER SCOPE-FEHLER (SOURCE_DIR).
+  FIX: Verschiebt alle Pfad-Definitionen an den Anfang des Moduls, um NameError in Threads zu vermeiden.
 """
 
 import os
@@ -34,11 +34,17 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from tkinter.scrolledtext import ScrolledText
 
+
+# ============================================================================
+# 1. KONSTANTEN DEFINITION (OBERSTER SCOPE)
+# ============================================================================
+
 APP_NAME = "LLM-Conversion-Framework"
 APP_TITLE = "LLM Conversion Framework"
-
-# Deployment Name für den Launcher (Muss dem Quellnamen entsprechen, um Altlasten zu vermeiden)
 LAUNCHER_FILE_NAME = "start-llm_convertion_framework.bat"
+
+# Quellpfad des Repos (Muss am Anfang definiert werden, um in allen Methoden zugreifbar zu sein)
+SOURCE_DIR = Path(__file__).resolve().parent.parent
 
 # Standard-Installationspfad
 DEFAULT_APP_PATH = Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / APP_NAME
@@ -58,10 +64,14 @@ INCLUDE_APP_FILES = ["pyproject.toml", "poetry.lock", "requirements.txt", ".giti
 INCLUDE_LAUNCHER_DOCS = ["README.md", "LICENSE.txt"]
 IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "build", ".installer_venv"]
 
+# ============================================================================
+# 2. GUI KLASSE
+# ============================================================================
+
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_TITLE} Installer v2.16")
+        self.title(f"{APP_TITLE} Installer v2.17")
         self.geometry("800x700")
         self.resizable(True, True)
         
@@ -244,7 +254,7 @@ class InstallerGUI(tk.Tk):
             
             # Kopiere Code-Ordner (orchestrator, configs, assets, Docker Setup)
             for item in CODE_DIRS:
-                src = SOURCE_DIR / item
+                src = SOURCE_DIR / item # SOURCE_DIR ist nun garantiert definiert
                 dst = app_dir / item
                 if src.exists():
                     if dst.exists(): shutil.rmtree(dst)

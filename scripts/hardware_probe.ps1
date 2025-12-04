@@ -4,12 +4,12 @@
     
 .DESCRIPTION
     Detects CPU features, GPU/NPU hardware, and system resources.
-    Generates 'target_hardware_config.txt' for the Module Wizard.
+    Generates 'target_hardware_config.txt'.
     
-    Updates v1.7.0:
-    - Added Intel GPU (Arc/Iris/XPU) detection for IPEX-LLM.
-    - Improved NPU detection (Intel AI Boost, Hailo).
-    - Synchronized logic with hardware_probe.sh.
+    HISTORY:
+    v2.0.0: Added GPU_DRIVER_VERSION extraction for NVIDIA and Intel.
+    v1.7.0: Added Intel GPU (Arc/Iris/XPU) detection logic.
+    v1.7.0: Improved NPU detection (Intel AI Boost, Hailo).
     
 .NOTES
     File Name      : hardware_probe.ps1
@@ -17,10 +17,10 @@
     Prerequisite   : Windows PowerShell 5.1 or PowerShell Core 7+
 #>
 
-# 1. ADMIN CHECK & AUTO-ELEVATION
+# 1. ADMIN CHECK
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Warning "Script requires Administrator privileges for Hardware Detection (PnP/Drivers)."
+    Write-Warning "Script requires Administrator privileges for Hardware Detection."
     Write-Host "Attempting to elevate..." -ForegroundColor Yellow
     try {
         Start-Process PowerShell -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
@@ -31,15 +31,11 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
     }
 }
 
-# 2. SET EXECUTION POLICY (Process Scope Only)
+# 2. SET EXECUTION POLICY
 Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force -ErrorAction SilentlyContinue
 
 $ErrorActionPreference = "Stop"
 $OutputFile = "target_hardware_config.txt"
-
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
 
 function Log-Output {
     param ([string]$Message)
@@ -48,58 +44,31 @@ function Log-Output {
     Add-Content -Path $OutputFile -Value $Message
 }
 
-function Check-Dependency {
-    param ([string]$Name, [string]$CommandName)
-    if (Get-Command $CommandName -ErrorAction SilentlyContinue) {
-        Log-Output "DEPENDENCY_$($Name.ToUpper())=INSTALLED"
-        return $true
-    } else {
-        Log-Output "DEPENDENCY_$($Name.ToUpper())=MISSING"
-        return $false
-    }
-}
+# === INITIALIZATION ===
+Write-Host "=== LLM Framework Hardware Probe (v2.0.1) ===" -ForegroundColor Cyan
 
-# ============================================================================
-# INITIALIZATION
-# ============================================================================
-
-Write-Host "=== LLM Framework Hardware Probe (v1.7.0) ===" -ForegroundColor Cyan
-
-# Init Output File
 Set-Content -Path $OutputFile -Value "# LLM Framework Hardware Profile (Windows)"
 Add-Content -Path $OutputFile -Value "# Generated: $(Get-Date)"
 Add-Content -Path $OutputFile -Value "# Hostname: $env:COMPUTERNAME"
-Add-Content -Path $OutputFile -Value "# User: $env:USERNAME (Admin)"
 Add-Content -Path $OutputFile -Value "# OS: Windows $([System.Environment]::OSVersion.Version)"
 
-# ============================================================================
-# 1. NATIVE API BRIDGE (C# Injection for CPU Flags)
-# ============================================================================
+# === 1. NATIVE API BRIDGE (C# Injection) ===
 $Kernel32Code = @"
 using System;
 using System.Runtime.InteropServices;
-
 public class HardwareInfo {
     [DllImport("kernel32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsProcessorFeaturePresent(uint ProcessorFeature);
-
     public const uint PF_ARM_NEON_INSTRUCTIONS_AVAILABLE = 37;
     public const uint PF_AVX_INSTRUCTIONS_AVAILABLE = 27;
     public const uint PF_AVX2_INSTRUCTIONS_AVAILABLE = 39;
     public const uint PF_AVX512F_INSTRUCTIONS_AVAILABLE = 40;
 }
 "@
+try { Add-Type -TypeDefinition $Kernel32Code -Language CSharp } catch { Log-Output "# Warning: Native Bridge failed." }
 
-try {
-    Add-Type -TypeDefinition $Kernel32Code -Language CSharp
-} catch {
-    Log-Output "# Warning: Could not compile Native Bridge. Flags might be inaccurate."
-}
-
-# ============================================================================
-# 2. HARDWARE DETECTION LOGIC
-# ============================================================================
+# === 2. HARDWARE DETECTION ===
 
 # --- CPU ---
 Log-Output "[CPU]"
@@ -108,20 +77,14 @@ try {
     Log-Output "Name=$($cpu.Name.Trim())"
     Log-Output "Architecture=$($env:PROCESSOR_ARCHITECTURE)"
     Log-Output "Cores=$($cpu.NumberOfCores)"
-    Log-Output "Threads=$($cpu.NumberOfLogicalProcessors)"
-} catch {
-    Log-Output "Name=Unknown (WMI Error)"
-}
+} catch { Log-Output "Name=Unknown" }
 
-# Feature Flags (Kernel32)
 $hasNeon = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_ARM_NEON_INSTRUCTIONS_AVAILABLE)
 $hasAvx = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_AVX_INSTRUCTIONS_AVAILABLE)
 $hasAvx2 = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_AVX2_INSTRUCTIONS_AVAILABLE)
 $hasAvx512 = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_AVX512F_INSTRUCTIONS_AVAILABLE)
 $hasFp16 = $false 
 
-# Heuristic for FP16/VNNI (Windows API doesn't expose VNNI explicitly yet)
-# We rely on Architecture and AVX512 presence for high-level inference
 if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64" -and $hasNeon) { $hasFp16 = $true }
 if ($hasAvx512) { $hasFp16 = $true }
 
@@ -137,11 +100,9 @@ try {
     $mem = Get-CimInstance Win32_ComputerSystem
     $memMB = [math]::Round($mem.TotalPhysicalMemory / 1MB)
     Log-Output "Total_RAM_MB=$memMB"
-} catch {
-    Log-Output "Total_RAM_MB=Unknown"
-}
+} catch { Log-Output "Total_RAM_MB=Unknown" }
 
-# --- ACCELERATORS (GPU/NPU) ---
+# --- ACCELERATORS ---
 Log-Output "[ACCELERATORS]"
 
 # 1. NVIDIA GPU
@@ -149,52 +110,47 @@ if (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue) {
     try {
         $gpuinfo = nvidia-smi --query-gpu=name --format=csv,noheader
         if ($gpuinfo -is [array]) { $gpuinfo = $gpuinfo[0] }
+        
+        # v2.0.0: Driver Version Extraction
+        $driverVer = nvidia-smi --query-gpu=driver_version --format=csv,noheader
+        if ($driverVer -is [array]) { $driverVer = $driverVer[0] }
+        
         Log-Output "GPU_VENDOR=NVIDIA"
         Log-Output "GPU_MODEL=$gpuinfo"
+        Log-Output "GPU_DRIVER_VERSION=$driverVer"
         Log-Output "SUPPORTS_CUDA=ON"
-    } catch {
-        Log-Output "SUPPORTS_CUDA=OFF"
-    }
-} else {
-    Log-Output "SUPPORTS_CUDA=OFF"
-}
+    } catch { Log-Output "SUPPORTS_CUDA=OFF" }
+} else { Log-Output "SUPPORTS_CUDA=OFF" }
 
-# 2. Intel GPU (Arc / Iris Xe / iGPU) - NEW v1.7.0
-# We query Win32_VideoController for Vendor ID 8086 (Intel)
+# 2. Intel GPU (Arc / Iris Xe) - Added in v1.7.0
 $intelGpus = Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -like "*VEN_8086*" }
 if ($intelGpus) {
     foreach ($gpu in $intelGpus) {
         Log-Output "GPU_VENDOR=Intel"
         Log-Output "GPU_MODEL=$($gpu.Name)"
         
-        # Check for Arc or Iris specifically
-        if ($gpu.Name -match "Arc") {
-            Log-Output "SUPPORTS_INTEL_XPU=ON (Arc)"
-            Log-Output "INTEL_GPU_TYPE=Discrete"
-        } elseif ($gpu.Name -match "Iris") {
-            Log-Output "SUPPORTS_INTEL_XPU=ON (Iris)"
-            Log-Output "INTEL_GPU_TYPE=Integrated"
-        } else {
-            Log-Output "SUPPORTS_INTEL_XPU=ON (Generic)"
-        }
+        # v2.0.0: Driver Version from WMI
+        Log-Output "GPU_DRIVER_VERSION=$($gpu.DriverVersion)"
+        
+        if ($gpu.Name -match "Arc") { Log-Output "SUPPORTS_INTEL_XPU=ON (Arc)" } 
+        elseif ($gpu.Name -match "Iris") { Log-Output "SUPPORTS_INTEL_XPU=ON (Iris)" } 
+        else { Log-Output "SUPPORTS_INTEL_XPU=ON (Generic)" }
     }
 }
 
-# 3. NPU Detection via PnP (Enhanced)
+# 3. NPU Detection
 $npuFound = $false
 
-# Intel NPU (Core Ultra / Meteor Lake)
-# ID: INTC1085 is common for Intel NPU
+# Intel NPU (Core Ultra)
 $intelNpu = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -like "*Intel(R) AI Boost*" -or $_.InstanceId -like "*INTC1085*" }
 if ($intelNpu) {
     Log-Output "NPU_VENDOR=Intel"
-    Log-Output "NPU_MODEL=AI Boost (NPU)"
+    Log-Output "NPU_MODEL=AI Boost"
     Log-Output "SUPPORTS_INTEL_NPU=ON"
     $npuFound = $true
 }
 
-# Hailo NPU (PCIe)
-# Vendor ID 1E60
+# Hailo NPU
 $hailoNpu = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like "*VEN_1E60*" }
 if ($hailoNpu) {
     Log-Output "NPU_VENDOR=Hailo"
@@ -203,8 +159,7 @@ if ($hailoNpu) {
     $npuFound = $true
 }
 
-# Rockchip (USB Mode / Maskrom)
-# Vendor ID 2207
+# Rockchip (USB)
 $rkNpu = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like "*VID_2207*" }
 if ($rkNpu) {
     Log-Output "NPU_VENDOR=Rockchip"
@@ -213,18 +168,7 @@ if ($rkNpu) {
     $npuFound = $true
 }
 
-if (-not $npuFound) {
-    Log-Output "NPU_STATUS=None detected"
-}
-
-# ============================================================================
-# 3. DEPENDENCY CHECK
-# ============================================================================
-Log-Output "[DEPENDENCIES]"
-Check-Dependency "Docker" "docker"
-Check-Dependency "Git" "git"
-Check-Dependency "Python" "python"
-Check-Dependency "WSL" "wsl"
+if (-not $npuFound) { Log-Output "NPU_STATUS=None detected" }
 
 Write-Host "`n✅ Probing complete. Config written to $OutputFile" -ForegroundColor Green
 Start-Sleep -Seconds 2

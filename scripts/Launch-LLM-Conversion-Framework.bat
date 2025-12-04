@@ -3,129 +3,123 @@ TITLE LLM Cross-Compiler Framework - Launcher
 CLS
 SETLOCAL ENABLEDELAYEDEXPANSION
 
-:: --- 0. ROBUSTE PFAD-ERKENNUNG ---
-:: 1. Wir wechseln hart in das Verzeichnis, in dem diese .bat Datei liegt
+:: --- 0. PFAD-NORMALISIERUNG ---
 cd /d "%~dp0"
-
-:: 2. Check: Sind wir im 'scripts' Ordner? (Indikator: orchestrator liegt eins drueber)
 IF EXIST "..\orchestrator\main.py" (
-    echo [INFO] Launcher im Unterordner erkannt.
-    echo [INFO] Wechsle in das Hauptverzeichnis (cd ..)
+    echo [INFO] Launcher im Unterordner. Wechsle zu Root...
     cd ..
 )
 
-:: 3. Check: Sind wir jetzt richtig? (Root-Check)
 IF NOT EXIST "orchestrator\main.py" (
-    echo [CRITICAL] Installationsverzeichnis ungueltig!
-    echo.
-    echo Konnte 'orchestrator\main.py' nicht finden.
-    echo.
-    echo Aktueller Pfad: %CD%
-    echo Bitte verschieben Sie die .bat Datei in den Hauptordner des Projekts.
+    echo [CRITICAL] Falsches Verzeichnis! 'orchestrator\main.py' nicht gefunden.
     PAUSE
     EXIT /B 1
 )
-
-:: Ab hier sind wir garantiert im Root.
-:: echo [DEBUG] Arbeitsverzeichnis: %CD%
 
 :: --- KONFIGURATION ---
 SET "VENV_DIR=.venv"
 SET "MARKER_FILE=.install_complete"
 SET "INSTALLER_SCRIPT=scripts\setup_windows.py"
 SET "MAIN_SCRIPT=orchestrator\main.py"
+SET "PYTHON_CMD=python"
 
-:: --- 1. UMWELT PRÜFEN ---
-echo [INIT] Pruefe Systemumgebung
-
-:: Check: Python
-python --version >nul 2>&1
+:: --- 1. PYTHON CHECK ---
+echo [INIT] System-Check...
+%PYTHON_CMD% --version >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
-    echo [CRITICAL] Python nicht gefunden!
-    echo Versuche automatischen Download
-    
-    powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe' -OutFile 'python_installer.exe'"
-    
-    IF EXIST "python_installer.exe" (
-        echo [INFO] Starte Python Installation
-        echo BITTE WAEHLEN SIE: "Add Python to PATH" im Installer!
-        start /wait python_installer.exe /passive PrependPath=1
-        del python_installer.exe
-        
-        python --version >nul 2>&1
-        IF !ERRORLEVEL! NEQ 0 (
-            echo [ERROR] Python Installation fehlgeschlagen oder PATH nicht aktualisiert.
-            echo Bitte starten Sie diesen Launcher nach einem Neustart erneut.
-            PAUSE
-            EXIT /B 1
-        )
-    ) ELSE (
-        echo [ERROR] Download fehlgeschlagen. Bitte installieren Sie Python manuell.
-        PAUSE
-        EXIT /B 1
-    )
-)
-
-:: Check: Git
-git --version >nul 2>&1
-IF %ERRORLEVEL% NEQ 0 (
-    echo [CRITICAL] Git nicht gefunden!
-    echo Versuche automatischen Download
-    powershell -Command "Invoke-WebRequest -Uri 'https://github.com/git-for-windows/git/releases/download/v2.44.0.windows.1/Git-2.44.0-64-bit.exe' -OutFile 'git_installer.exe'"
-    
-    IF EXIST "git_installer.exe" (
-        echo [INFO] Starte Git Installation
-        start /wait git_installer.exe /VERYSILENT /NORESTART
-        del git_installer.exe
-    ) ELSE (
-        echo [WARNUNG] Git Download fehlgeschlagen. Auto-Updates deaktiviert.
-    )
-)
-
-:: --- 2. INSTALLATIONS-CHECK ---
-IF EXIST "%MARKER_FILE%" (
-    GOTO :START_APP
-)
-
-:RUN_INSTALLER
-echo.
-echo [SETUP] Starte GUI-Installer (Ersteinrichtung)
-echo.
-
-:: Aufruf des Python-Installers
-python %INSTALLER_SCRIPT%
-
-IF %ERRORLEVEL% NEQ 0 (
-    echo [ERROR] Der Installer meldete einen Fehler.
+    echo [CRITICAL] Python fehlt!
+    echo Starten Sie das Skript nach der Installation von Python 3.10+ erneut.
     PAUSE
     EXIT /B 1
 )
 
-echo Installed > "%MARKER_FILE%"
-echo [SUCCESS] Installation abgeschlossen.
-echo.
-
-:START_APP
-echo [UPDATE] Pruefe auf Updates
-git pull >nul 2>&1
-
-echo [BOOT] Starte Framework
-
-:: Virtuelle Umgebung aktivieren (falls vorhanden)
-IF EXIST "%VENV_DIR%\Scripts\activate.bat" (
-    CALL "%VENV_DIR%\Scripts\activate.bat"
+:: --- 2. SETUP (Wenn Marker fehlt) ---
+IF NOT EXIST "%MARKER_FILE%" (
+    echo [SETUP] Ersteinrichtung...
+    
+    :: VENV erstellen
+    IF NOT EXIST "%VENV_DIR%" (
+        echo [INFO] Erstelle VENV...
+        %PYTHON_CMD% -m venv %VENV_DIR%
+    )
+    
+    :: Aktivieren
+    CALL %VENV_DIR%\Scripts\activate
+    
+    :: Pip Upgrade
+    python -m pip install --upgrade pip
+    
+    :: Abhängigkeiten installieren (Mit Ping Loop)
+    CALL :INSTALL_DEPS
+    
+    :: GUI Installer (Shortcuts etc.)
+    python %INSTALLER_SCRIPT%
+    
+    echo Installed > "%MARKER_FILE%"
+) ELSE (
+    :: Aktivieren für Run
+    CALL %VENV_DIR%\Scripts\activate
 )
 
-:: Dependencies sicherstellen (Quiet Mode)
-:: Wir nutzen python -m pip um sicherzugehen dass wir das pip der aktiven Umgebung nutzen
-python -m pip install -r requirements.txt >nul 2>&1
+:: --- 3. DEPENDENCY GUARD (Der Fix) ---
+:: Wir prüfen explizit, ob die GUI-Lib da ist. Wenn nicht: Nachinstallieren!
+python -c "import PySide6" >nul 2>&1
+IF %ERRORLEVEL% NEQ 0 (
+    echo [WARNUNG] PySide6 fehlt oder Umgebung defekt.
+    echo [AUTO-FIX] Starte Reparatur...
+    CALL :INSTALL_DEPS
+)
 
-:: Hauptanwendung starten
+:: --- 4. START ---
+echo [BOOT] Starte Framework...
 python %MAIN_SCRIPT%
 
 IF %ERRORLEVEL% NEQ 0 (
     echo.
-    echo [CRASH] Anwendung unerwartet beendet.
-    echo Pfad war: %CD%
+    echo [CRASH] Anwendung mit Fehlercode %ERRORLEVEL% beendet.
+    echo Bitte pr?fen Sie die Ausgabe oben.
     PAUSE
 )
+
+GOTO :EOF
+
+:: ====================================================
+:: FUNKTION: INSTALL_DEPS (Mit Ping Loop & Fallback)
+:: ====================================================
+:INSTALL_DEPS
+    echo [NET] Pruefe Verbindung...
+    :PING_LOOP
+    ping -n 1 8.8.8.8 >nul 2>&1
+    IF %ERRORLEVEL% NEQ 0 (
+        echo [WAIT] Kein Internet. Warte auf Verbindung...
+        timeout /t 2 >nul
+        GOTO :PING_LOOP
+    )
+    
+    echo [INSTALL] Installiere Bibliotheken...
+    
+    :: Strategie 1: PyProject (Best Practice)
+    if exist "pyproject.toml" (
+        echo   - Methode: pyproject.toml
+        pip install -e .
+        IF !ERRORLEVEL! EQU 0 GOTO :EOF
+    )
+    
+    :: Strategie 2: Requirements (Fallback)
+    if exist "requirements.txt" (
+        echo   - Methode: requirements.txt
+        pip install -r requirements.txt
+        IF !ERRORLEVEL! EQU 0 GOTO :EOF
+    )
+    
+    :: Strategie 3: Manuell (Notfall)
+    echo   - Methode: Manueller Fallback
+    echo [WARNUNG] Keine Config gefunden. Installiere Kern-Pakete manuell...
+    pip install PySide6 docker pyyaml requests psutil cryptography
+    
+    IF !ERRORLEVEL! NEQ 0 (
+        echo [ERROR] Installation fehlgeschlagen!
+        PAUSE
+        EXIT /B 1
+    )
+    GOTO :EOF

@@ -3,11 +3,10 @@
 LLM Cross-Compiler Framework - Main Window GUI
 DIREKTIVE: Goldstandard, MVC-Pattern, Separation of Concerns.
 
-Updates v1.7.0 (Final):
-- Integrated Live Resource Monitoring (CPU/RAM) directly in GUI.
-- Deployment Features (SSH/SCP) via DeploymentDialog.
-- Deep Ingest & RAG Integration.
-- Output Format Selection.
+Updates v2.0.0:
+- Integrated Ditto AI Chat as a Dockable Widget.
+- Persistent Ditto Manager instance for Chat & Wizard.
+- Maintained v1.7 Features (Deployment, Monitoring, Golden Artifacts).
 """
 
 import sys
@@ -26,7 +25,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QFormLayout, QLineEdit, QComboBox, 
     QMessageBox, QTableWidget, QTableWidgetItem,
     QDialog, QInputDialog, QFileDialog, QCheckBox, QHeaderView,
-    QMenu
+    QMenu, QDockWidget
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, QEvent
 from PySide6.QtGui import QAction, QIcon
@@ -45,10 +44,17 @@ from orchestrator.gui.community_hub import CommunityHubWindow
 from orchestrator.gui.huggingface_window import HuggingFaceWindow
 from orchestrator.gui.dialogs import (
     AddSourceDialog, LanguageSelectionDialog, DatasetReviewDialog, 
-    AIConfigurationDialog, DeploymentDialog
+    AIConfigurationDialog, DeploymentDialog, URLInputDialog
 )
 from orchestrator.gui.wizards import ModuleCreationWizard
 from orchestrator.gui.benchmark_window import BenchmarkWindow
+from orchestrator.gui.chat_window import ChatWindow
+
+# Optional: Ditto Manager for Chat
+try:
+    from orchestrator.Core.ditto_manager import DittoCoder
+except ImportError:
+    DittoCoder = None
 
 class UpdateWorker(QThread):
     update_available = Signal(bool)
@@ -154,13 +160,25 @@ class MainOrchestrator(QMainWindow):
             self.dataset_manager = DatasetManager(self.framework_manager)
             self.deployment_manager = DeploymentManager(self.framework_manager)
             
+            # Initialize Ditto Manager for Chat (v2.0.0)
+            self.ditto_manager = None
+            if DittoCoder:
+                # Try to load config for Ditto
+                ai_conf = self.framework_manager.config_manager.get_all() # Simpler access needed?
+                # For now, instantiate with defaults/environment, will be reconfigured by AI Dialog
+                try:
+                    self.ditto_manager = DittoCoder(
+                        config_manager=self.framework_manager.config, # Pass raw config object
+                        framework_manager=self.framework_manager
+                    )
+                except Exception as e:
+                    self.logger.warning(f"Could not init Ditto for Chat: {e}")
+
             # Connect Signals
             self.docker_manager.build_output.connect(self.on_build_output)
             self.docker_manager.build_progress.connect(self.on_build_progress)
             self.docker_manager.build_completed.connect(self.on_build_completed)
             self.docker_manager.sidecar_status.connect(self.on_sidecar_status)
-            
-            # NEW v1.7.0: Resource Monitoring
             self.docker_manager.build_stats.connect(self.on_build_stats)
             
             get_i18n().language_changed.connect(self.retranslateUi)
@@ -181,7 +199,7 @@ class MainOrchestrator(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle(tr("app.title"))
-        self.setMinimumSize(1200, 850)
+        self.setMinimumSize(1300, 850) # Slightly wider for Chat Dock
         
         logo_path = self.app_root / "assets" / "logo.png"
         if logo_path.exists():
@@ -205,19 +223,62 @@ class MainOrchestrator(QMainWindow):
             QTabBar::tab { background: #353535; padding: 8px 20px; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; }
             QTabBar::tab:selected { background: #404040; border-bottom: 2px solid #007acc; }
             QHeaderView::section { background-color: #404040; padding: 4px; border: none; }
+            QDockWidget::title { background: #353535; padding-left: 5px; }
         """)
         self.create_menu_bar()
-        central = QWidget(); self.setCentralWidget(central); main_layout = QHBoxLayout(central)
-        self.tabs = QTabWidget(); main_layout.addWidget(self.tabs)
+        
+        # Central Widget (Tabs)
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QHBoxLayout(central)
+        
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
+        
         self.build_tab = QWidget(); self.setup_build_tab(); self.tabs.addTab(self.build_tab, tr("tab.build"))
         self.sources_tab = QWidget(); self.setup_sources_tab(); self.tabs.addTab(self.sources_tab, tr("tab.sources"))
-        self.load_sources_to_table(); self.refresh_targets(); self.retranslateUi()
+        
+        self.load_sources_to_table()
+        self.refresh_targets()
+        
+        # --- NEW v2.0: Chat Dock ---
+        self.create_chat_dock()
+        
+        self.retranslateUi()
+
+    def create_chat_dock(self):
+        """Creates the Ditto Chat Dock Widget."""
+        self.chat_dock = QDockWidget("Ditto AI Assistant", self)
+        self.chat_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
+        
+        # Instantiate Chat Window
+        self.chat_window = ChatWindow(self.ditto_manager, self)
+        self.chat_dock.setWidget(self.chat_window)
+        
+        # Add to Main Window (Right side by default)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.chat_dock)
+        
+        # Add Toggle Action to Tools Menu
+        self.act_chat_toggle = QAction("Show/Hide AI Chat", self)
+        self.act_chat_toggle.setCheckable(True)
+        self.act_chat_toggle.setChecked(True)
+        self.act_chat_toggle.triggered.connect(self.toggle_chat_dock)
+        self.tools_menu.addAction(self.act_chat_toggle)
+
+    def toggle_chat_dock(self):
+        if self.chat_dock.isVisible():
+            self.chat_dock.hide()
+            self.act_chat_toggle.setChecked(False)
+        else:
+            self.chat_dock.show()
+            self.act_chat_toggle.setChecked(True)
 
     def create_menu_bar(self):
         self.menubar = self.menuBar()
         self.file_menu = self.menubar.addMenu(tr("menu.file"))
         act_imp = QAction(tr("menu.import_profile"), self); act_imp.triggered.connect(self.import_hardware_profile); self.file_menu.addAction(act_imp)
         self.file_menu.addSeparator(); act_ex = QAction(tr("menu.exit"), self); act_ex.triggered.connect(self.close); self.file_menu.addAction(act_ex)
+        
         self.tools_menu = self.menubar.addMenu(tr("menu.tools"))
         act_wiz = QAction(tr("menu.create_module"), self); act_wiz.triggered.connect(self.open_module_wizard); self.tools_menu.addAction(act_wiz)
         act_aud = QAction(tr("menu.audit"), self); act_aud.triggered.connect(self.run_image_audit); self.tools_menu.addAction(act_aud)
@@ -226,6 +287,7 @@ class MainOrchestrator(QMainWindow):
         self.comm_menu = self.menubar.addMenu(tr("menu.community"))
         act_hub = QAction(tr("menu.open_hub"), self); act_hub.triggered.connect(self.open_community_hub); self.comm_menu.addAction(act_hub)
         act_upd = QAction(tr("menu.update"), self); act_upd.triggered.connect(self.check_for_updates_automatic); self.comm_menu.addAction(act_upd)
+        
         self.lang_menu = self.menubar.addMenu(tr("menu.language"))
         self.lang_menu.addAction("🇺🇸 English", lambda: self.switch_language("en")); self.lang_menu.addAction("🇩🇪 Deutsch", lambda: self.switch_language("de"))
 
@@ -298,32 +360,22 @@ class MainOrchestrator(QMainWindow):
         c_layout.addRow("", b_layout)
         layout.addWidget(self.grp_build)
         
-        # --- PROGRESS & MONITORING (v1.7.0) ---
         self.grp_progress = QGroupBox(tr("grp.progress")); p_layout = QVBoxLayout(self.grp_progress)
         
-        # Main Progress
         p_layout.addWidget(QLabel("Overall Progress:"))
         self.progress_bar = QProgressBar(); self.progress_bar.setValue(0); p_layout.addWidget(self.progress_bar)
         
-        # Live Monitoring (Stats)
+        # Monitoring Stats
         stats_layout = QHBoxLayout()
-        
         self.lbl_cpu = QLabel("CPU: 0%")
-        self.cpu_bar = QProgressBar()
-        self.cpu_bar.setRange(0, 100)
-        self.cpu_bar.setTextVisible(False)
-        self.cpu_bar.setStyleSheet("QProgressBar::chunk { background-color: #d9534f; }") # Red
-        
+        self.cpu_bar = QProgressBar(); self.cpu_bar.setRange(0, 100); self.cpu_bar.setTextVisible(False)
+        self.cpu_bar.setStyleSheet("QProgressBar::chunk { background-color: #d9534f; }") 
         self.lbl_ram = QLabel("RAM: 0MB")
-        self.ram_bar = QProgressBar()
-        self.ram_bar.setRange(0, 100)
-        self.ram_bar.setTextVisible(False)
-        self.ram_bar.setStyleSheet("QProgressBar::chunk { background-color: #5bc0de; }") # Blue
-        
+        self.ram_bar = QProgressBar(); self.ram_bar.setRange(0, 100); self.ram_bar.setTextVisible(False)
+        self.ram_bar.setStyleSheet("QProgressBar::chunk { background-color: #5bc0de; }") 
         stats_layout.addWidget(self.lbl_cpu); stats_layout.addWidget(self.cpu_bar)
         stats_layout.addSpacing(20)
         stats_layout.addWidget(self.lbl_ram); stats_layout.addWidget(self.ram_bar)
-        
         p_layout.addLayout(stats_layout)
         
         self.log_view = QTextEdit(); self.log_view.setReadOnly(True); p_layout.addWidget(self.log_view)
@@ -376,9 +428,11 @@ class MainOrchestrator(QMainWindow):
             self.framework_manager.config_manager.save_user_config()
             if self.docker_manager:
                 self.docker_manager.ensure_qdrant_service()
+            # Update Ditto Manager in case config changed
+            if self.ditto_manager:
+                self.ditto_manager.config = self.framework_manager.config
 
     def open_deployment_dialog(self):
-        """Opens the Deployment Dialog using the last build artifact."""
         if not self.last_artifact_path or not os.path.exists(self.last_artifact_path):
             QMessageBox.warning(self, "Deployment", "No valid artifact found. Please build a model first.")
             return
@@ -389,7 +443,6 @@ class MainOrchestrator(QMainWindow):
             self.log(f"Initializing Deployment to {creds['ip']}...")
             self.set_controls_enabled(False)
             
-            # Start Background Worker
             self.deploy_worker = DeploymentWorker(self.deployment_manager, self.last_artifact_path, creds)
             self.deploy_worker.log_signal.connect(self.log)
             self.deploy_worker.finished.connect(self.on_deployment_finished)
@@ -481,7 +534,7 @@ class MainOrchestrator(QMainWindow):
         }
         self.log(f"Build Start: {cfg['target']} [{cfg['format']} / {cfg['quantization']}]")
         self.set_controls_enabled(False)
-        self.deploy_btn.setEnabled(False) # Disable deploy during build
+        self.deploy_btn.setEnabled(False)
         self.docker_manager.start_build(cfg)
 
     def set_controls_enabled(self, enabled):
@@ -497,7 +550,7 @@ class MainOrchestrator(QMainWindow):
         
         if success and p and os.path.exists(p):
             self.last_artifact_path = p
-            self.deploy_btn.setEnabled(True) # Enable deploy button
+            self.deploy_btn.setEnabled(True)
             self.log(f"✅ Build Success. Golden Artifact: {p}")
         else:
             self.log(f"❌ Build Failed. {p}")
@@ -505,7 +558,6 @@ class MainOrchestrator(QMainWindow):
     def on_build_stats(self, bid, cpu, ram_usage, ram_limit):
         self.lbl_cpu.setText(f"CPU: {cpu}%")
         self.cpu_bar.setValue(int(cpu))
-        
         ram_pct = (ram_usage / ram_limit) * 100 if ram_limit > 0 else 0
         self.lbl_ram.setText(f"RAM: {int(ram_usage)} MB")
         self.ram_bar.setValue(int(ram_pct))

@@ -4,8 +4,9 @@ LLM Cross-Compiler Framework - Dialogs
 DIREKTIVE: Goldstandard, GUI-Komponenten, Internationalisierung.
 
 Updates v2.0.0:
-- Added HealingDialog for Self-Healing (Error Analysis Presentation).
-- Maintained all v1.7 features (Deployment, URL Input, Chat Config).
+- Enhanced AIConfigurationDialog to support Native/Offline Model management.
+- Integrated Model Download Worker for Tiny Models.
+- Maintained Deployment, Healing, and URL Input dialogs.
 """
 
 import requests
@@ -13,16 +14,38 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
     QComboBox, QLineEdit, QLabel, QPushButton, QApplication,
     QGroupBox, QRadioButton, QButtonGroup, QStackedWidget, QWidget,
-    QTextEdit, QMessageBox, QPlainTextEdit, QCheckBox, QSpinBox
+    QTextEdit, QMessageBox, QPlainTextEdit, QCheckBox, QSpinBox, QProgressBar
 )
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt, QUrl, QThread, Signal
+from PySide6.QtGui import QDesktopServices, QColor
 
 # Import Localization Helper
 try:
     from orchestrator.utils.localization import tr
 except ImportError:
     def tr(key): return key
+
+# --- WORKER FOR MODEL DOWNLOAD ---
+class TinyModelDownloadWorker(QThread):
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, model_manager, model_key):
+        super().__init__()
+        self.manager = model_manager
+        self.model_key = model_key
+
+    def run(self):
+        try:
+            path = self.manager.download_tiny_model(self.model_key)
+            if path:
+                self.finished.emit(path)
+            else:
+                self.error.emit("Download failed (check logs).")
+        except Exception as e:
+            self.error.emit(str(e))
+
+# --- DIALOGS ---
 
 class AddSourceDialog(QDialog):
     """Dialog to add a new source repository to project_sources.yml"""
@@ -102,7 +125,10 @@ class AddSourceDialog(QDialog):
 
 
 class AIConfigurationDialog(QDialog):
-    """Dialog to configure AI Provider and Model for Ditto."""
+    """
+    Dialog to configure AI Provider and Model for Ditto.
+    v2.0.0: Supports Native/Offline Tiny Models Management.
+    """
     
     PROVIDERS = {
         "OpenAI": ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"],
@@ -110,13 +136,15 @@ class AIConfigurationDialog(QDialog):
         "Google VertexAI": ["gemini-1.5-pro", "gemini-1.0-pro"],
         "Mistral": ["mistral-large-latest", "mistral-medium", "mistral-small"],
         "Ollama (Local)": ["llama3", "mistral", "gemma", "codellama"],
-        "LocalAI / OpenAI Compatible": ["local-model"]
+        "LocalAI / OpenAI Compatible": ["local-model"],
+        "Native / Offline (Tiny Models)": [] # Populated dynamically
     }
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, framework_manager=None):
         super().__init__(parent)
+        self.framework = framework_manager
         self.setWindowTitle(tr("dlg.ai.title"))
-        self.setMinimumWidth(500)
+        self.setMinimumWidth(600)
         self._init_ui()
         
     def _init_ui(self):
@@ -132,15 +160,16 @@ class AIConfigurationDialog(QDialog):
         
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
+        self.model_combo.currentTextChanged.connect(self._check_offline_status)
         form.addRow(tr("dlg.ai.model"), self.model_combo)
         layout.addWidget(grp_model)
         
-        # --- Authentication ---
-        grp_auth = QGroupBox("Authentication")
+        # --- Configuration Stack ---
+        grp_auth = QGroupBox("Configuration")
         auth_layout = QVBoxLayout(grp_auth)
         self.stack = QStackedWidget()
         
-        # Page 1: API Key
+        # Page 1: Cloud API Key
         self.page_cloud = QWidget()
         cloud_layout = QFormLayout(self.page_cloud)
         self.api_key_edit = QLineEdit()
@@ -149,7 +178,7 @@ class AIConfigurationDialog(QDialog):
         cloud_layout.addRow(tr("dlg.ai.api_key"), self.api_key_edit)
         self.stack.addWidget(self.page_cloud)
         
-        # Page 2: Local URL
+        # Page 2: Local URL (Ollama/LocalAI)
         self.page_local = QWidget()
         local_layout = QFormLayout(self.page_local)
         self.base_url_edit = QLineEdit()
@@ -157,36 +186,40 @@ class AIConfigurationDialog(QDialog):
         local_layout.addRow(tr("dlg.ai.base_url"), self.base_url_edit)
         self.stack.addWidget(self.page_local)
         
+        # Page 3: Native Offline (Tiny Models)
+        self.page_offline = QWidget()
+        offline_layout = QVBoxLayout(self.page_offline)
+        
+        self.lbl_offline_status = QLabel("Select a model above.")
+        offline_layout.addWidget(self.lbl_offline_status)
+        
+        self.btn_download_model = QPushButton("⬇️ Download Model (Required for Offline)")
+        self.btn_download_model.clicked.connect(self.download_selected_tiny_model)
+        offline_layout.addWidget(self.btn_download_model)
+        
+        self.dl_progress = QProgressBar()
+        self.dl_progress.setVisible(False)
+        self.dl_progress.setRange(0, 0) # Infinite
+        offline_layout.addWidget(self.dl_progress)
+        
+        self.stack.addWidget(self.page_offline)
+        
         auth_layout.addWidget(self.stack)
         layout.addWidget(grp_auth)
         
-        # --- RAG / Knowledge Base (NEW v1.5.0) ---
-        grp_rag = QGroupBox("Expert Knowledge (RAG)")
+        # --- RAG / Features ---
+        grp_rag = QGroupBox("Advanced Features")
         rag_layout = QVBoxLayout(grp_rag)
         
-        rag_text = "Enable Local Knowledge Base (RAG) [Experimental]"
-        if tr("dlg.ai.enable_rag") != "dlg.ai.enable_rag":
-            rag_text = tr("dlg.ai.enable_rag")
-            
-        self.chk_rag = QCheckBox(rag_text)
-        self.chk_rag.setToolTip(
-            "Downloads and starts Qdrant Vector DB (~50MB).\n"
-            "Enables Ditto to search local documentation instead of guessing."
-        )
+        self.chk_rag = QCheckBox("Enable Local Knowledge Base (RAG)")
+        self.chk_rag.setToolTip("Downloads Qdrant (~50MB) for documentation search.")
         rag_layout.addWidget(self.chk_rag)
         
-        # --- NEW v2.0.0: Offline Mode & Telemetry ---
-        self.chk_offline = QCheckBox("Force Offline Mode (Use Tiny Models)")
-        self.chk_offline.setToolTip("Uses local transformers models instead of APIs. Requires download.")
-        rag_layout.addWidget(self.chk_offline)
-        
-        self.chk_telemetry = QCheckBox("Enable Anonymous Error Reporting (GitHub)")
-        self.chk_telemetry.setToolTip("Helps us improve the framework by creating Issues on crash.")
+        self.chk_telemetry = QCheckBox("Enable Anonymous Error Reporting")
+        self.chk_telemetry.setToolTip("Help us improve by sending crash reports via GitHub Issues.")
         rag_layout.addWidget(self.chk_telemetry)
         
         layout.addWidget(grp_rag)
-        
-        self._update_models(self.provider_combo.currentText())
         
         # --- Buttons ---
         btns = QHBoxLayout()
@@ -200,33 +233,99 @@ class AIConfigurationDialog(QDialog):
         btns.addWidget(self.btn_ok)
         
         layout.addLayout(btns)
+        
+        # Init
+        self._update_models(self.provider_combo.currentText())
 
     def _update_models(self, provider):
         self.model_combo.clear()
-        models = self.PROVIDERS.get(provider, [])
-        self.model_combo.addItems(models)
-        if "Local" in provider or "Compatible" in provider:
+        
+        if "Native" in provider:
+            # Fetch from ModelManager if available
+            if self.framework and hasattr(self.framework, 'model_manager'):
+                tiny_models = self.framework.model_manager.get_available_tiny_models()
+                self.model_combo.addItems(list(tiny_models.keys()))
+            else:
+                self.model_combo.addItem("Error: ModelManager not loaded")
+            self.stack.setCurrentWidget(self.page_offline)
+        
+        elif "Local" in provider or "Compatible" in provider:
+            models = self.PROVIDERS.get(provider, [])
+            self.model_combo.addItems(models)
             self.stack.setCurrentWidget(self.page_local)
+            
         else:
+            models = self.PROVIDERS.get(provider, [])
+            self.model_combo.addItems(models)
             self.stack.setCurrentWidget(self.page_cloud)
+            
+        self._check_offline_status()
+
+    def _check_offline_status(self):
+        """Checks if the selected tiny model is installed."""
+        if self.stack.currentWidget() != self.page_offline:
+            return
+            
+        model_key = self.model_combo.currentText()
+        if not model_key or not self.framework: return
+        
+        is_installed = self.framework.model_manager.is_tiny_model_installed(model_key)
+        
+        if is_installed:
+            self.lbl_offline_status.setText(f"✅ {model_key} is ready for offline use.")
+            self.lbl_offline_status.setStyleSheet("color: green; font-weight: bold;")
+            self.btn_download_model.setEnabled(False)
+            self.btn_download_model.setText("Installed")
+        else:
+            self.lbl_offline_status.setText(f"⚠️ {model_key} not found locally.")
+            self.lbl_offline_status.setStyleSheet("color: orange; font-weight: bold;")
+            self.btn_download_model.setEnabled(True)
+            self.btn_download_model.setText(f"⬇️ Download {model_key}")
+
+    def download_selected_tiny_model(self):
+        model_key = self.model_combo.currentText()
+        self.btn_download_model.setEnabled(False)
+        self.dl_progress.setVisible(True)
+        self.lbl_offline_status.setText(f"Downloading {model_key}... please wait.")
+        
+        self.worker = TinyModelDownloadWorker(self.framework.model_manager, model_key)
+        self.worker.finished.connect(self.on_download_finished)
+        self.worker.error.connect(self.on_download_error)
+        self.worker.start()
+
+    def on_download_finished(self, path):
+        self.dl_progress.setVisible(False)
+        self._check_offline_status()
+        QMessageBox.information(self, "Download Complete", f"Model saved to:\n{path}")
+
+    def on_download_error(self, err):
+        self.dl_progress.setVisible(False)
+        self.btn_download_model.setEnabled(True)
+        self.lbl_offline_status.setText("❌ Download failed.")
+        QMessageBox.critical(self, "Error", f"Failed to download model:\n{err}")
 
     def get_config(self):
         provider = self.provider_combo.currentText()
         model = self.model_combo.currentText()
+        
         config = {
             "provider": provider, 
             "model": model,
             "enable_rag_knowledge": self.chk_rag.isChecked(),
-            "offline_mode": self.chk_offline.isChecked(),
-            "enable_telemetry": self.chk_telemetry.isChecked()
+            "enable_telemetry": self.chk_telemetry.isChecked(),
+            "offline_mode": ("Native" in provider)
         }
         
+        if "Native" in provider:
+            config["preferred_tiny_model"] = model
+            
         if self.stack.currentWidget() == self.page_cloud:
             config["api_key"] = self.api_key_edit.text()
-            config["base_url"] = None
         else:
-            config["api_key"] = "sk-dummy"
-            config["base_url"] = self.base_url_edit.text()
+            config["api_key"] = "sk-dummy" # Dummy for local
+            if self.stack.currentWidget() == self.page_local:
+                config["base_url"] = self.base_url_edit.text()
+                
         return config
 
 class AskTokenDialog(QDialog):
@@ -397,24 +496,17 @@ class URLInputDialog(QDialog):
         return {"depth": self.spin_depth.value(), "max_pages": self.spin_pages.value()}
 
 class DeploymentDialog(QDialog):
-    """
-    Dialog to configure SSH deployment to a target device.
-    Security: Credentials stay in RAM, never saved to disk.
-    """
+    """Dialog to configure SSH deployment."""
     def __init__(self, parent=None, default_ip=""):
         super().__init__(parent)
         self.setWindowTitle("Deploy to Target Device")
         self.setMinimumWidth(450)
         self.credentials = {}
-        
         self._init_ui(default_ip)
         
     def _init_ui(self, default_ip):
         layout = QVBoxLayout(self)
-        
-        info = QLabel("<b>Zero-Dependency Deployment</b><br>"
-                      "Transfer the Golden Artifact to your edge device via SSH.<br>"
-                      "<i>Note: Passwords are never stored on disk.</i>")
+        info = QLabel("<b>Zero-Dependency Deployment</b><br>Transfer the Golden Artifact via SSH.<br><i>Note: Passwords are RAM only.</i>")
         info.setWordWrap(True)
         layout.addWidget(info)
         
@@ -431,7 +523,6 @@ class DeploymentDialog(QDialog):
         
         self.pass_edit = QLineEdit()
         self.pass_edit.setEchoMode(QLineEdit.Password)
-        self.pass_edit.setPlaceholderText("******")
         form.addRow("Password:", self.pass_edit)
         
         self.path_edit = QLineEdit("/opt/llm_deploy")
@@ -454,23 +545,14 @@ class DeploymentDialog(QDialog):
     def validate_and_accept(self):
         ip = self.ip_edit.text().strip()
         user = self.user_edit.text().strip()
-        
         if not ip or not user:
-            QMessageBox.warning(self, "Input Error", "IP Address and Username are required.")
+            QMessageBox.warning(self, "Input Error", "IP and Username required.")
             return
-            
-        self.credentials = {
-            "ip": ip,
-            "user": user,
-            "password": self.pass_edit.text(),
-            "path": self.path_edit.text().strip()
-        }
+        self.credentials = {"ip": ip, "user": user, "password": self.pass_edit.text(), "path": self.path_edit.text().strip()}
         self.accept()
         
-    def get_credentials(self):
-        return self.credentials
+    def get_credentials(self): return self.credentials
 
-# --- NEW v2.0.0: Healing Dialog ---
 class HealingDialog(QDialog):
     """
     'The Doctor's Report'.
@@ -486,19 +568,16 @@ class HealingDialog(QDialog):
     def _init_ui(self):
         layout = QVBoxLayout(self)
         
-        # Header with Icon (Mental image: Doctor/First Aid)
         header = QLabel("🏥 <b>Diagnosis Report</b>")
         header.setStyleSheet("font-size: 16px;")
         layout.addWidget(header)
         
-        # Error Summary
         grp_error = QGroupBox("Problem Detected")
         l_err = QVBoxLayout(grp_error)
         l_err.addWidget(QLabel(f"<b>Summary:</b> {self.proposal.error_summary}"))
         l_err.addWidget(QLabel(f"<b>Root Cause:</b> {self.proposal.root_cause}"))
         layout.addWidget(grp_error)
         
-        # Fix
         grp_fix = QGroupBox("Proposed Solution")
         l_fix = QVBoxLayout(grp_fix)
         
@@ -513,13 +592,11 @@ class HealingDialog(QDialog):
         
         layout.addWidget(grp_fix)
         
-        # Confidence
         conf_color = "green" if self.proposal.confidence_score > 0.8 else "orange"
         lbl_conf = QLabel(f"Confidence Score: {self.proposal.confidence_score*100:.1f}%")
         lbl_conf.setStyleSheet(f"color: {conf_color}; font-weight: bold;")
         layout.addWidget(lbl_conf)
         
-        # Buttons
         btns = QHBoxLayout()
         self.btn_ignore = QPushButton("Ignore")
         self.btn_ignore.clicked.connect(self.reject)

@@ -12,16 +12,16 @@ SET "PYTHON_CMD=python"
 :: --- 0. SELF-PATH ---
 cd /d "%~dp0"
 IF EXIST "..\orchestrator\main.py" (
-    echo [INFO] Launcher im Unterordner. Wechsle zu Root...
+    echo [INFO] Launcher im Unterordner. Wechsle zu Root
     cd ..
 )
 SET "SOURCE_ROOT=%CD%"
 
 :: --- 1. SYSTEM-CHECK ---
-echo [INIT] Pruefe Systemumgebung...
+echo [INIT] Pruefe Systemumgebung
 python --version >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
-    echo [CRITICAL] Python fehlt! Auto-Download...
+    echo [CRITICAL] Python fehlt! Auto-Download
     powershell -Command "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe' -OutFile 'python_installer.exe'"
     start /wait python_installer.exe /passive PrependPath=1
     del python_installer.exe
@@ -49,19 +49,19 @@ IF EXIST "%CHECKFILE%" (
             GOTO :LAUNCH_APP
         ) ELSE (
             echo [WARN] Pfad aus Checkfile ist ungueltig oder App wurde verschoben.
-            echo [INFO] Starte Reparatur/Neu-Installation...
+            echo [INFO] Starte Reparatur/Neu-Installation
         )
     )
 )
 
 :: --- 3. SETUP MODE (Wenn Checkfile fehlt oder ungültig) ---
 :RUN_SETUP
-echo [SETUP] Starte Installer...
+echo [SETUP] Starte Installer
 
 :: Installer-Dependencies (Minimal)
 python -c "import win32com.client, winshell" >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
-    echo [INSTALL] Installiere Hilfs-Pakete (pywin32, winshell)...
+    echo [INSTALL] Installiere Hilfs-Pakete (pywin32, winshell)
     python -m pip install --upgrade pywin32 winshell requests >nul
 )
 

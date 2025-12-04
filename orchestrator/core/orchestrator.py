@@ -4,9 +4,9 @@ LLM Cross-Compiler Framework - Main Orchestrator
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 
 Updates v2.0.0:
-- Integrated Self-Healing Manager.
-- Added HEALING status and recovery logic.
-- Enhanced Error Handling in Workflow Execution.
+- Integrated Consistency Manager (Pre-Flight Checks).
+- Integrated Self-Healing Manager (Post-Fail Recovery).
+- Enhanced Workflow Logic with 'Guardian Layers'.
 """
 
 import os
@@ -35,7 +35,12 @@ from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, check_command_exists, safe_json_load
 
-# Self-Healing Integration
+# v2.0: Guardian Layers
+try:
+    from orchestrator.Core.consistency_manager import ConsistencyManager, ConsistencyIssue
+except ImportError:
+    ConsistencyManager = None
+
 try:
     from orchestrator.Core.self_healing_manager import SelfHealingManager, HealingProposal
 except ImportError:
@@ -51,7 +56,8 @@ class OrchestrationStatus(Enum):
     READY = "ready"
     BUILDING = "building"
     PAUSED = "paused"
-    HEALING = "healing" # New Status v2.0
+    HEALING = "healing"           # v2.0: Analysis in progress
+    CONSISTENCY_CHECK = "checking" # v2.0: Pre-flight check
     SHUTTING_DOWN = "shutting_down"
     ERROR = "error"
 
@@ -125,18 +131,14 @@ class WorkflowProgress:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     
-    # Self-Healing v2.0
-    healing_proposal: Optional[Any] = None # Stores HealingProposal object
+    # v2.0 Data
+    consistency_issues: List[Any] = field(default_factory=list)
+    healing_proposal: Optional[Any] = None 
     
     @property
     def progress_percent(self) -> int:
         if self.total_builds == 0: return 0
-        return int((self.completed_builds + self.failed_builds) / self.total_builds * 100)
-    
-    @property
-    def success_rate(self) -> float:
-        if self.completed_builds + self.failed_builds == 0: return 0.0
-        return self.completed_builds / (self.completed_builds + self.failed_builds) * 100
+        return int((self.completed_builds + self.failed_builds + self.skipped_builds) / self.total_builds * 100)
     
     def add_log(self, message: str, level: str = "INFO"):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -177,9 +179,12 @@ class LLMOrchestrator:
         self.config = config or FrameworkConfig()
         self.framework_manager = None
         self.build_engine = None
+        
+        # Managers
         self.target_manager = None
         self.model_manager = None
-        self.healing_manager = None # v2.0
+        self.consistency_manager = None # v2.0
+        self.healing_manager = None     # v2.0
         
         self._lock = threading.RLock()
         self._status = OrchestrationStatus.INITIALIZING
@@ -190,11 +195,9 @@ class LLMOrchestrator:
         self._resource_usage = ResourceUsage()
         self._resource_monitor_thread = None
         self._event_listeners: Dict[str, List[Callable]] = {}
-        self._event_queue = queue.Queue()
-        self._event_processor_thread = None
         self._workflow_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="workflow")
         self._monitoring_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="monitor")
-        self._metrics = {"total_requests": 0, "successful_workflows": 0, "failed_workflows": 0, "total_builds": 0, "successful_builds": 0, "failed_builds": 0, "average_build_time": 0.0, "uptime_start": datetime.now()}
+        self._metrics = {"total_requests": 0, "successful_workflows": 0, "failed_workflows": 0, "total_builds": 0, "uptime_start": datetime.now()}
         self.logger.info("LLM Orchestrator initialized")
     
     async def initialize(self) -> bool:
@@ -207,12 +210,15 @@ class LLMOrchestrator:
             
             self.build_engine = BuildEngine(self.framework_manager, self.config.max_concurrent_builds)
             
-            # Initialize Self-Healing (v2.0)
+            # v2.0: Guardian Layers Initialization
+            if ConsistencyManager:
+                self.consistency_manager = ConsistencyManager(self.framework_manager)
+                self.logger.info("Consistency Manager (Pre-Flight) activated")
+                
             if SelfHealingManager:
                 self.healing_manager = SelfHealingManager(self.framework_manager)
-                self.logger.info("Self-Healing Manager activated")
+                self.logger.info("Self-Healing Manager (Post-Fail) activated")
 
-            # Start services
             self._start_monitoring()
             
             with self._lock: self._status = OrchestrationStatus.READY
@@ -244,6 +250,7 @@ class LLMOrchestrator:
         wf = self._workflows[request.request_id]
         try:
             configs = []
+            # Config Generation
             for m in request.models:
                 for t in request.targets:
                     cfg = BuildConfiguration(
@@ -258,36 +265,72 @@ class LLMOrchestrator:
                     )
                     configs.append(cfg)
             
+            # Sequential or Parallel Execution
             for c in configs:
+                # --- 1. CONSISTENCY CHECK (Pre-Flight) ---
+                if self.consistency_manager:
+                    wf.status = OrchestrationStatus.CONSISTENCY_CHECK
+                    
+                    # Convert BuildConfig to Dict for Checker
+                    check_cfg = {
+                        "target": c.target_arch,
+                        "quantization": c.quantization,
+                        "format": c.target_format.value,
+                        "model_name": c.model_source
+                    }
+                    
+                    issues = self.consistency_manager.check_build_compatibility(check_cfg)
+                    
+                    # If CRITICAL Error found -> Skip Build
+                    critical_errors = [i for i in issues if i.severity == "ERROR"]
+                    if critical_errors:
+                        msg = f"Skipped build for {c.target_arch}: {critical_errors[0].message}"
+                        self.logger.error(msg)
+                        wf.add_error(msg)
+                        wf.consistency_issues.extend(critical_errors)
+                        wf.skipped_builds += 1
+                        continue # Skip this config
+                    
+                    # Warnings -> Log but proceed
+                    warnings = [i for i in issues if i.severity == "WARNING"]
+                    if warnings:
+                        for w in warnings:
+                            wf.add_warning(f"Consistency Warning: {w.message}")
+
+                # --- 2. BUILD EXECUTION ---
+                wf.status = OrchestrationStatus.BUILDING
                 try:
-                    # Execute Build
                     build_id = self.build_engine.build_model(c)
                     
-                    # Wait for completion (Simple polling for CLI/Orchestrator context)
-                    # Note: In real async, we'd use events, but this is the sync executor thread
+                    # Wait for completion (Blocking in this thread, async in architecture)
                     success = self._wait_for_build(build_id)
                     
                     if success:
                         wf.completed_builds += 1
                     else:
                         wf.failed_builds += 1
-                        # --- SELF HEALING TRIGGER (v2.0) ---
+                        
+                        # --- 3. SELF HEALING (Post-Fail) ---
                         if self.healing_manager:
-                            self.logger.warning(f"Build {build_id} failed. Triggering Self-Healing Analysis...")
+                            self.logger.warning(f"Build {build_id} failed. Triggering Self-Healing Diagnosis...")
                             wf.status = OrchestrationStatus.HEALING
                             
-                            # Fetch logs from builder
+                            # Fetch Logs
                             prog = self.build_engine.get_build_status(build_id)
                             error_log = "\n".join(prog.logs[-50:]) if prog else "Unknown Error"
                             
+                            # Ask Ditto
                             proposal = self.healing_manager.analyze_error(error_log, f"Build: {c.target_arch} / {c.model_source}")
+                            
                             if proposal:
                                 wf.healing_proposal = proposal
-                                wf.add_warning(f"Healing Proposal: {proposal.fix_command} ({proposal.error_summary})")
-                                self.logger.info(f"Self-Healing proposed: {proposal.fix_command}")
-                            
-                            # Resume state
-                            wf.status = OrchestrationStatus.BUILDING
+                                msg = f"Healing Proposal: {proposal.fix_command} ({proposal.error_summary})"
+                                wf.add_warning(msg)
+                                self.logger.info(f"Self-Healing Proposed: {proposal.fix_command}")
+                                # In automated CLI mode, we might just log it. 
+                                # In GUI mode, DockerManager handles the signal emission.
+                            else:
+                                self.logger.warning("Self-Healing: No fix found.")
 
                 except Exception as e:
                     self.logger.error(f"Build Execution Error: {e}")

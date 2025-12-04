@@ -4,9 +4,9 @@ LLM Cross-Compiler Framework - Main Window GUI
 DIREKTIVE: Goldstandard, MVC-Pattern, Separation of Concerns.
 
 Updates v2.0.0:
-- Integrated Ditto AI Chat as a Dockable Widget.
-- Persistent Ditto Manager instance for Chat & Wizard.
-- Maintained v1.7 Features (Deployment, Monitoring, Golden Artifacts).
+- Integrated Self-Healing Workflow (HealingDialog + HealingWorker).
+- Added logic to execute AI-proposed fixes (Local & Remote via SSH).
+- Maintained Ditto Chat and v1.7 features.
 """
 
 import sys
@@ -15,9 +15,10 @@ import time
 import socket
 import logging
 import shutil
+import subprocess
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -44,7 +45,7 @@ from orchestrator.gui.community_hub import CommunityHubWindow
 from orchestrator.gui.huggingface_window import HuggingFaceWindow
 from orchestrator.gui.dialogs import (
     AddSourceDialog, LanguageSelectionDialog, DatasetReviewDialog, 
-    AIConfigurationDialog, DeploymentDialog, URLInputDialog
+    AIConfigurationDialog, DeploymentDialog, URLInputDialog, HealingDialog
 )
 from orchestrator.gui.wizards import ModuleCreationWizard
 from orchestrator.gui.benchmark_window import BenchmarkWindow
@@ -55,6 +56,12 @@ try:
     from orchestrator.Core.ditto_manager import DittoCoder
 except ImportError:
     DittoCoder = None
+
+# SSH Support for Healing
+try:
+    import paramiko
+except ImportError:
+    paramiko = None
 
 class UpdateWorker(QThread):
     update_available = Signal(bool)
@@ -79,55 +86,114 @@ class UpdateWorker(QThread):
     def stop(self): self._is_running = False
 
 class DatasetGenWorker(QThread):
-    """Worker to generate synthetic data via Ditto without freezing GUI."""
     finished = Signal(list)
     error = Signal(str)
-    
     def __init__(self, manager, domain, count=50):
         super().__init__()
         self.manager = manager
         self.domain = domain
         self.count = count
-        
     def run(self):
         try:
-            # Calls Ditto via DatasetManager
             data = self.manager.generate_synthetic_dataset(self.domain, self.count)
             self.finished.emit(data)
         except Exception as e:
             self.error.emit(str(e))
 
 class DeploymentWorker(QThread):
-    """Worker for zero-dependency deployment (SCP/SSH) in background."""
     log_signal = Signal(str)
     finished = Signal(bool)
-    
     def __init__(self, manager, artifact, creds):
         super().__init__()
         self.manager = manager
         self.artifact = artifact
         self.creds = creds
-        
     def run(self):
         try:
             self.log_signal.emit(f"Starting deployment to {self.creds['ip']}...")
-            
             success = self.manager.deploy_artifact(
-                self.artifact,
-                self.creds['ip'],
-                self.creds['user'],
-                self.creds['password'],
-                self.creds['path']
+                self.artifact, self.creds['ip'], self.creds['user'],
+                self.creds['password'], self.creds['path']
             )
-            
-            if success:
-                self.log_signal.emit("✅ Deployment successful!")
-            else:
-                self.log_signal.emit("❌ Deployment failed. Check logs.")
-                
+            if success: self.log_signal.emit("✅ Deployment successful!")
+            else: self.log_signal.emit("❌ Deployment failed. Check logs.")
             self.finished.emit(success)
         except Exception as e:
             self.log_signal.emit(f"Deployment Error: {e}")
+            self.finished.emit(False)
+
+# --- NEW v2.0: HEALING WORKER ---
+class HealingWorker(QThread):
+    """
+    Executes the fix proposed by Ditto (Self-Healing).
+    Supports Local (Subprocess) and Remote (SSH) fixes.
+    """
+    log_signal = Signal(str)
+    finished = Signal(bool)
+    
+    def __init__(self, proposal, creds: Dict = None):
+        super().__init__()
+        self.proposal = proposal
+        self.creds = creds # Only needed for remote
+        
+    def run(self):
+        cmd = self.proposal.fix_command
+        
+        try:
+            if self.proposal.is_remote_fix:
+                self._run_remote(cmd)
+            else:
+                self._run_local(cmd)
+        except Exception as e:
+            self.log_signal.emit(f"❌ Healing Failed: {e}")
+            self.finished.emit(False)
+
+    def _run_local(self, cmd):
+        self.log_signal.emit(f"🚑 Applying Local Fix: {cmd}")
+        # Security Note: cmd comes from AI, user approved it in dialog.
+        process = subprocess.Popen(
+            cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+        for line in process.stdout:
+            self.log_signal.emit(f"[FIX] {line.strip()}")
+        process.wait()
+        
+        if process.returncode == 0:
+            self.log_signal.emit("✅ Fix applied successfully.")
+            self.finished.emit(True)
+        else:
+            self.log_signal.emit(f"❌ Fix failed with code {process.returncode}")
+            self.finished.emit(False)
+
+    def _run_remote(self, cmd):
+        if not self.creds or not paramiko:
+            raise RuntimeError("SSH Credentials missing or Paramiko not installed.")
+            
+        self.log_signal.emit(f"🚑 Applying Remote Fix on {self.creds['ip']}: {cmd}")
+        
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(self.creds['ip'], username=self.creds['user'], password=self.creds['password'], timeout=10)
+        
+        stdin, stdout, stderr = ssh.exec_command(f"sudo {cmd}" if "sudo" not in cmd else cmd, get_pty=True)
+        
+        # Simple password injection for sudo if needed (Naive implementation)
+        # Ideally user should provide passwordless sudo or we assume root
+        if self.creds['password']:
+            stdin.write(self.creds['password'] + "\n")
+            stdin.flush()
+        
+        for line in stdout:
+            self.log_signal.emit(f"[REMOTE] {line.strip()}")
+            
+        exit_status = stdout.channel.recv_exit_status()
+        ssh.close()
+        
+        if exit_status == 0:
+            self.log_signal.emit("✅ Remote fix applied.")
+            self.finished.emit(True)
+        else:
+            self.log_signal.emit(f"❌ Remote fix failed (Exit {exit_status})")
             self.finished.emit(False)
 
 class MainOrchestrator(QMainWindow):
@@ -160,15 +226,12 @@ class MainOrchestrator(QMainWindow):
             self.dataset_manager = DatasetManager(self.framework_manager)
             self.deployment_manager = DeploymentManager(self.framework_manager)
             
-            # Initialize Ditto Manager for Chat (v2.0.0)
+            # Initialize Ditto Manager
             self.ditto_manager = None
             if DittoCoder:
-                # Try to load config for Ditto
-                ai_conf = self.framework_manager.config_manager.get_all() # Simpler access needed?
-                # For now, instantiate with defaults/environment, will be reconfigured by AI Dialog
                 try:
                     self.ditto_manager = DittoCoder(
-                        config_manager=self.framework_manager.config, # Pass raw config object
+                        config_manager=self.framework_manager.config,
                         framework_manager=self.framework_manager
                     )
                 except Exception as e:
@@ -180,6 +243,9 @@ class MainOrchestrator(QMainWindow):
             self.docker_manager.build_completed.connect(self.on_build_completed)
             self.docker_manager.sidecar_status.connect(self.on_sidecar_status)
             self.docker_manager.build_stats.connect(self.on_build_stats)
+            
+            # NEW v2.0: Connect Self-Healing Signal
+            self.docker_manager.healing_requested.connect(self.on_healing_requested)
             
             get_i18n().language_changed.connect(self.retranslateUi)
             
@@ -199,7 +265,7 @@ class MainOrchestrator(QMainWindow):
 
     def init_ui(self):
         self.setWindowTitle(tr("app.title"))
-        self.setMinimumSize(1300, 850) # Slightly wider for Chat Dock
+        self.setMinimumSize(1300, 850)
         
         logo_path = self.app_root / "assets" / "logo.png"
         if logo_path.exists():
@@ -227,7 +293,6 @@ class MainOrchestrator(QMainWindow):
         """)
         self.create_menu_bar()
         
-        # Central Widget (Tabs)
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout(central)
@@ -241,24 +306,16 @@ class MainOrchestrator(QMainWindow):
         self.load_sources_to_table()
         self.refresh_targets()
         
-        # --- NEW v2.0: Chat Dock ---
         self.create_chat_dock()
-        
         self.retranslateUi()
 
     def create_chat_dock(self):
-        """Creates the Ditto Chat Dock Widget."""
         self.chat_dock = QDockWidget("Ditto AI Assistant", self)
         self.chat_dock.setAllowedAreas(Qt.RightDockWidgetArea | Qt.LeftDockWidgetArea)
-        
-        # Instantiate Chat Window
         self.chat_window = ChatWindow(self.ditto_manager, self)
         self.chat_dock.setWidget(self.chat_window)
-        
-        # Add to Main Window (Right side by default)
         self.addDockWidget(Qt.RightDockWidgetArea, self.chat_dock)
         
-        # Add Toggle Action to Tools Menu
         self.act_chat_toggle = QAction("Show/Hide AI Chat", self)
         self.act_chat_toggle.setCheckable(True)
         self.act_chat_toggle.setChecked(True)
@@ -324,14 +381,8 @@ class MainOrchestrator(QMainWindow):
         f_layout = QHBoxLayout()
         self.format_combo = QComboBox()
         self.format_combo.addItems([
-            "GGUF (Universal)", 
-            "RKNN (Rockchip NPU)", 
-            "ONNX (Universal)", 
-            "TensorRT (NVIDIA)", 
-            "TFLite (Mobile/Pi)", 
-            "OpenVINO (Intel)", 
-            "CoreML (Apple)",
-            "NCNN (Mobile)"
+            "GGUF (Universal)", "RKNN (Rockchip NPU)", "ONNX (Universal)", "TensorRT (NVIDIA)", 
+            "TFLite (Mobile/Pi)", "OpenVINO (Intel)", "CoreML (Apple)", "NCNN (Mobile)"
         ])
         f_layout.addWidget(self.format_combo)
         c_layout.addRow("Format:", f_layout)
@@ -365,7 +416,6 @@ class MainOrchestrator(QMainWindow):
         p_layout.addWidget(QLabel("Overall Progress:"))
         self.progress_bar = QProgressBar(); self.progress_bar.setValue(0); p_layout.addWidget(self.progress_bar)
         
-        # Monitoring Stats
         stats_layout = QHBoxLayout()
         self.lbl_cpu = QLabel("CPU: 0%")
         self.cpu_bar = QProgressBar(); self.cpu_bar.setRange(0, 100); self.cpu_bar.setTextVisible(False)
@@ -428,7 +478,6 @@ class MainOrchestrator(QMainWindow):
             self.framework_manager.config_manager.save_user_config()
             if self.docker_manager:
                 self.docker_manager.ensure_qdrant_service()
-            # Update Ditto Manager in case config changed
             if self.ditto_manager:
                 self.ditto_manager.config = self.framework_manager.config
 
@@ -454,6 +503,35 @@ class MainOrchestrator(QMainWindow):
             QMessageBox.information(self, "Deployment", "Successfully deployed to target device.")
         else:
             QMessageBox.critical(self, "Deployment Failed", "Deployment failed. See logs for details.")
+
+    # --- NEW v2.0: Self-Healing Handler ---
+    def on_healing_requested(self, proposal):
+        """Slots called when DockerManager detects a build error and has a fix."""
+        self.log(f"🚑 Healing Proposed: {proposal.error_summary}")
+        
+        dlg = HealingDialog(proposal, self)
+        if dlg.exec() == QDialog.Accepted:
+            self.log("Applying Fix...")
+            
+            # Credentials for Remote Fix (if needed)
+            creds = None
+            if proposal.is_remote_fix:
+                # Reuse deployment dialog to ask for credentials if not cached or needed
+                # For v2.0 MVP we assume the user must provide them or we use defaults
+                dep_dlg = DeploymentDialog(self)
+                if dep_dlg.exec() == QDialog.Accepted:
+                    creds = dep_dlg.get_credentials()
+                else:
+                    self.log("Healing cancelled (Credentials missing).")
+                    return
+            
+            # Start Healing Worker
+            self.healing_worker = HealingWorker(proposal, creds)
+            self.healing_worker.log_signal.connect(self.log)
+            self.healing_worker.finished.connect(lambda success: self.log("Healing Complete." if success else "Healing Failed."))
+            self.healing_worker.start()
+        else:
+            self.log("Healing ignored by user.")
 
     def start_build(self):
         model_path = self.model_name.text()
@@ -532,7 +610,7 @@ class MainOrchestrator(QMainWindow):
             "use_gpu": self.chk_use_gpu.isChecked(),
             "dataset_path": ds_path
         }
-        self.log(f"Build Start: {cfg['target']} [{cfg['format']} / {cfg['quantization']}]")
+        self.log(f"Build Start: {cfg['target']} [{cfg['quantization']}]")
         self.set_controls_enabled(False)
         self.deploy_btn.setEnabled(False)
         self.docker_manager.start_build(cfg)

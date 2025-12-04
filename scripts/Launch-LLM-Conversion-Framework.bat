@@ -3,35 +3,31 @@ TITLE LLM Cross-Compiler Framework - Launcher
 CLS
 SETLOCAL ENABLEDELAYEDEXPANSION
 
-:: --- 0. INTELLIGENTE PFAD-ERKENNUNG ---
-:: Wo bin ich?
-SET "SCRIPT_DIR=%~dp0"
-cd /d "%SCRIPT_DIR%"
+:: --- 0. ROBUSTE PFAD-ERKENNUNG ---
+:: 1. Wir wechseln hart in das Verzeichnis, in dem diese .bat Datei liegt
+cd /d "%~dp0"
 
-:: Check 1: Bin ich schon im Root? (Existiert orchestrator hier?)
-IF EXIST "orchestrator\main.py" (
-    SET "ROOT_DIR=%SCRIPT_DIR%"
-    echo [INFO] Launcher im Root-Verzeichnis erkannt.
-) ELSE (
-    :: Check 2: Bin ich im 'scripts' Ordner? (Existiert orchestrator eins drueber?)
-    IF EXIST "..\orchestrator\main.py" (
-        SET "ROOT_DIR=%SCRIPT_DIR%..\"
-        cd /d "%ROOT_DIR%"
-        echo [INFO] Launcher im Scripts-Ordner erkannt. Wechsle zu Root...
-    ) ELSE (
-        echo [CRITICAL] Konnte Projekt-Struktur nicht erkennen!
-        echo.
-        echo Bitte stellen Sie sicher, dass der Ordner 'orchestrator' existiert
-        echo und sich entweder im selben Verzeichnis oder einen Ordner darueber befindet.
-        echo.
-        echo Aktueller Pfad: %CD%
-        PAUSE
-        EXIT /B 1
-    )
+:: 2. Check: Sind wir im 'scripts' Ordner? (Indikator: orchestrator liegt eins drueber)
+IF EXIST "..\orchestrator\main.py" (
+    echo [INFO] Launcher im Unterordner erkannt.
+    echo [INFO] Wechsle in das Hauptverzeichnis (cd ..)...
+    cd ..
 )
 
-:: Ab hier sind wir garantiert im Root-Verzeichnis.
-:: Alle Pfade koennen nun relativ vom Root angegeben werden.
+:: 3. Check: Sind wir jetzt richtig? (Root-Check)
+IF NOT EXIST "orchestrator\main.py" (
+    echo [CRITICAL] Installationsverzeichnis ungueltig!
+    echo.
+    echo Konnte 'orchestrator\main.py' nicht finden.
+    echo.
+    echo Aktueller Pfad: %CD%
+    echo Bitte verschieben Sie die .bat Datei in den Hauptordner des Projekts.
+    PAUSE
+    EXIT /B 1
+)
+
+:: Ab hier sind wir garantiert im Root.
+:: echo [DEBUG] Arbeitsverzeichnis: %CD%
 
 :: --- KONFIGURATION ---
 SET "VENV_DIR=.venv"
@@ -121,7 +117,8 @@ IF EXIST "%VENV_DIR%\Scripts\activate.bat" (
 )
 
 :: Dependencies sicherstellen (Quiet Mode)
-pip install -r requirements.txt >nul 2>&1
+:: Wir nutzen python -m pip um sicherzugehen dass wir das pip der aktiven Umgebung nutzen
+python -m pip install -r requirements.txt >nul 2>&1
 
 :: Hauptanwendung starten
 python %MAIN_SCRIPT%

@@ -11,7 +11,7 @@ openfiles >nul 2>&1
 if %errorlevel% NEQ 0 (
     echo.
     echo [ACHTUNG] Bitte Rechtsklick auf die Datei und "Als Administrator ausfuehren".
-    echo Das ist notwendig, um die globalen Verknuepfungen (Public Documents) zu erstellen.
+    echo Das ist notwendig, um die globalen Verknuepfungen [Public Documents] zu erstellen.
     echo.
     pause
     exit /b

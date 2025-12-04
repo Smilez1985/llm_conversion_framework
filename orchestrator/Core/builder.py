@@ -330,7 +330,7 @@ class BuildEngine:
             # 7. Extract Artifacts
             self._extract_artifacts(config, prog)
             
-            # 8. Create Golden Artifact (v1.7.0)
+            # 8. Create Golden Artifact (v1.7.0 - Includes Auto-Docs)
             self._create_golden_artifact(config, prog)
             
             # 9. Cleanup
@@ -374,10 +374,13 @@ class BuildEngine:
         build_temp = self.cache_dir / "builds" / config.build_id
         df_path = build_temp / "Dockerfile"
         
+        # Determine which Dockerfile to use
+        # Priority: Dockerfile.gpu (if gpu requested), else Dockerfile
         src_df_name = "Dockerfile.gpu" if config.use_gpu else "Dockerfile"
         src_df = target_path / src_df_name
         
         if not src_df.exists():
+            # Fallback to standard Dockerfile if gpu specific missing
             src_df = target_path / "Dockerfile"
             
         if not src_df.exists():
@@ -397,6 +400,7 @@ class BuildEngine:
 
     def _validate_dockerfile_hadolint(self, path: Path, prog: BuildProgress):
         try: 
+            # nosec: We control the path, and hadolint is safe
             subprocess.run(["hadolint", str(path)], check=True, capture_output=True) 
         except Exception: 
             prog.add_warning("Hadolint check skipped (tool not found or failed)")
@@ -442,6 +446,7 @@ class BuildEngine:
         try:
             scan_cmd = ["image", "--exit-code", "1", "--severity", "HIGH,CRITICAL", image_tag]
             
+            # Secure way: Run trivy container
             log_stream = self.docker_client.containers.run(
                 "aquasec/trivy:latest", 
                 command=scan_cmd,
@@ -460,6 +465,7 @@ class BuildEngine:
             
         except docker.errors.ContainerError:
             progress.add_warning(f"Security vulnerabilities found! Review logs above.")
+            # We don't fail the build here, just warn
         except Exception as e:
             progress.add_warning(f"Security scan failed to run: {e}")
 
@@ -470,12 +476,14 @@ class BuildEngine:
         
         build_temp = self.cache_dir / "builds" / config.build_id
         
+        # 1. Volume Setup
         vols = {
             str(build_temp / "output"): {"bind": "/build-cache/output", "mode": "rw"},
             str(self.cache_dir / "models"): {"bind": "/build-cache/models", "mode": "rw"},
             str(target_path / "modules"): {"bind": "/app/modules", "mode": "ro"}
         }
         
+        # 2. Environment Setup
         env = {
             "BUILD_ID": config.build_id,
             "MODEL_SOURCE": config.model_source,
@@ -487,9 +495,12 @@ class BuildEngine:
             "TARGET_FORMAT": config.target_format.value
         }
         
+        # Inject SSOT Vars
         if hasattr(self.framework_manager.config, 'source_repositories'):
             for k, v in self.framework_manager.config.source_repositories.items():
+                # Flatten dict keys for env vars
                 if isinstance(v, dict) and 'url' in v:
+                    # e.g. rockchip_npu.rknn_toolkit2 -> RKNN_TOOLKIT2_REPO_OVERRIDE
                     key_parts = k.split('.')
                     name = key_parts[-1].upper()
                     env[f"{name}_REPO_OVERRIDE"] = v['url']
@@ -497,11 +508,13 @@ class BuildEngine:
                     name = k.split('.')[-1].upper()
                     env[f"{name}_REPO_OVERRIDE"] = v
 
+        # 3. Dataset Injection
         if config.dataset_path and os.path.exists(config.dataset_path):
             vols[str(config.dataset_path)] = {"bind": "/build-cache/dataset.txt", "mode": "ro"}
             env["DATASET_PATH"] = "/build-cache/dataset.txt"
             progress.add_log(f"Mounted Calibration Dataset: {config.dataset_path}")
 
+        # 4. GPU Logic
         device_requests = []
         devices = []
         
@@ -515,6 +528,7 @@ class BuildEngine:
             else:
                 progress.add_warning("GPU usage requested but no supported GPU (NVIDIA/Intel) detected on host.")
 
+        # 5. Run Container
         container = self.docker_client.containers.create(
             image=image.id, 
             command=["/app/modules/build.sh"], 
@@ -531,9 +545,11 @@ class BuildEngine:
             
         container.start()
         
+        # Stream Logs
         for line in container.logs(stream=True, follow=True):
             progress.add_log(f"CONT: {line.decode().strip()}")
             
+        # Wait for completion
         res = container.wait(timeout=config.build_timeout)
         exit_code = res.get('StatusCode', 1)
         
@@ -550,6 +566,7 @@ class BuildEngine:
         progress.add_log(f"Copying artifacts to {dst}...")
         ensure_directory(dst)
         
+        # Simple copy of the output folder content
         if src.exists():
             count = 0
             for f in src.rglob("*"):
@@ -610,6 +627,46 @@ To deploy this model on your edge device:
 
 1. Transfer the archive to the target.
 2. Run the deployment script:
-   ```bash
+```bash
    chmod +x deploy.sh
    ./deploy.sh
+```
+
+---
+Generated automatically by LLM-Builder.
+"""
+        
+        try:
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            self.logger.error(f"Failed to write Model Card: {e}")
+
+    def _create_golden_artifact(self, config: BuildConfiguration, progress: BuildProgress):
+        """Creates a compressed archive of the build artifacts (The Golden Package)."""
+        progress.current_stage = "Archiving"
+        progress.progress_percent = 95
+        
+        output_dir = Path(config.output_dir)
+        
+        # Step 1: Generate Documentation (Auto-Docs)
+        progress.add_log("Generating Model Card...")
+        self._generate_model_card(config, output_dir)
+        
+        # Step 2: Zip
+        archive_name = output_dir.name 
+        root_dir = output_dir.parent
+        base_dir = output_dir.name
+        
+        try:
+            progress.add_log(f"Creating Golden Artifact ZIP...")
+            zip_path = shutil.make_archive(
+                str(root_dir / archive_name), 
+                'zip', 
+                root_dir, 
+                base_dir
+            )
+            progress.add_log(f"✅ Golden Artifact created: {zip_path}")
+            progress.artifacts.append(zip_path)
+        except Exception as e:
+            progress.add_error(f"Failed to create Golden Artifact: {e}")

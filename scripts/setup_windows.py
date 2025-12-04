@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.11 FINAL UX)
-DIREKTIVE: Goldstandard. KORRIGIERTE PFADTRENUNG und VOLLSTÄNDIGER DOCKER CHECK.
-  FIX: Defensive Browsing: Stellt sicher, dass der 'Browse'-Dialog den finalen Pfad vorschlägt.
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.13 FINAL)
+DIREKTIVE: Goldstandard. KORRIGIERTER LAUNCHER-PFAD und KOPIER-ROUTINE.
+  FIX: Kopiert scripts/start-llm_convertion_framework.bat ohne Umbenennung in app_dir/.
 """
 
 import os
@@ -36,6 +36,9 @@ from tkinter.scrolledtext import ScrolledText
 APP_NAME = "LLM-Conversion-Framework"
 APP_TITLE = "LLM Conversion Framework"
 
+# Deployment Name für den Launcher (Muss dem Quellnamen entsprechen, um Altlasten zu vermeiden)
+LAUNCHER_FILE_NAME = "start-llm_convertion_framework.bat" #
+
 # Zentrale Config (Pointer)
 CHECKFILE_DIR = Path("C:/Users/Public/Documents/llm_conversion_framework")
 CHECKFILE_PATH = CHECKFILE_DIR / "checkfile.txt"
@@ -52,13 +55,14 @@ CODE_DIRS = ["orchestrator", "configs", "assets", "Docker Setup"] # Geht in den 
 DATA_TEMPLATES_DIRS = ["targets", "models"] # Geht DIREKT in den Data Path
 
 INCLUDE_APP_FILES = ["pyproject.toml", "poetry.lock", "requirements.txt", ".gitignore"] # Geht in den App Path
-INCLUDE_LAUNCHER_FILES = ["Launch-LLM-Conversion-Framework.bat", "README.md", "LICENSE.txt"] # Geht in den App Path
+# Launcher-Dateien werden individuell behandelt, hier nur Dokumente/Lizenzen
+INCLUDE_LAUNCHER_DOCS = ["README.md", "LICENSE.txt"]
 IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "build", ".installer_venv"]
 
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_TITLE} Installer v2.11")
+        self.title(f"{APP_TITLE} Installer v2.13")
         self.geometry("800x700")
         self.resizable(True, True)
         
@@ -234,7 +238,7 @@ class InstallerGUI(tk.Tk):
             
             # 2. Copy Content: Source Code in den App-Pfad
             self.log("Kopiere Framework-Dateien in den App-Pfad...")
-            total_items = len(CODE_DIRS) + len(DATA_TEMPLATES_DIRS) + len(INCLUDE_APP_FILES) + len(INCLUDE_LAUNCHER_FILES) + 2
+            total_items = len(CODE_DIRS) + len(DATA_TEMPLATES_DIRS) + len(INCLUDE_APP_FILES) + len(INCLUDE_LAUNCHER_DOCS) + 3 # +3 fuer Launcher, Uninstaller, Readme/License
             current = 0
             
             # Kopiere Code-Ordner (orchestrator, configs, assets, Docker Setup)
@@ -255,16 +259,29 @@ class InstallerGUI(tk.Tk):
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
 
-            # 3. Copy Launcher/Uninstaller in den App-Pfad
-            for item in INCLUDE_LAUNCHER_FILES:
+            # 3. Copy Launcher/Uninstaller/Docs in den App-Pfad
+            
+            # Kopiere Readme/License
+            for item in INCLUDE_LAUNCHER_DOCS:
                 src = SOURCE_DIR / item
                 dst = app_dir / item
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
+            
+            # *** KORREKTUR: Launcher kopieren (KEIN UMBENENNEN) ***
+            SRC_LAUNCHER = SOURCE_DIR / "scripts" / LAUNCHER_FILE_NAME
+            if SRC_LAUNCHER.exists():
+                shutil.copy2(SRC_LAUNCHER, app_dir / LAUNCHER_FILE_NAME)
+                self.log(f"  Kopiert (Launcher): {LAUNCHER_FILE_NAME}")
+            else:
+                self.log(f"  FEHLER: Launcher-Quelle nicht gefunden: {SRC_LAUNCHER}")
+            current += 1
 
+            # Kopiere Uninstaller
             src_uninstaller = SOURCE_DIR / "scripts" / "Uninstall-LLM-Conversion-Framework.bat"
             if src_uninstaller.exists():
                 shutil.copy2(src_uninstaller, app_dir / "Uninstall-LLM-Conversion-Framework.bat")
+            current += 1
                 
             self.progress['value'] = 30
             
@@ -376,7 +393,8 @@ class InstallerGUI(tk.Tk):
         # --- Shortcut 1: Die App Launcher
         name_app = f"{APP_TITLE}"
         path_app = os.path.join(desktop, f"{name_app}.lnk")
-        target_bat = str(app_dir / "Launch-LLM-Conversion-Framework.bat")
+        # ZIEL: Muss auf den korrekten Dateinamen zeigen
+        target_bat = str(app_dir / LAUNCHER_FILE_NAME)
         
         shortcut_app = shell.CreateShortCut(path_app)
         shortcut_app.Targetpath = target_bat

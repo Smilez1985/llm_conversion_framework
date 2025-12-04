@@ -2,69 +2,82 @@
 setlocal EnableDelayedExpansion
 
 :: ===================================================
-:: LLM Conversion Framework - Installer
+:: LLM Conversion Framework - CLI Installer (Fix)
+:: Synchronisiert mit setup_windows.py Logik
 :: ===================================================
 
-:: 1. Admin-Rechte prüfen
+:: 1. Admin-Rechte prüfen (Zwingend für saubere Installation)
 openfiles >nul 2>&1
 if %errorlevel% NEQ 0 (
     echo.
-    echo [ACHTUNG] Dieses Skript benoetigt Administrator-Rechte.
-    echo Bitte Rechtsklick auf die Datei und "Als Administrator ausfuehren" waehlen.
+    echo [ACHTUNG] Bitte Rechtsklick auf die Datei und "Als Administrator ausfuehren".
+    echo Das ist notwendig, um die globalen Verknuepfungen (Public Documents) zu erstellen.
     echo.
     pause
     exit /b
 )
 
-:: 2. Pfade bestimmen
-:: %~dp0 ist der Pfad, in dem das Skript liegt (z.B. ...\llm_conversion_framework\scripts\)
-:: Wir wollen aber das Hauptverzeichnis (eins drueber)
+:: 2. Installations-Verzeichnis bestimmen (Wo liegt das Repo aktuell?)
 pushd "%~dp0.."
-set "INSTALL_DIR=%CD%"
+set "REPO_DIR=%CD%"
 popd
+
+:: 3. Ziel-Verzeichnis für Konfiguration (Gemäß setup_windows.py Standard)
+set "GLOBAL_CONFIG_DIR=C:\Users\Public\Documents\llm_conversion_framework"
+set "CHECKFILE=%GLOBAL_CONFIG_DIR%\checkfile.txt"
 
 cls
 echo ===================================================
 echo      LLM Conversion Framework - Installation
 echo ===================================================
 echo.
-echo [INFO] Installations-Ziel (Root): "%INSTALL_DIR%"
+echo [INFO] Framework Pfad: "%REPO_DIR%"
+echo [INFO] Globaler Pfad:  "%GLOBAL_CONFIG_DIR%"
 echo.
 
-:: 3. Ordnerstruktur sicherstellen
-if not exist "%INSTALL_DIR%\data" (
-    mkdir "%INSTALL_DIR%\data"
-    echo [OK] Ordner 'data' erstellt.
-) else (
-    echo [INFO] Ordner 'data' existiert bereits.
+:: 4. Ordnerstruktur im Framework sicherstellen (Logs/Data)
+if not exist "%REPO_DIR%\logs" mkdir "%REPO_DIR%\logs"
+if not exist "%REPO_DIR%\data" mkdir "%REPO_DIR%\data"
+
+:: 5. Globalen Konfigurations-Ordner erstellen (Public Documents)
+if not exist "%GLOBAL_CONFIG_DIR%" (
+    mkdir "%GLOBAL_CONFIG_DIR%"
+    if %errorlevel% NEQ 0 (
+        echo [FEHLER] Konnte globalen Ordner nicht erstellen: %GLOBAL_CONFIG_DIR%
+        pause
+        exit /b
+    )
+    echo [OK] Globaler Ordner erstellt.
 )
 
-if not exist "%INSTALL_DIR%\logs" (
-    mkdir "%INSTALL_DIR%\logs"
-    echo [OK] Ordner 'logs' erstellt.
-)
-
-:: 4. Checkfile erstellen (Test Schreibrechte)
-set "CHECKFILE=%INSTALL_DIR%\data\checkfile.txt"
+:: 6. Checkfile schreiben (Der Pointer für den Launcher)
+:: WICHTIG: Das Format muss 'Path="C:\..."' sein, wie in setup_windows.py
 (
-    echo Installation Test: %DATE% %TIME%
-    echo Installiert in: %INSTALL_DIR%
+    echo Path="%REPO_DIR%"
 ) > "%CHECKFILE%" || (
-    echo [FEHLER] Konnte Checkfile nicht schreiben! Zugriff verweigert.
+    echo [FEHLER] Zugriff verweigert beim Schreiben von: %CHECKFILE%
     pause
     exit /b
 )
 
-echo [OK] Checkfile erfolgreich erstellt: %CHECKFILE%
+:: Verstecke den globalen Ordner (Optional, wie im Python Skript)
+attrib +h "%GLOBAL_CONFIG_DIR%" /D >nul 2>&1
 
-:: 5. Umgebungsvariable setzen (Optional - verursacht oft "Zugriff verweigert" ohne Admin)
-:: Hier wird der Pfad permanent in Windows registriert, falls gewuenscht.
-:: Entferne "REM" vor der naechsten Zeile, wenn du das willst:
-REM setx LLM_FRAMEWORK_HOME "%INSTALL_DIR%" /M
+echo [OK] Checkfile erfolgreich erstellt.
+echo      Inhalt: Path="%REPO_DIR%"
+echo.
+
+:: 7. Umgebungsvorbereitung (Optional: Requirements checken)
+echo [INFO] Pruefe Python Umgebung...
+if exist "%REPO_DIR%\requirements.txt" (
+    echo [TIPP] Falls noch nicht geschehen, installiere die Python-Abhaengigkeiten mit:
+    echo        pip install -r "%REPO_DIR%\requirements.txt"
+)
 
 echo.
 echo ===================================================
 echo [ERFOLG] Installation abgeschlossen.
+echo Das Framework ist nun registriert.
 echo ===================================================
 echo.
 pause

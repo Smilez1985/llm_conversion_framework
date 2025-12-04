@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.3 Fixed)
-DIREKTIVE: Goldstandard, Robustness, User Experience.
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.5 Final)
+DIREKTIVE: Goldstandard, Robustness, Central Config.
 """
 
 import os
@@ -20,11 +20,13 @@ from tkinter import ttk, messagebox, filedialog
 from tkinter.scrolledtext import ScrolledText
 
 APP_NAME = "LLM-Conversion-Framework"
-REG_PATH = r"Software\Smilez1985\LLM-Framework"
 
-# Standard-Pfade
-DEFAULT_APP_PATH = Path(os.environ.get("LocalAppData", "C:")) / "Programs" / APP_NAME
-DEFAULT_DATA_PATH = Path(os.environ.get("PUBLIC", "C:\\Users\\Public")) / "Documents" / APP_NAME
+# ZENTRALER CONFIG PFAD (Fix vorgegeben)
+CHECKFILE_DIR = Path("C:/Users/Public/Documents/llm_conversion_framework")
+CHECKFILE_PATH = CHECKFILE_DIR / "checkfile.txt"
+
+# Standard-Installationspfad
+DEFAULT_APP_PATH = Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / APP_NAME
 
 SOURCE_DIR = Path(__file__).resolve().parent.parent
 
@@ -36,8 +38,8 @@ IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "bui
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME} Installer v2.3")
-        self.geometry("750x600")
+        self.title(f"{APP_NAME} Installer v2.5")
+        self.geometry("750x550")
         self.resizable(True, True)
         
         self.style = ttk.Style()
@@ -48,13 +50,14 @@ class InstallerGUI(tk.Tk):
         main_frame = ttk.Frame(self, padding="20")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        header = ttk.Frame(main_frame)
-        header.pack(fill=tk.X, pady=(0, 20))
-        lbl_title = ttk.Label(header, text=f"Install {APP_NAME}", font=("Segoe UI", 18, "bold"))
-        lbl_title.pack(anchor=tk.W)
+        lbl_title = ttk.Label(main_frame, text=f"Install {APP_NAME}", font=("Segoe UI", 18, "bold"))
+        lbl_title.pack(anchor=tk.W, pady=(0, 5))
+        
+        lbl_desc = ttk.Label(main_frame, text="Choose installation folder. The configuration will be stored globally.")
+        lbl_desc.pack(anchor=tk.W, pady=(0, 20))
         
         # Installation Directory
-        grp_app = ttk.LabelFrame(main_frame, text="Application Directory (Launcher)", padding="10")
+        grp_app = ttk.LabelFrame(main_frame, text="Installation Directory", padding="10")
         grp_app.pack(fill=tk.X, pady=5)
         
         self.var_app_path = tk.StringVar(value=str(DEFAULT_APP_PATH))
@@ -62,16 +65,6 @@ class InstallerGUI(tk.Tk):
         e_app.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         btn_app = ttk.Button(grp_app, text="Browse...", command=lambda: self._browse(self.var_app_path))
         btn_app.pack(side=tk.RIGHT)
-        
-        # Data Directory
-        grp_data = ttk.LabelFrame(main_frame, text="Data Directory (Core, Targets, VENV)", padding="10")
-        grp_data.pack(fill=tk.X, pady=5)
-        
-        self.var_data_path = tk.StringVar(value=str(DEFAULT_DATA_PATH))
-        e_data = ttk.Entry(grp_data, textvariable=self.var_data_path)
-        e_data.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
-        btn_data = ttk.Button(grp_data, text="Browse...", command=lambda: self._browse(self.var_data_path))
-        btn_data.pack(side=tk.RIGHT)
         
         # Options
         opt_frame = ttk.Frame(main_frame)
@@ -81,12 +74,8 @@ class InstallerGUI(tk.Tk):
         chk_desktop = ttk.Checkbutton(opt_frame, text="Create Desktop Shortcut", variable=self.var_desktop)
         chk_desktop.pack(anchor=tk.W)
         
-        self.var_startmenu = tk.BooleanVar(value=True)
-        chk_start = ttk.Checkbutton(opt_frame, text="Create Start Menu Entry", variable=self.var_startmenu)
-        chk_start.pack(anchor=tk.W)
-        
         # Log
-        log_frame = ttk.LabelFrame(main_frame, text="Log", padding="5")
+        log_frame = ttk.LabelFrame(main_frame, text="Installation Log", padding="5")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         self.log_text = ScrolledText(log_frame, height=10, state='disabled', font=("Consolas", 9))
         self.log_text.pack(fill=tk.BOTH, expand=True)
@@ -115,91 +104,88 @@ class InstallerGUI(tk.Tk):
         self.update_idletasks()
 
     def _start_install(self):
-        app_dir = Path(self.var_app_path.get())
-        data_dir = Path(self.var_data_path.get())
-        
+        target_dir = Path(self.var_app_path.get())
         self.btn_install.config(state='disabled')
         self.btn_cancel.config(state='disabled')
         self.progress['value'] = 0
-        threading.Thread(target=self._install_process, args=(app_dir, data_dir), daemon=True).start()
+        threading.Thread(target=self._install_process, args=(target_dir,), daemon=True).start()
 
-    def _install_process(self, app_dir: Path, data_dir: Path):
+    def _install_process(self, target: Path):
         try:
-            self.log(f"Starting installation...")
+            self.log(f"Installing to: {target}")
             
-            # 1. Create Directories
-            if not app_dir.exists(): app_dir.mkdir(parents=True, exist_ok=True)
-            if not data_dir.exists(): data_dir.mkdir(parents=True, exist_ok=True)
+            if not target.exists(): target.mkdir(parents=True, exist_ok=True)
             
-            # Hide Data Dir
-            try:
-                ctypes.windll.kernel32.SetFileAttributesW(str(data_dir), 0x02)
-            except: pass
-
-            # 2. Copy Files
+            # 1. Copy Content
             self.log("Copying files...")
             total_items = len(INCLUDE_DATA_DIRS) + len(INCLUDE_DATA_FILES) + len(INCLUDE_APP_FILES)
             current = 0
             
-            # Copy Data
+            # Dirs
             for item in INCLUDE_DATA_DIRS:
                 src = SOURCE_DIR / item
-                dst = data_dir / item
+                dst = target / item
                 if src.exists():
                     if dst.exists(): shutil.rmtree(dst)
                     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*IGNORE_PATTERNS))
                 current += 1
-                self.progress['value'] = (current / total_items) * 50
+                self.progress['value'] = (current / total_items) * 60
             
-            for item in INCLUDE_DATA_FILES:
+            # Files
+            for item in INCLUDE_DATA_FILES + INCLUDE_APP_FILES:
                 src = SOURCE_DIR / item
-                dst = data_dir / item
+                dst = target / item
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
-            
-            # Copy App (Launcher)
-            for item in INCLUDE_APP_FILES:
-                src = SOURCE_DIR / item
-                dst = app_dir / item
-                if src.exists(): shutil.copy2(src, dst)
-                current += 1
-                self.progress['value'] = (current / total_items) * 40
+                self.progress['value'] = (current / total_items) * 60
 
-            # 3. Setup VENV in DATA DIR
-            self.log("Setting up Python Environment...")
-            venv_path = data_dir / ".venv"
+            # 2. Setup VENV (im Zielordner)
+            self.log("Setting up Python Environment (VENV)...")
+            venv_path = target / ".venv"
             subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
             
-            # 4. Install Dependencies
+            # 3. Install Dependencies
             self.log("Installing dependencies...")
             pip_exe = venv_path / "Scripts" / "pip.exe"
-            cwd = str(data_dir)
+            
             subprocess.run([str(pip_exe), "install", "--upgrade", "pip"], 
                          capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            subprocess.run([str(pip_exe), "install", "."], cwd=cwd, 
+            
+            # Install Framework Deps
+            subprocess.run([str(pip_exe), "install", "."], cwd=str(target), 
                          capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
             
+            # Install Shortcut Deps (PyWin32) in VENV
+            subprocess.run([str(pip_exe), "install", "pywin32", "winshell"], 
+                         capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+
             self.progress['value'] = 90
 
-            # 5. Shortcuts (FIXED)
+            # 4. Shortcuts
             if self.var_desktop.get():
-                self._create_shortcut(app_dir, data_dir, "Desktop")
-            if self.var_startmenu.get():
-                self._create_shortcut(app_dir, data_dir, "StartMenu")
+                self._create_shortcut(target, "Desktop")
 
-            # 6. Registry
-            self.log("Registering application...")
+            # 5. Central Checkfile
+            self.log("Writing Configuration...")
+            
+            # Ordner erstellen falls nicht da
+            if not CHECKFILE_DIR.exists():
+                CHECKFILE_DIR.mkdir(parents=True, exist_ok=True)
+            
+            # Datei schreiben: Path=C:\...
+            with open(CHECKFILE_PATH, "w") as f:
+                f.write(f"Path={target}")
+            
+            # Attribute setzen (Hidden)
             try:
-                key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_PATH)
-                winreg.SetValueEx(key, "InstallPath", 0, winreg.REG_SZ, str(app_dir))
-                winreg.CloseKey(key)
-            except Exception as e:
-                self.log(f"Registry Warning: {e}")
+                ctypes.windll.kernel32.SetFileAttributesW(str(CHECKFILE_DIR), 0x02) # Folder hidden
+                ctypes.windll.kernel32.SetFileAttributesW(str(CHECKFILE_PATH), 0x02) # File hidden
+            except: pass
 
             self.progress['value'] = 100
             self.log("Installation Complete!")
             
-            messagebox.showinfo("Success", f"Installation complete.\nYou can now close this window.")
+            messagebox.showinfo("Success", "Installation finished successfully!")
             self.btn_cancel.config(text="Close", state='normal', command=self.destroy)
             
         except Exception as e:
@@ -208,59 +194,38 @@ class InstallerGUI(tk.Tk):
             self.btn_install.config(state='normal')
             self.btn_cancel.config(state='normal')
 
-    def _create_shortcut(self, app_dir: Path, data_dir: Path, location: str):
-        # Auto-Install Dependency
+    def _create_shortcut(self, target_dir: Path, location: str):
+        # Wir nutzen hier direkt winshell, da wir es im VENV haben, 
+        # aber das laufende Skript hat es evtl. nicht (wenn der User es nicht hat).
+        # Fallback auf PowerShell für Shortcut Creation (Zero Dependency auf Host)
+        
         try:
             import winshell
             from win32com.client import Dispatch
-        except ImportError:
-            self.log("Installing shortcut libraries...")
-            try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "pywin32", "winshell"])
-                import winshell
-                from win32com.client import Dispatch
-            except Exception as e:
-                self.log(f"Failed to install dependencies: {e}")
-                return
-
-        try:
+            
             shell = Dispatch('WScript.Shell')
-            
-            if location == "Desktop":
-                folder = winshell.desktop()
-            else:
-                folder = winshell.programs()
+            desktop = winshell.desktop()
+            path = os.path.join(desktop, f"{APP_NAME}.lnk")
+            target_bat = str(target_dir / "Launch-LLM-Conversion-Framework.bat")
+            icon_path = str(target_dir / "assets" / "logo.ico")
 
-            shortcut_path = os.path.join(folder, f"{APP_NAME}.lnk")
-            target_bat = str(app_dir / "Launch-LLM-Conversion-Framework.bat")
-            
-            # ICON FIX: Suche Icon im DATA Ordner (da wir assets dorthin kopiert haben)
-            # Priorität: logo.ico -> icon.ico -> logo.png (falls unterstützt, aber ico ist sicherer)
-            icon_path = ""
-            candidates = ["logo.ico", "icon.ico"]
-            for c in candidates:
-                p = data_dir / "assets" / c
-                if p.exists():
-                    icon_path = str(p)
-                    break
-            
-            if not icon_path:
-                # Fallback: Wenn im App Dir
-                p = app_dir / "assets" / "logo.ico"
-                if p.exists(): icon_path = str(p)
-
-            shortcut = shell.CreateShortCut(shortcut_path)
+            shortcut = shell.CreateShortCut(path)
             shortcut.Targetpath = target_bat
-            shortcut.WorkingDirectory = str(app_dir) # Launcher erwartet, im App Dir zu starten
-            
-            if icon_path:
+            shortcut.WorkingDirectory = str(target_dir)
+            if os.path.exists(icon_path):
                 shortcut.IconLocation = icon_path
-                
             shortcut.save()
-            self.log(f"Shortcut created in {location} -> {target_bat}")
+            self.log(f"Shortcut created on Desktop")
             
-        except Exception as e:
-            self.log(f"Shortcut Error ({location}): {e}")
+        except ImportError:
+            # Fallback: PowerShell
+            self.log("Using PowerShell fallback for shortcut...")
+            target_bat = str(target_dir / "Launch-LLM-Conversion-Framework.bat")
+            icon_path = str(target_dir / "assets" / "logo.ico")
+            desktop = os.path.join(os.environ["USERPROFILE"], "Desktop", f"{APP_NAME}.lnk")
+            
+            ps_cmd = f'$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut("{desktop}"); $s.TargetPath = "{target_bat}"; $s.WorkingDirectory = "{target_dir}"; $s.IconLocation = "{icon_path}"; $s.Save()'
+            subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True)
 
 if __name__ == "__main__":
     app = InstallerGUI()

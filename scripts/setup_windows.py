@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 LLM Cross-Compiler Framework - Windows GUI Installer (v2.6 Final)
-DIREKTIVE: Goldstandard. Quoted Paths in Config.
+DIREKTIVE: Goldstandard. Quoted Paths in Config. Uses requirements.txt for stability.
 """
 
 import os
@@ -15,9 +15,13 @@ import winreg
 import webbrowser
 from pathlib import Path
 
-# Dependencies (vom Launcher vorinstalliert)
-import psutil
-import requests
+# Dependencies (vom Launcher vorinstalliert oder im Host-Environment erwartet)
+try:
+    import psutil
+    import requests
+except ImportError:
+    # Fallback, falls der Installer ohne vorbereitetes Environment gestartet wird
+    pass
 
 # GUI Imports
 import tkinter as tk
@@ -38,7 +42,7 @@ SOURCE_DIR = Path(__file__).resolve().parent.parent
 
 INCLUDE_APP_FILES = ["Launch-LLM-Conversion-Framework.bat", "README.md", "LICENSE"]
 INCLUDE_DATA_DIRS = ["orchestrator", "targets", "configs", "assets", "Docker Setup"]
-INCLUDE_DATA_FILES = ["pyproject.toml", "requirements.txt", ".gitignore"]
+INCLUDE_DATA_FILES = ["pyproject.toml", "poetry.lock", "requirements.txt", ".gitignore"]
 IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "build"]
 
 class InstallerGUI(tk.Tk):
@@ -138,10 +142,15 @@ class InstallerGUI(tk.Tk):
             return
 
         running = False
-        for proc in psutil.process_iter(['name']):
-            if "Docker Desktop" in proc.info['name']:
-                running = True
-                break
+        try:
+            # Check if process is running
+            for proc in psutil.process_iter(['name']):
+                if "Docker Desktop" in proc.info['name']:
+                    running = True
+                    break
+        except:
+            # Fallback if psutil fails or access denied
+            pass
         
         if not running:
             self.log("Starting Docker Desktop...")
@@ -149,15 +158,22 @@ class InstallerGUI(tk.Tk):
                 dd_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
                 if os.path.exists(dd_path):
                     subprocess.Popen([dd_path])
+                    # Wait for Docker to spin up
                     for i in range(30):
                         time.sleep(1)
                         try:
-                            if subprocess.run(["docker", "info"], capture_output=True).returncode == 0:
+                            if subprocess.run(["docker", "info"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0:
                                 running = True
                                 break
                         except: pass
             except Exception as e:
                 self.log(f"Start failed: {e}")
+
+        # Final check via CLI
+        try:
+            if subprocess.run(["docker", "info"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0:
+                running = True
+        except: pass
 
         if running:
             self.docker_ok = True
@@ -193,7 +209,7 @@ class InstallerGUI(tk.Tk):
             total_items = len(INCLUDE_DATA_DIRS) + len(INCLUDE_DATA_FILES) + 2
             current = 0
             
-            # Data
+            # Data Directories
             for item in INCLUDE_DATA_DIRS:
                 src = SOURCE_DIR / item
                 dst = data_dir / item
@@ -203,6 +219,7 @@ class InstallerGUI(tk.Tk):
                 current += 1
                 self.progress['value'] = (current / total_items) * 50
             
+            # Individual Files (toml, lock, requirements)
             for item in INCLUDE_DATA_FILES:
                 src = SOURCE_DIR / item
                 dst = data_dir / item
@@ -221,37 +238,53 @@ class InstallerGUI(tk.Tk):
             current += 2
             self.progress['value'] = 60
 
-            # VENV
+            # VENV Creation
             self.log("Setting up Python Environment...")
             venv_path = data_dir / ".venv"
-            subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
+            # Creates venv
+            subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True, creationflags=subprocess.CREATE_NO_WINDOW)
             
-            # Dependencies
+            # Dependencies Installation
             self.log("Installing dependencies...")
             pip_exe = venv_path / "Scripts" / "pip.exe"
             cwd = str(data_dir)
             
+            # 1. Pip Upgrade
             subprocess.run([str(pip_exe), "install", "--upgrade", "pip"], 
                          capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            subprocess.run([str(pip_exe), "install", "."], cwd=cwd, 
-                         capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            subprocess.run([str(pip_exe), "install", "pywin32", "winshell"], 
-                         capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            
+            # 2. Strict Version Install (Gold Standard)
+            # Nutzt requirements.txt (exportiert aus poetry.lock), falls vorhanden
+            req_file = data_dir / "requirements.txt"
+            
+            if req_file.exists():
+                self.log("Using pinned versions from requirements.txt...")
+                # Installiert Abhängigkeiten exakt nach Plan
+                subprocess.run([str(pip_exe), "install", "-r", "requirements.txt"], cwd=cwd,
+                             capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                
+                # Installiert das Projekt selbst (ohne Deps neu zu lösen)
+                self.log("Installing application...")
+                subprocess.run([str(pip_exe), "install", "--no-deps", "."], cwd=cwd,
+                             capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                self.log("Warning: requirements.txt not found. Falling back to pyproject.toml...")
+                subprocess.run([str(pip_exe), "install", "."], cwd=cwd, 
+                             capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
 
             self.progress['value'] = 90
 
-            # Shortcuts
+            # Create Shortcuts
             if self.var_desktop.get():
                 self._create_shortcut(app_dir, data_dir, "Desktop")
 
-            # Checkfile (QUOTED PATH FIX)
+            # Checkfile (Fixed Quoting for Paths with Spaces)
             self.log("Writing Configuration...")
             if not CHECKFILE_DIR.exists():
                 CHECKFILE_DIR.mkdir(parents=True, exist_ok=True)
             
-            # HIER DER FIX: Pfad in Anführungszeichen
             with open(CHECKFILE_PATH, "w") as f:
-                f.write(f'Path="{data_dir}"') # IMPORTANT: Quotes around path!
+                f.write(f'Path="{data_dir}"') 
             
             try:
                 ctypes.windll.kernel32.SetFileAttributesW(str(CHECKFILE_DIR), 0x02)
@@ -272,6 +305,8 @@ class InstallerGUI(tk.Tk):
 
     def _create_shortcut(self, app_dir: Path, data_dir: Path, location: str):
         try:
+            # Import here to avoid dependency issues if module is missing globally but present in venv?
+            # Note: This runs in the installer process context
             import winshell
             from win32com.client import Dispatch
             
@@ -282,7 +317,8 @@ class InstallerGUI(tk.Tk):
             
             icon_path = ""
             asset_dir = data_dir / "assets"
-            for c in ["logo.ico", "icon.ico", "llm-builder.ico"]:
+            # Try to find icon
+            for c in ["logo.ico", "icon.ico", "llm-builder.ico", "setup_LLM-Builder.ico"]:
                 p = asset_dir / c
                 if p.exists():
                     icon_path = str(p)
@@ -296,7 +332,7 @@ class InstallerGUI(tk.Tk):
             self.log(f"Shortcut created on {location}")
             
         except Exception as e:
-            self.log(f"Shortcut Error: {e}")
+            self.log(f"Shortcut Warning: {e}")
 
 if __name__ == "__main__":
     app = InstallerGUI()

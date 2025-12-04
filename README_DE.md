@@ -4,202 +4,133 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Docker](https://img.shields.io/badge/docker-20.10+-blue.svg)](https://docs.docker.com/get-docker/)
 [![Status](https://img.shields.io/badge/Status-Production%20Ready-green.svg)]()
-[![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)]()
 [![GitHub Stars](https://img.shields.io/github/stars/Smilez1985/llm_conversion_framework?style=social)](https://github.com/Smilez1985/llm_conversion_framework)
 [![GitHub Forks](https://img.shields.io/github/forks/Smilez1985/llm_conversion_framework?style=social)](https://github.com/Smilez1985/llm_conversion_framework)
 
 > **Hinweis:** Für die englische Dokumentation siehe [README.md](README.md).
 
-**Professionelles modulares Framework für Cross-Compilation von Large Language Models auf Edge-Hardware**
-
-Ein GUI-basiertes LLM Deployment Framework, das beliebige LLMs automatisiert optimieren & quantisieren kann. Perfekt optimiert für spezifische Edge-Hardware wie Rockchip NPUs, NVIDIA Jetson, Hailo und mehr.
+**Die autonome MLOps-Plattform für Edge-AI.**  
+Ein selbstverwaltendes, selbstheilendes Framework, das Large Language Models (LLMs) für jede Hardware (Rockchip, NVIDIA, Intel, etc.) kompiliert, optimiert und deployt – ohne "Dependency-Hölle".
 
 ---
 
-## 🌟 Was ist neu in v1.6.0
+## 🌟 Was ist neu in v2.0.0 (The Brain Update)
 
-**Deep Ingest Release.** Wir haben den KI-Agenten "Ditto" befähigt, vom gesamten Web zu lernen, nicht nur von einzelnen Seiten.
+Wir haben das Framework von einem "Werkzeug" in ein **Intelligentes System** verwandelt.
 
-* 🕷️ **Deep Crawler Engine:** Rekursives Crawlen ganzer Dokumentations-Webseiten (basierend auf LangChain), um komplexe SDKs zu verstehen.
-* 📄 **PDF Intelligence:** Native Verarbeitung von technischen Datenblättern und PDF-Handbüchern.
-* 🧠 **Wissens-Snapshots:** Bündelt gelerntes RAG-Wissen automatisch in das generierte Modul zum einfachen Teilen mit der Community.
+* 🧠 **Native Offline-Intelligenz:** Ditto läuft jetzt lokal (TinyLlama/Qwen) ohne Internet oder externe Docker-Container. Null Abhängigkeiten.
+* 🚑 **Selbstheilende Architektur:** Builds schlagen nicht einfach fehl; sie diagnostizieren sich selbst. Das Framework erkennt Treiber-Konflikte oder fehlende Bibliotheken und schlägt exakte Reparatur-Befehle vor.
+* 🛡️ **Guardian Layers (Schutzschichten):**
+    * **Konsistenz-Gate:** Verhindert zum Scheitern verurteilte Builds, indem es SDK- und Treiber-Kompatibilität *vor* der Ausführung prüft.
+    * **Wissens-Versicherung:** Automatische RAG-Snapshots ermöglichen Rollbacks, falls die KI falsche Informationen lernt.
+    * **Ethik-Gate:** Warnt vor dem Download bei Modellen mit restriktiven Lizenzen.
+* 🔮 **Selbstbewusstsein:** Ditto indiziert nun seinen eigenen Quellcode (`/app`), wodurch er tiefe architektonische Fragen zum Framework selbst beantworten kann.
 
-[Vollständigen Changelog ansehen](CHANGELOG.md) | [Upgrade Guide](docs/upgrade_v1.6.md)
+[Vollständigen Changelog ansehen](CHANGELOG.md) | [Upgrade Guide](docs/upgrade_v2.0.md)
 
 ---
 
 ## ⚡ Hauptfunktionen
 
 ### 🏗️ Multi-Architektur Support
-Kompilieren Sie Modelle für jede Zielarchitektur von einem einzigen x86-Host aus. Das Framework handhabt automatisch Cross-Compilation Toolchains (GCC/G++ für AArch64, RISC-V) und erkennt CPU-Flags (NEON, AVX512) über das `hardware_probe.sh` Skript, um hochoptimierte Binaries zu erzeugen.
+Kompilieren Sie Modelle für jede Zielarchitektur von einem einzigen x86-Host aus. Unterstützt **Rockchip NPU** (RKNN), **NVIDIA GPU** (TensorRT), **Intel XPU** (IPEX/OpenVINO) und mehr.
 
-### 🤖 KI-Gestützte Modulerstellung (Ditto)
-Sie kennen die Compiler-Flags für Ihr Board nicht? Der "Ditto" KI-Agent analysiert Ihren Hardware-Probe und generiert automatisch die komplette Docker-Konfiguration.
-**Neu in v1.6:** Wenn Ditto ein Board nicht kennt, geben Sie ihm die Dokumentations-URL. Er wird das gesamte SDK-Handbuch in Minuten crawlen, lesen und memorieren.
+### 🤖 Autonomer KI-Agent (Ditto)
+Ditto ist nicht mehr nur ein Wizard.
+* **Deep Ingest:** Crawlt Dokumentations-Webseiten und PDFs, um neue SDKs zu erlernen.
+* **Chat-Interface:** Stellen Sie Fragen wie *"Warum ist mein Build fehlgeschlagen?"* oder *"Wie optimiere ich für 8GB RAM?"*.
+* **Gedächtnis:** Erinnert sich an Ihren Hardware-Kontext, hält den Chat aber durch "Rolling Context Compression" sauber.
+
+### 🚀 Zero-Dependency Deployment
+Schieben Sie Ihre optimierten Modelle mit einem Klick auf das Edge-Gerät.
+* **Sicher:** Zugangsdaten existieren nur im RAM.
+* **Robust:** "Network Guard" pausiert den Transfer bei Verbindungsabbruch.
+* **Einfach:** Generiert ein eigenständiges `deploy.sh` auf dem Zielgerät.
 
 ### 🛡️ Security-First Architektur
-Enterprise-Sicherheit per Design. Der Orchestrator kommuniziert mit Docker über einen strikt begrenzten **Socket Proxy**, um Privilege Escalation zu verhindern. Jedes Build-Image wird automatisch mit **Trivy** auf Schwachstellen gescannt. Der neue Crawler respektiert `robots.txt` und beinhaltet verbindliche Nutzer-Disclaimer.
-
-### 🐳 Docker-Native Build System
-Keine Verschmutzung Ihres Host-Systems. Alle Builds finden in isolierten, flüchtigen Docker-Containern statt. Nutzt Multi-Stage Builds für kleine Images und `BuildX` für Performance. Volumes werden dynamisch für Caching und Artefakt-Extraktion gemountet.
-
-### 🧠 Lokale Wissensdatenbank (RAG)
-Ein optionales, datenschutzorientiertes RAG-System basierend auf **Qdrant**. Es indiziert SDK-Dokumentation lokal. Dies ermöglicht der KI, komplexe Fragen zu Quantisierungsparametern präzise zu beantworten, ohne sensible Daten in die Cloud zu senden.
-
-### 📦 Auto-Packaging & Deployment
-Die Pipeline endet nicht bei der Kompilierung. Sie bündelt automatisch das quantisierte Modell (GGUF/RKNN/TensorRT), die kompilierten Binaries und notwendige Laufzeit-Skripte in einem einsatzbereiten ZIP-Archiv.
+* **Socket Proxy:** Isoliert Docker, um Root-Ausbrüche zu verhindern.
+* **Trivy Scanning:** Prüft jedes Build-Image auf CVEs (Sicherheitslücken).
+* **Sanitization:** Telemetrie (Opt-In) entfernt automatisch API-Keys und Benutzerpfade.
 
 ---
 
 ## 📂 Projektstruktur
-
-```text
-.
-├── LLM-Builder.exe       # Hauptanwendung (Windows)
-├── scripts/
-│   ├── setup_windows.py  # Installer & Dependency Checker
-│   ├── setup_linux.sh    # Headless Setup Skript
-│   └── hardware_probe.sh # Auf dem Zielgerät ausführen!
-├── orchestrator/
-│   ├── gui/              # PySide6 GUI Komponenten
-│   ├── Core/             # Logik: Builder, ModelManager, RAGManager, CrawlerManager
-│   └── utils/            # Helfer: Logging, Security, Network
-├── targets/              # Hardware Module
-│   ├── Rockchip/         # Production Ready (RK3588/RK3566)
-│   ├── _template/        # Vorlage für neue Module
-│   └── README.md
-├── community/
-│   └── knowledge/        # Geteilte RAG Knowledge Snapshots (.json)
-├── configs/              # SSOT & Benutzerkonfiguration
-└── output/               # Build-Artefakte landen hier
 ```
+.
+├── Launch-LLM-Conversion-Framework.bat # One-Click Installer & Launcher
+├── assets/                             # UI Ressourcen (Ditto Avatare)
+├── orchestrator/
+│   ├── gui/                            # PySide6 GUI (Chat, Wizard, Monitoring)
+│   ├── Core/                           # Das Gehirn
+│   │   ├── self_healing_manager.py     # Auto-Diagnose
+│   │   ├── consistency_manager.py      # Pre-Flight Checks
+│   │   ├── ditto_manager.py            # Native Inferenz
+│   │   └── rag_manager.py              # Wissensbasis & Snapshots
+├── targets/                            # Hardware Module (Rockchip, Intel, etc.)
+├── community/
+│   └── knowledge/                      # Geteilte RAG Snapshots
+└── output/                             # Golden Artifacts
+```
+
+---
 
 ## 📟 Unterstützte Hardware
 
-| Familie | Status | Chips | NPU/GPU | Features |
-|---------|--------|-------|---------|----------|
-| **Rockchip** | ✅ Production | RK3588, RK3566, RK3576 | NPU (6 TOPS) | RKLLM, RKNN, INT8/W8A8 |
-| **NVIDIA** | ✅ Production | Orin, Xavier, Nano, RTX | CUDA | TensorRT, FP16, INT4 |
-| **Raspberry Pi** | 🚧 Development | Pi 5 + Hailo-8L | Hailo NPU | HailoRT, PCIe Passthrough |
-| **Intel** | 📋 Planned | Core Ultra (Meteor Lake) | NPU | OpenVINO Integration |
-| **RISC-V** | 🌐 Community | StarFive VisionFive 2 | GPU | Vector Extensions (V) |
-| **AMD** | 📋 Planned | Radeon / Ryzen AI | ROCm | HIP/ROCm Support |
-
-**Legende:** ✅ Voll unterstützt | 🚧 Beta/WIP | 📋 Roadmap | 🌐 Community Beitrag
+| Familie | Status | Chips | Features |
+|---------|--------|-------|----------|
+| **Rockchip** | ✅ Production | RK3588, RK3566, RK3576 | RKLLM, RKNN, W8A8 |
+| **NVIDIA** | ✅ Production | Orin, Xavier, RTX 30/40 | TensorRT, CUDA 12 |
+| **Intel** | ✅ Production | Arc A-Series, Core Ultra | IPEX-LLM, OpenVINO |
+| **Raspberry Pi** | 🚧 Beta | Pi 5 + Hailo-8L | HailoRT, PCIe |
+| **RISC-V** | 🌐 Community | VisionFive 2 | Vector Ext. (V) |
 
 ---
 
-## 📊 Performance Erwartungen
+## 📥 Installation & Nutzung
 
-| Modell | Hardware | Quantisierung | RAM Nutzung | Geschw. (tokens/s) |
-|--------|----------|---------------|-------------|---------------------|
-| Granite-350M | RK3566 | Q4_K_M | ~200MB | 8-15 |
-| Llama-2-7B | RK3588 | Q4_K_M | ~4GB | 5-10 |
-| Mistral-7B | RTX 4090 | INT4 (AWQ) | ~5GB | 100+ |
+### Windows (One-Click)
 
----
+1. Laden Sie das Repository herunter.
+2. Doppelklicken Sie auf **Launch-LLM-Conversion-Framework.bat**.
+3. Installiert automatisch Python/Git falls fehlend, richtet die Umgebung ein und aktualisiert sich selbst.
 
-## 📥 Installation & Deployment
-
-### Option A: Windows (GUI Modus)
-Ideal für Workstations. Erfordert WSL2 Backend für Docker.
-```powershell
-# 1. Klonen & Setup
-git clone https://github.com/Smilez1985/llm_conversion_framework.git
-cd llm_conversion_framework
-python scripts/setup_windows.py
-```
-
-Starten Sie **LLM-Builder** von Ihrem Desktop.
-
-> **⚠️ WICHTIG für Windows-Nutzer**
->
-> - Installieren Sie **Docker Desktop** und aktivieren Sie das "WSL 2 Backend".
-> - Stellen Sie sicher, dass Ihr Benutzer in der Gruppe `docker-users` ist.
-> - Wenn Sie NVIDIA GPUs nutzen, installieren Sie das **NVIDIA Container Toolkit** für Windows.
-
-### Option B: Linux (CLI / Headless)
-Optimiert für CI/CD Server (AWS, Hetzner) oder lokale Linux-Maschinen.
+### Linux (Headless / CI)
 ```bash
-# 1. Setup & Dienst starten
-make setup
-make up
-
-# 2. CLI aufrufen
+make setup  # Prüft Gruppen & Rechte
+make up     # Startet Orchestrator
 docker exec -it llm-orchestrator llm-cli
 ```
 
 ---
 
-## 🛠️ Verwendung
-1. GUI Modus (Empfohlen)
-Hardware Prüfen: Führen Sie ./hardware_probe.sh auf Ihrem Zielgerät aus.
+## 🛠️ Der Workflow
 
-Importieren: Öffnen Sie LLM-Builder, gehen Sie zu "Tools" -> "Hardware Profil importieren".
-
-Deep Ingest (v1.6): Wenn Ditto die Hardware nicht kennt, klicken Sie auf "🧠 Deep Ingest". Geben Sie die URL zur offiziellen Doku ein (z.B. docs.rock-chips.com). Ditto crawlt und memoriert diese.
-
-Konfigurieren: Der Wizard wählt automatisch das beste Docker-Image und Flags basierend auf dem gelernten Wissen.
-
-Build: Wählen Sie Ihr Modell (HF-ID) und klicken Sie auf "Build starten".
-
-2. CLI Modus (Automatisierung)
-
-# Beispiel: Cross-Compile Granite-3B für Rockchip RK3588 im RKNN Format
-```bash
-llm-cli build start \
-  --model "IBM/granite-3b-code-instruct" \
-  --target rockchip \
-  --format rknn \
-  --quantization W8A8 \
-  --output-dir ./my-builds
-```
-
-> **💡 TIPP für GPU Builds**
->
-> Um Ihre NVIDIA GPU für die Quantisierung zu nutzen (schneller als CPU), wählen Sie **"GPU nutzen"** in der GUI oder fügen Sie `--gpu` in der CLI hinzu.
->
-> **Voraussetzung:** Sie müssen das **NVIDIA Container Toolkit** auf Ihrem Host installiert haben, und das Target-Modul muss ein CUDA-fähiges Dockerfile verwenden (wird vom KI-Wizard automatisch erkannt).
+1. **Probe:** Führen Sie `./hardware_probe.sh` auf Ihrem Zielgerät aus.
+2. **Import:** Laden Sie das Profil in der GUI.
+3. **Konsultieren:** Fragen Sie Ditto: *"Ist dieses Modell mit meinen 8GB RAM kompatibel?"*
+4. **Bauen:** Wählen Sie Modell & Format (GGUF/RKNN). Das Konsistenz-Gate sichert die Kompatibilität.
+5. **Deployen:** Klicken Sie auf "Deploy to Target", um das Golden Artifact via SSH zu übertragen.
 
 ---
 
-## 🤝 Community & Mitwirken
+## 🤝 Community & Governance
 
-Wir glauben an die Kraft offener Zusammenarbeit.
-
-- **Support erhalten:** Treten Sie unserem [Discord Server](#) bei oder eröffnen Sie eine [GitHub Discussion](https://github.com/Smilez1985/llm_conversion_framework/discussions).
-- **Wissen teilen:** Exportieren Sie Ihre Qdrant Knowledge Snapshots und reichen Sie sie unter `community/knowledge/` ein.
-- **Hardware hinzufügen:** Ein neues Board gefunden? Nutzen Sie den Wizard, um ein Modul zu generieren, und öffnen Sie einen Pull Request.
-
-### Wie man mitwirkt:
-
-1. **Forken** Sie das Repository.
-2. Erstellen Sie einen Feature-Branch (`git checkout -b feature/tolles-feature`).
-3. **Committen** Sie Ihre Änderungen.
-4. **Pushen** Sie den Branch.
-5. Öffnen Sie einen **Pull Request**.
+- **Wissen teilen:** Exportieren Sie Ihre RAG-Snapshots nach `community/knowledge/`, um anderen zu helfen.
+- **Telemetrie:** Opt-In anonyme Berichterstattung hilft uns, Bugs schneller zu beheben. (Wir tracken niemals Prompts oder private Keys).
+- **Support:** Öffnen Sie eine [GitHub Discussion](https://github.com/Smilez1985/llm_conversion_framework/discussions).
 
 ---
 
 ## 📄 Lizenz
 
-Dieses Projekt ist lizenziert unter der **MIT License** - siehe die [LICENSE](LICENSE) Datei für Details.
+Lizenziert unter der **MIT License**. Siehe [LICENSE](LICENSE) für Details.
 
 ---
-## 🙏 Danksagung
 
-- **[llama.cpp](https://github.com/ggerganov/llama.cpp)** - Das Herzstück der Inferenz
-- **[Hugging Face](https://huggingface.co/)** - Für das Modell-Ökosystem
-- **[Ditto](https://github.com/yoheinakajima/ditto)** - AI-Agent Framework für automatische Hardware-Modul-Generierung (entwickelt von [@yoheinakajima](https://github.com/yoheinakajima))
-- **[Qdrant](https://qdrant.tech/)** - Vektor-Datenbank für unsere Lokale Wissensdatenbank
-- **[Radxa Community](https://forum.radxa.com/)** - Für den Support bei der RK3566 Integration
-- **[Docker](https://www.docker.com/)** - Containerization Platform
-- **[PySide6](https://doc.qt.io/qtforpython-6/)** - Professional GUI Framework
-- **[Poetry](https://python-poetry.org/)** - Modern Python Dependency Management
-  
 <div align="center">
 
-[⭐ Star us on GitHub](https://github.com/Smilez1985/llm_conversion_framework) | [📖 Dokumentation](#) | [💬 Discord](#) | [🐦 Twitter](#)
+[⭐ Star us on GitHub](https://github.com/Smilez1985/llm_conversion_framework) | [📖 Dokumentation](#) | [💬 Discord](#)
 
 **Empowering developers to run AI everywhere.**
 

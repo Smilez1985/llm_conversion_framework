@@ -2,6 +2,11 @@
 """
 LLM Cross-Compiler Framework - Main Orchestrator
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+
+Updates v2.0.0:
+- Integrated Self-Healing Manager.
+- Added HEALING status and recovery logic.
+- Enhanced Error Handling in Workflow Execution.
 """
 
 import os
@@ -30,6 +35,12 @@ from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, check_command_exists, safe_json_load
 
+# Self-Healing Integration
+try:
+    from orchestrator.Core.self_healing_manager import SelfHealingManager, HealingProposal
+except ImportError:
+    SelfHealingManager = None
+
 
 # ============================================================================
 # ENUMS AND CONSTANTS
@@ -40,6 +51,7 @@ class OrchestrationStatus(Enum):
     READY = "ready"
     BUILDING = "building"
     PAUSED = "paused"
+    HEALING = "healing" # New Status v2.0
     SHUTTING_DOWN = "shutting_down"
     ERROR = "error"
 
@@ -76,7 +88,7 @@ class BuildRequest:
     created_at: datetime = field(default_factory=datetime.now)
     models: List[str] = field(default_factory=list)
     model_branch: str = "main"
-    targets: List[str] = field(default_factory=list) # MODULAR: List of strings
+    targets: List[str] = field(default_factory=list) 
     target_formats: List[ModelFormat] = field(default_factory=list)
     optimization_level: OptimizationLevel = OptimizationLevel.BALANCED
     quantization_options: List[str] = field(default_factory=list)
@@ -91,6 +103,7 @@ class BuildRequest:
     tags: List[str] = field(default_factory=list)
     description: str = ""
     user_id: Optional[str] = None
+    use_gpu: bool = False
 
 @dataclass 
 class WorkflowProgress:
@@ -111,6 +124,9 @@ class WorkflowProgress:
     logs: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    
+    # Self-Healing v2.0
+    healing_proposal: Optional[Any] = None # Stores HealingProposal object
     
     @property
     def progress_percent(self) -> int:
@@ -155,14 +171,6 @@ class ResourceUsage:
     def can_start_build(self) -> bool:
         return (self.active_builds < self.max_builds and self.is_resource_available(ResourceType.CPU) and self.is_resource_available(ResourceType.MEMORY))
 
-@dataclass
-class EventMessage:
-    event_type: str
-    source: str
-    data: Dict[str, Any]
-    timestamp: datetime = field(default_factory=datetime.now)
-    event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-
 class LLMOrchestrator:
     def __init__(self, config: Optional[FrameworkConfig] = None):
         self.logger = get_logger(__name__)
@@ -171,6 +179,8 @@ class LLMOrchestrator:
         self.build_engine = None
         self.target_manager = None
         self.model_manager = None
+        self.healing_manager = None # v2.0
+        
         self._lock = threading.RLock()
         self._status = OrchestrationStatus.INITIALIZING
         self._shutdown_event = threading.Event()
@@ -191,13 +201,23 @@ class LLMOrchestrator:
         try:
             self.logger.info("Initializing LLM Orchestrator...")
             with self._lock: self._status = OrchestrationStatus.INITIALIZING
+            
             self.framework_manager = FrameworkManager(self.config)
             if not self.framework_manager.initialize(): raise Exception("Framework Manager init failed")
+            
             self.build_engine = BuildEngine(self.framework_manager, self.config.max_concurrent_builds)
+            
+            # Initialize Self-Healing (v2.0)
+            if SelfHealingManager:
+                self.healing_manager = SelfHealingManager(self.framework_manager)
+                self.logger.info("Self-Healing Manager activated")
+
             # Start services
             self._start_monitoring()
+            
             with self._lock: self._status = OrchestrationStatus.READY
             return True
+            
         except Exception as e:
             self._status = OrchestrationStatus.ERROR
             self.logger.error(f"Orchestrator initialization failed: {e}")
@@ -225,27 +245,75 @@ class LLMOrchestrator:
         try:
             configs = []
             for m in request.models:
-                for t in request.targets: # t is String now!
+                for t in request.targets:
                     cfg = BuildConfiguration(
                         build_id=f"bld_{uuid.uuid4().hex[:6]}",
                         timestamp=datetime.now().isoformat(),
                         model_source=m,
-                        target_arch=t, # Pass string
-                        target_format=request.target_formats[0],
+                        target_arch=t,
+                        target_format=request.target_formats[0] if request.target_formats else ModelFormat.GGUF,
                         output_dir=request.output_base_dir,
-                        quantization=request.quantization_options[0] if request.quantization_options else None
+                        quantization=request.quantization_options[0] if request.quantization_options else None,
+                        use_gpu=request.use_gpu
                     )
                     configs.append(cfg)
             
             for c in configs:
-                self.build_engine.build_model(c)
-                wf.completed_builds += 1
+                try:
+                    # Execute Build
+                    build_id = self.build_engine.build_model(c)
+                    
+                    # Wait for completion (Simple polling for CLI/Orchestrator context)
+                    # Note: In real async, we'd use events, but this is the sync executor thread
+                    success = self._wait_for_build(build_id)
+                    
+                    if success:
+                        wf.completed_builds += 1
+                    else:
+                        wf.failed_builds += 1
+                        # --- SELF HEALING TRIGGER (v2.0) ---
+                        if self.healing_manager:
+                            self.logger.warning(f"Build {build_id} failed. Triggering Self-Healing Analysis...")
+                            wf.status = OrchestrationStatus.HEALING
+                            
+                            # Fetch logs from builder
+                            prog = self.build_engine.get_build_status(build_id)
+                            error_log = "\n".join(prog.logs[-50:]) if prog else "Unknown Error"
+                            
+                            proposal = self.healing_manager.analyze_error(error_log, f"Build: {c.target_arch} / {c.model_source}")
+                            if proposal:
+                                wf.healing_proposal = proposal
+                                wf.add_warning(f"Healing Proposal: {proposal.fix_command} ({proposal.error_summary})")
+                                self.logger.info(f"Self-Healing proposed: {proposal.fix_command}")
+                            
+                            # Resume state
+                            wf.status = OrchestrationStatus.BUILDING
+
+                except Exception as e:
+                    self.logger.error(f"Build Execution Error: {e}")
+                    wf.failed_builds += 1
             
             wf.status = OrchestrationStatus.READY
+            wf.end_time = datetime.now()
             
         except Exception as e:
             wf.status = OrchestrationStatus.ERROR
             wf.add_error(str(e))
+
+    def _wait_for_build(self, build_id: str, timeout=3600) -> bool:
+        """Helper to wait for a build in the thread pool."""
+        start = time.time()
+        while time.time() - start < timeout:
+            status = self.build_engine.get_build_status(build_id)
+            if not status: return False
+            
+            if status.status == BuildStatus.COMPLETED:
+                return True
+            if status.status in [BuildStatus.FAILED, BuildStatus.CANCELLED]:
+                return False
+            
+            time.sleep(1)
+        return False
 
     async def get_workflow_status(self, rid: str): return self._workflows.get(rid)
     async def list_workflows(self): return list(self._workflows.values())

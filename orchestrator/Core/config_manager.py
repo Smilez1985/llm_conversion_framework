@@ -6,9 +6,8 @@ DIREKTIVE: Goldstandard, vollständige Implementierung.
 Verwaltet die globale Konfiguration, validiert Eingaben gegen definierte Schemata
 und persistiert Benutzereinstellungen.
 
-Updates v1.6.0:
-- Added Crawler Configuration (Depth, Limits, Robots.txt)
-- Added Input History for UX
+Updates v2.0.0:
+- Added Settings for Chat Context, Telemetry, and Offline Mode.
 """
 
 import os
@@ -91,7 +90,6 @@ class ConfigSchema:
                     if isinstance(value, (tuple, set)):
                         value = list(value)
                     elif isinstance(value, str):
-                        # Simple split for comma lists if string passed
                         value = [v.strip() for v in value.split(',')]
             except (ValueError, TypeError):
                 errors.append(f"Invalid type for {self.field_name}: expected {self.field_type.__name__}")
@@ -258,15 +256,21 @@ class ConfigManager:
             ConfigSchema("ai_security_level", str, False, "STRICT", "AI Data Leakage Protection Level"),
             
             # Local RAG / Vector Database (v1.5.0)
-            ConfigSchema("enable_rag_knowledge", bool, False, False, "Enable local Qdrant Vector DB for AI (Experimental)"),
+            ConfigSchema("enable_rag_knowledge", bool, False, False, "Enable local Qdrant Vector DB for AI"),
             
             # Deep Crawler Settings (v1.6.0)
             ConfigSchema("crawler_respect_robots", bool, False, True, "Respect robots.txt rules"),
-            ConfigSchema("crawler_max_depth", int, False, 2, "Max recursion depth for crawler", ["min:1"]),
-            ConfigSchema("crawler_max_pages", int, False, 50, "Max pages to crawl per session", ["min:1"]),
+            ConfigSchema("crawler_max_depth", int, False, 2, "Max recursion depth for crawler"),
+            ConfigSchema("crawler_max_pages", int, False, 50, "Max pages to crawl per session"),
             
             # UX History
-            ConfigSchema("input_history", list, False, [], "History of user inputs (URLs, etc.)")
+            ConfigSchema("input_history", list, False, [], "History of user inputs"),
+            
+            # v2.0.0: Chat & Brain Settings
+            ConfigSchema("chat_context_limit", int, False, 4096, "Max tokens for chat context history"),
+            ConfigSchema("enable_telemetry", bool, False, False, "Allow anonymous error reporting (GitHub Issues)"),
+            ConfigSchema("offline_mode", bool, False, False, "Force offline mode (no external APIs)"),
+            ConfigSchema("preferred_tiny_model", str, False, "tinyllama_1b", "Preferred local model for offline intelligence")
         ]
         
         for schema in core_schemas:
@@ -414,13 +418,11 @@ class ConfigManager:
     def save_user_config(self):
         """
         Saves current configuration to config.yml (User Scope).
-        Only saves keys that are user-configurable to avoid clutter.
-        Updated v1.6.0: Includes crawler settings and history.
+        Updated v2.0.0: Includes chat, telemetry and offline mode settings.
         """
         config_file = self.config_dir / "config.yml"
         data = {}
         
-        # Load existing to preserve other tools' comments/structure if possible
         if config_file.exists():
             try:
                 with open(config_file, 'r') as f:
@@ -428,20 +430,14 @@ class ConfigManager:
                     if loaded: data = loaded
             except: pass
             
-        # Update with current memory values
         with self._lock:
-            # List of keys to persist
             persist_keys = [
-                "language", 
-                "ai_security_level", 
-                "gui_theme", 
-                "docker_registry", 
-                "enable_rag_knowledge",
-                # New v1.6.0 keys
-                "crawler_respect_robots",
-                "crawler_max_depth",
-                "crawler_max_pages",
-                "input_history"
+                "language", "ai_security_level", "gui_theme", "docker_registry",
+                "enable_rag_knowledge", 
+                "crawler_respect_robots", "crawler_max_depth", "crawler_max_pages",
+                "input_history",
+                # v2.0
+                "chat_context_limit", "enable_telemetry", "offline_mode", "preferred_tiny_model"
             ]
             
             for key, val in self.config_values.items():

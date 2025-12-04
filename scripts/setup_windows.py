@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.14 FINAL)
-DIREKTIVE: Goldstandard. KORRIGIERTER COM-THREAD-FEHLER.
-  FIX: Fügt pythoncom.CoInitialize() zum Installer-Thread hinzu, um den Fehler (-2147221008) zu beheben.
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.16 FINAL)
+DIREKTIVE: Goldstandard. KORRIGIERTER PFAD-MERGE.
+  FIX: Konsolidiert CHECKFILE_DIR mit DEFAULT_DATA_PATH, um nur einen Datenordner zu erstellen.
 """
 
 import os
@@ -16,7 +16,7 @@ import winreg
 import webbrowser
 import yaml
 from pathlib import Path
-import pythoncom # NEU: Für die COM-Initialisierung
+import pythoncom 
 
 # Dependencies (vom Launcher vorinstalliert oder im Host-Environment erwartet)
 try:
@@ -40,16 +40,14 @@ APP_TITLE = "LLM Conversion Framework"
 # Deployment Name für den Launcher (Muss dem Quellnamen entsprechen, um Altlasten zu vermeiden)
 LAUNCHER_FILE_NAME = "start-llm_convertion_framework.bat"
 
-# Zentrale Config (Pointer)
-CHECKFILE_DIR = Path("C:/Users/Public/Documents/llm_conversion_framework")
-CHECKFILE_PATH = CHECKFILE_DIR / "checkfile.txt"
-
 # Standard-Installationspfad
 DEFAULT_APP_PATH = Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / APP_NAME
 # KORREKTUR: Hart codierter Pfad C:\Users\Public\Documents\LLM-CF für universelle Schreibrechte.
 DEFAULT_DATA_PATH = Path("C:/Users/Public/Documents") / APP_NAME 
 
-SOURCE_DIR = Path(__file__).resolve().parent.parent
+# Zentrale Config (Pointer) - Wird auf den korrekten DEFAULT_DATA_PATH gesetzt.
+CHECKFILE_DIR = DEFAULT_DATA_PATH 
+CHECKFILE_PATH = CHECKFILE_DIR / "checkfile.txt"
 
 # NEU: Trennung der Verzeichnisse nach Zielort
 CODE_DIRS = ["orchestrator", "configs", "assets", "Docker Setup"] # Geht in den App Path
@@ -63,7 +61,7 @@ IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "bui
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_TITLE} Installer v2.14")
+        self.title(f"{APP_TITLE} Installer v2.16")
         self.geometry("800x700")
         self.resizable(True, True)
         
@@ -241,7 +239,7 @@ class InstallerGUI(tk.Tk):
             
             # 2. Copy Content: Source Code in den App-Pfad
             self.log("Kopiere Framework-Dateien in den App-Pfad...")
-            total_items = len(CODE_DIRS) + len(DATA_TEMPLATES_DIRS) + len(INCLUDE_APP_FILES) + len(INCLUDE_LAUNCHER_DOCS) + 3 # +3 fuer Launcher, Uninstaller, Readme/License
+            total_items = len(CODE_DIRS) + len(DATA_TEMPLATES_DIRS) + len(INCLUDE_APP_FILES) + len(INCLUDE_LAUNCHER_DOCS) + 3 
             current = 0
             
             # Kopiere Code-Ordner (orchestrator, configs, assets, Docker Setup)
@@ -271,7 +269,7 @@ class InstallerGUI(tk.Tk):
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
             
-            # *** KORREKTUR: Launcher kopieren (KEIN UMBENENNEN) ***
+            # Launcher kopieren
             SRC_LAUNCHER = SOURCE_DIR / "scripts" / LAUNCHER_FILE_NAME
             if SRC_LAUNCHER.exists():
                 shutil.copy2(SRC_LAUNCHER, app_dir / LAUNCHER_FILE_NAME)
@@ -350,16 +348,25 @@ class InstallerGUI(tk.Tk):
 
             # 7. Checkfile (Pointer)
             self.log("Finalisiere Registrierung...")
-            if not CHECKFILE_DIR.exists():
-                CHECKFILE_DIR.mkdir(parents=True, exist_ok=True)
             
+            # Pfad der Checkfile, die im Data-Ordner liegen soll
+            current_checkfile_path = data_dir / "checkfile.txt"
+            
+            # FIX: Entfernt schützende Attribute, falls das File existiert (um Errno 13 zu vermeiden)
+            if current_checkfile_path.exists():
+                try:
+                    # 0x00 = FILE_ATTRIBUTE_NORMAL (Clears read-only, hidden, etc.)
+                    ctypes.windll.kernel32.SetFileAttributesW(str(current_checkfile_path), 0x00)
+                except Exception as attr_e:
+                    self.log(f"WARNUNG: Konnte Attribute nicht zurücksetzen: {attr_e}")
+
             # Checkfile zeigt auf den App-Pfad (Source Code + VENV)
-            with open(CHECKFILE_PATH, "w") as f:
+            with open(current_checkfile_path, "w") as f:
                 f.write(f'Path="{app_dir}"') 
             
             # Nur Checkfile verstecken
             try:
-                ctypes.windll.kernel32.SetFileAttributesW(str(CHECKFILE_PATH), 0x02)
+                ctypes.windll.kernel32.SetFileAttributesW(str(current_checkfile_path), 0x02)
             except: pass
 
             self.progress['value'] = 85

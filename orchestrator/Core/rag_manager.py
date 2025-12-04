@@ -8,9 +8,9 @@ Verwaltet die lokale Vektor-Datenbank (Qdrant).
 Zuständig für Ingestion (Doku -> Vektoren) und Retrieval (Suche -> Kontext).
 Nutzt 'litellm' für Embeddings, um Provider-Agnostik zu wahren.
 
-Updates v1.6.0:
-- Integration des CrawlerManager für "Deep Ingest".
-- Neue Methode `ingest_url` für Webseiten und PDFs.
+Updates v2.0.0:
+- Added 'ingest_codebase' for Self-Awareness (scanning own source code).
+- Maintained Crawler Integration (v1.6.0).
 """
 
 import uuid
@@ -18,7 +18,8 @@ import time
 import logging
 import json
 import os
-from typing import List, Dict, Optional, Any
+from pathlib import Path
+from typing import List, Dict, Optional, Any, Union
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -45,7 +46,6 @@ except ImportError:
 
 COLLECTION_NAME = "framework_knowledge"
 VECTOR_SIZE = 1536  # Standard für viele Modelle (z.B. OpenAI, Nomic)
-# Fallback Embedding Model, falls nichts konfiguriert ist
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small" 
 
 @dataclass
@@ -76,13 +76,11 @@ class RAGManager:
     def _connect(self) -> bool:
         """
         Versucht, eine Verbindung zum Qdrant-Container herzustellen.
-        Nutzt Retry-Logik, da der Container evtl. gerade erst startet.
         """
         if self._connected and self.client:
             return True
 
-        # URL aus Docker-Netzwerk (intern) oder Localhost (falls GUI lokal läuft)
-        # Wir versuchen beide gängigen Adressen
+        # URL aus Docker-Netzwerk (intern) oder Localhost
         potential_urls = ["http://localhost:6333", "http://llm-qdrant:6333"]
         
         for url in potential_urls:
@@ -122,15 +120,11 @@ class RAGManager:
             self.logger.error(f"Failed to ensure collection: {e}")
 
     def _get_embedding(self, text: str) -> List[float]:
-        """
-        Generiert Embeddings mittels litellm.
-        Versucht, den konfigurierten Provider zu nutzen oder fällt auf OpenAI zurück.
-        """
+        """Generiert Embeddings mittels litellm."""
         model = self.config.get("ai_embedding_model", DEFAULT_EMBEDDING_MODEL)
-        api_key = os.environ.get("OPENAI_API_KEY", "sk-dummy") # Fallback für LocalLLM
+        api_key = os.environ.get("OPENAI_API_KEY", "sk-dummy")
         
         try:
-            # Clean text to avoid newline issues
             text = text.replace("\n", " ")
             response = litellm.embedding(
                 model=model,
@@ -142,10 +136,8 @@ class RAGManager:
             self.logger.error(f"Embedding generation failed ({model}): {e}")
             raise e
 
-    def _chunk_text(self, text: str, chunk_size: int = 1000, overlap: int = 100) -> List[str]:
-        """
-        Zerlegt Text in überlappende Chunks für besseren Kontext.
-        """
+    def _chunk_text(self, text: str, chunk_size: int = 1500, overlap: int = 200) -> List[str]:
+        """Zerlegt Text in überlappende Chunks."""
         chunks = []
         start = 0
         text_len = len(text)
@@ -155,17 +147,14 @@ class RAGManager:
             chunk = text[start:end]
             chunks.append(chunk)
             start += (chunk_size - overlap)
-        
         return chunks
 
     def ingest_document(self, source_name: str, content: str, metadata: Dict[str, Any] = None) -> bool:
-        """
-        Indiziert ein Dokument in der Vektor-Datenbank.
-        """
+        """Indiziert ein Dokument in der Vektor-Datenbank."""
         if not self._connect(): return False
         if not content.strip(): return False
 
-        self.logger.info(f"Ingesting document: {source_name}...")
+        # self.logger.debug(f"Ingesting document: {source_name}...")
         
         chunks = self._chunk_text(content)
         points = []
@@ -178,7 +167,6 @@ class RAGManager:
             try:
                 vector = self._get_embedding(chunk)
                 
-                # Payload construction
                 payload = base_meta.copy()
                 payload["content"] = chunk
                 payload["chunk_index"] = i
@@ -189,7 +177,7 @@ class RAGManager:
                     payload=payload
                 ))
             except Exception as e:
-                self.logger.warning(f"Skipping chunk {i} due to embedding error: {e}")
+                self.logger.warning(f"Skipping chunk {i}: {e}")
 
         if points:
             try:
@@ -197,18 +185,14 @@ class RAGManager:
                     collection_name=COLLECTION_NAME,
                     points=points
                 )
-                self.logger.info(f"Successfully indexed {len(points)} chunks for {source_name}")
                 return True
             except Exception as e:
                 self.logger.error(f"Qdrant Upsert failed: {e}")
                 return False
         return False
 
+    # --- V1.6.0: DEEP INGEST (WEB/PDF) ---
     def ingest_url(self, url: str) -> Dict[str, Any]:
-        """
-        Startet den 'Deep Ingest' Prozess für eine URL mittels CrawlerManager.
-        Speichert Ergebnisse direkt in Qdrant.
-        """
         if not CrawlerManager:
             return {"success": False, "message": "Crawler module missing"}
             
@@ -218,37 +202,90 @@ class RAGManager:
         try:
             crawler = CrawlerManager(self.framework)
             self.logger.info(f"Invoking Crawler for {url}...")
-            
-            # 1. Crawl
             documents = crawler.crawl(url)
             
             if not documents:
                 return {"success": False, "message": "No documents found", "count": 0}
 
-            # 2. Ingest Loop
             success_count = 0
             for doc in documents:
-                # Nutze die Metadaten vom Crawler (Source URL, Content Type)
                 meta = doc.metadata or {}
-                meta["root_url"] = url # Tagging für späteres Filtern
-                
+                meta["root_url"] = url
                 if self.ingest_document(meta.get("source", url), doc.page_content, meta):
                     success_count += 1
             
-            return {
-                "success": True, 
-                "message": f"Ingested {success_count} documents", 
-                "count": success_count
-            }
+            return {"success": True, "message": f"Ingested {success_count} documents", "count": success_count}
 
         except Exception as e:
             self.logger.error(f"Deep Ingest failed: {e}")
             return {"success": False, "message": str(e)}
 
-    def search(self, query: str, limit: int = 3, score_threshold: float = 0.7) -> List[SearchResult]:
+    # --- V2.0.0: CODEBASE INGEST (SELF-AWARENESS) ---
+    def ingest_codebase(self, root_path: Union[str, Path] = "/app") -> Dict[str, Any]:
         """
-        Semantische Suche nach Kontext für eine Query.
+        Scans the local codebase and ingests it into Qdrant.
+        Allows Ditto to answer questions about the framework itself.
         """
+        if not self._connect():
+             return {"success": False, "message": "Qdrant not connected"}
+
+        root = Path(root_path)
+        if not root.exists():
+             return {"success": False, "message": f"Path not found: {root}"}
+
+        self.logger.info(f"Starting Codebase Ingest from: {root}")
+        
+        # Filter configuration
+        supported_ext = {'.py', '.sh', '.yml', '.yaml', '.json', '.md', 'Dockerfile'}
+        ignore_dirs = {'.git', '__pycache__', 'venv', '.venv', 'node_modules', 'dist', 'build', 'egg-info'}
+        
+        total_files = 0
+        success_count = 0
+        
+        for root_dir, dirs, files in os.walk(root):
+            # Modify dirs in-place to skip ignored
+            dirs[:] = [d for d in dirs if d not in ignore_dirs]
+            
+            for file in files:
+                file_path = Path(root_dir) / file
+                
+                # Check extension or exact filename (like Dockerfile)
+                if file_path.suffix in supported_ext or file_path.name in supported_ext:
+                    try:
+                        # Read content
+                        content = file_path.read_text(encoding='utf-8', errors='ignore')
+                        if not content.strip(): continue
+                        
+                        # Metadata
+                        rel_path = file_path.relative_to(root)
+                        meta = {
+                            "source": "codebase",
+                            "type": "internal_code",
+                            "filepath": str(rel_path),
+                            "filename": file,
+                            "extension": file_path.suffix
+                        }
+                        
+                        # Add filename header to content for better context
+                        contextualized_content = f"FILE: {rel_path}\n\n{content}"
+                        
+                        if self.ingest_document(f"code:{rel_path}", contextualized_content, meta):
+                            success_count += 1
+                        total_files += 1
+                        
+                    except Exception as e:
+                        self.logger.warning(f"Failed to ingest {file}: {e}")
+
+        msg = f"Ingested {success_count}/{total_files} code files from {root}."
+        self.logger.info(msg)
+        return {
+            "success": True,
+            "message": msg,
+            "count": success_count
+        }
+
+    def search(self, query: str, limit: int = 3, score_threshold: float = 0.65) -> List[SearchResult]:
+        """Semantische Suche."""
         if not self._connect(): return []
 
         try:
@@ -270,8 +307,6 @@ class RAGManager:
                     source=payload.get("source", "unknown"),
                     metadata=payload
                 ))
-            
-            self.logger.debug(f"Search '{query}' returned {len(results)} hits")
             return results
 
         except Exception as e:
@@ -279,7 +314,7 @@ class RAGManager:
             return []
 
     def clear_knowledge_base(self) -> bool:
-        """Löscht alle gespeicherten Vektoren (Reset)."""
+        """Löscht alle Vektoren."""
         if not self._connect(): return False
         try:
             self.client.delete_collection(COLLECTION_NAME)
@@ -291,7 +326,6 @@ class RAGManager:
             return False
 
     def get_status(self) -> Dict[str, Any]:
-        """Liefert Status-Metriken für die GUI."""
         status = {"connected": False, "vector_count": 0}
         if self._connect():
             try:
@@ -299,6 +333,5 @@ class RAGManager:
                 status["connected"] = True
                 status["vector_count"] = info.points_count
                 status["status"] = info.status.name
-            except:
-                pass
+            except: pass
         return status

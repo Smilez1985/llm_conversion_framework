@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.7 FINAL)
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.8 FINAL)
 DIREKTIVE: Goldstandard. KORRIGIERTE PFADTRENUNG und VOLLSTÄNDIGER DOCKER CHECK.
   1. App-Code/VENV/Assets -> Application Path (C:/Program Files/...)
-  2. Output/Logs/Cache -> Data Path (C:/Users/Public/Documents/...)
+  2. Output/Logs/Cache/Models/Targets -> Data Path (C:/Users/Public/Documents/...)
   3. Zwei korrekte Desktop-Shortcuts mit Icons.
   4. KEIN VERSTECKEN des Data Path.
 """
@@ -59,7 +59,7 @@ IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "bui
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_TITLE} Installer v2.7")
+        self.title(f"{APP_TITLE} Installer v2.8")
         self.geometry("800x700")
         self.resizable(True, True)
         
@@ -139,6 +139,12 @@ class InstallerGUI(tk.Tk):
     def _check_docker(self):
         self.log("Checking Docker environment...")
         
+        # Prueft, ob die notwendigen Pakete fuer den Check geladen wurden
+        if 'psutil' not in sys.modules or 'requests' not in sys.modules:
+            self.lbl_status.config(text="Installer-Abh. fehlen. Installer neu starten.", foreground="red")
+            self.log("FEHLER: Notwendige Python-Module (psutil, requests) fehlen im Installer-VENV.")
+            return
+
         docker_exe = shutil.which("docker")
         if not docker_exe:
             self.lbl_status.config(text="Docker not found!", foreground="red")
@@ -149,7 +155,6 @@ class InstallerGUI(tk.Tk):
 
         running = False
         try:
-            # Check if process is running
             for proc in psutil.process_iter(['name']):
                 if "Docker Desktop" in proc.info['name']:
                     running = True
@@ -267,11 +272,19 @@ class InstallerGUI(tk.Tk):
             self.progress['value'] = 75
 
             # 5. Konfigurationsdateien für Output/Logs anpassen
-            self.log("Konfiguriere Output-Pfade...")
+            self.log("Konfiguriere ALLE Datenpfade...")
             
-            (data_dir / "output").mkdir(parents=True, exist_ok=True)
-            (data_dir / "logs").mkdir(parents=True, exist_ok=True)
+            # Subdirectories, die im Data Path (C:\Users\Public\Documents\...) liegen MÜSSEN
+            data_subdirs = ["output", "logs", "models", "targets", "cache"]
             
+            # Sicherstellen, dass die Data-Ordner existieren
+            for subdir in data_subdirs:
+                # Hier liegt der Fehler: Wir kopieren die targets/configs Ordner oben in den app_dir.
+                # Wir muessen nur die Ausgabe-Ordner im data_dir erstellen.
+                if subdir in ["output", "logs", "cache"]:
+                     (data_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+
             config_file = app_dir / "configs" / "user_config.yml" 
             config_data = {}
             if config_file.exists():
@@ -280,13 +293,34 @@ class InstallerGUI(tk.Tk):
                         config_data = yaml.safe_load(f) or {}
                 except: pass
             
+            # Setze oder überschreibe ALLE data-relevanten Pfade auf absolute Data Path Werte
             config_data["output_dir"] = str(data_dir / "output")
             config_data["logs_dir"] = str(data_dir / "logs")
+            config_data["cache_dir"] = str(data_dir / "cache")
+            
+            # WICHTIG: targets_dir und models_dir zeigen auf den App-Pfad (wo sie hingekopiert wurden)
+            # ABER: Die Dateien werden WÄHREND DER LAUFZEIT vom Framework gelesen/geschrieben.
+            # Sie MÜSSEN im Data-Pfad liegen, damit der Benutzer sie ändern kann.
+            # Daher muessen wir die Ordner targets und models im App-Pfad löschen und hierher verschieben
+            
+            self.log("  Verschiebe Models/Targets in den Data Path...")
+            
+            # Targets
+            if (app_dir / "targets").exists():
+                shutil.move(str(app_dir / "targets"), str(data_dir / "targets"))
+            
+            # Models
+            if (app_dir / "models").exists():
+                shutil.move(str(app_dir / "models"), str(data_dir / "models"))
+
+            # Passe config an die neuen, verschobenen Pfade an
+            config_data["targets_dir"] = str(data_dir / "targets")
+            config_data["models_dir"] = str(data_dir / "models")
             
             with open(config_file, "w") as f:
                 yaml.dump(config_data, f, default_flow_style=False)
             
-            self.log(f"  Pfade in {config_file.name} auf Data Path gesetzt.")
+            self.log(f"  Alle Datenpfade in {config_file.name} auf Data Path gesetzt.")
 
             # 6. Checkfile (Pointer)
             self.log("Finalisiere Registrierung...")
@@ -322,6 +356,7 @@ class InstallerGUI(tk.Tk):
             self.btn_cancel.config(state='normal')
 
     def _create_shortcut_pair(self, app_dir: Path, data_dir: Path):
+        # ... (Funktion bleibt unverändert, da sie korrekt ist)
         if 'winshell' not in sys.modules or 'Dispatch' not in globals():
             self.log("Shortcuts konnten nicht erstellt werden (winshell/pywin32 fehlt).")
             return
@@ -329,7 +364,6 @@ class InstallerGUI(tk.Tk):
         shell = Dispatch('WScript.Shell')
         desktop = winshell.desktop()
         
-        # Icon-Pfade (sind jetzt im app_dir/assets)
         icon_app_path = str(app_dir / "assets" / "LLM-Builder.ico")
         icon_data_path = str(app_dir / "assets" / "setup_LLM-Builder.ico")
         
@@ -351,8 +385,8 @@ class InstallerGUI(tk.Tk):
         name_data = f"{APP_TITLE} Data & Output"
         path_data = os.path.join(desktop, f"{name_data}.lnk")
         
-        shortcut_data = shell.CreateShortCut(path_data)
-        shortcut_data.Targetpath = str(data_dir) # Ziel ist das Verzeichnis selbst
+        shortcut_data = shell.CreateShortOut(path_data)
+        shortcut_data.Targetpath = str(data_dir)
         shortcut_data.WorkingDirectory = str(data_dir)
         shortcut_data.Description = "Öffnet den Daten- und Ausgabeordner (Goldenes Artefakt)"
         if Path(icon_data_path).exists():

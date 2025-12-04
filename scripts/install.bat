@@ -5,62 +5,54 @@ echo ===================================================
 echo      LLM Conversion Framework - Installation
 echo ===================================================
 
-:: --- PFAD KORREKTUR ---
-:: %~dp0 = Pfad dieses Skripts (...\scripts\)
-:: Wir wechseln eine Ebene hoch (..) ins Root-Verzeichnis.
+:: 1. ins Root wechseln und Pfad speichern
 pushd "%~dp0.."
+set "ROOT_DIR=%CD%"
 
-echo [INFO] Arbeitsverzeichnis gesetzt auf: %CD%
+echo [INFO] Installations-Ziel: "%ROOT_DIR%"
 
-:: -- Konfiguration --
-set "SOURCE_SCRIPT=scripts\start-llm_convertion_framework.bat"
-set "DEST_SCRIPT=start-llm_convertion_framework.bat"
-set "ICON_PATH=assets\app_icon.ico"
-set "SHORTCUT_NAME=LLM Conversion Framework.lnk"
+:: 2. Data Ordner & Checkfile (mit absoluten Pfaden)
+if not exist "%ROOT_DIR%\data" (
+    mkdir "%ROOT_DIR%\data"
+)
+:: Erst sichtbar machen, falls versteckt, um Zugriffsprobleme zu vermeiden
+attrib -h "%ROOT_DIR%\data" >nul 2>&1
 
-:: 1. Data Ordner & Checkfile
-echo [1/3] Konfiguriere Daten-Ordner...
+:: Datei explizit erstellen
+echo Verified > "%ROOT_DIR%\data\checkfile.txt"
 
-if not exist "data" mkdir "data"
-attrib -h "data"
+:: Attribute setzen: Ordner sichtbar, Datei versteckt
+attrib -h "%ROOT_DIR%\data"
+attrib +h "%ROOT_DIR%\data\checkfile.txt"
 
-:: Checkfile erstellen und verstecken
-if not exist "data\checkfile.txt" echo.> "data\checkfile.txt"
-attrib +h "data\checkfile.txt"
-echo       [OK] Data-Ordner und verstecktes Checkfile bereit.
-
-:: 2. Launcher kopieren
-echo [2/3] Installiere Start-Skript...
-
-if exist "%SOURCE_SCRIPT%" (
-    copy /Y "%SOURCE_SCRIPT%" "%DEST_SCRIPT%" >nul
-    echo       [OK] Start-Skript ins Hauptverzeichnis kopiert.
+if exist "%ROOT_DIR%\data\checkfile.txt" (
+    echo [OK] Checkfile erstellt: %ROOT_DIR%\data\checkfile.txt
 ) else (
-    echo       [FEHLER] Quell-Datei '%SOURCE_SCRIPT%' nicht gefunden!
-    echo       Bitte sicherstellen, dass wir im richtigen Ordner sind.
-    popd
+    echo [FEHLER] Checkfile konnte nicht erstellt werden!
     pause
     exit /b
 )
 
-:: 3. Desktop Verknüpfung erstellen
-echo [3/3] Erstelle Desktop-Verknuepfung...
+:: 3. Launcher kopieren
+set "SOURCE=%~dp0start-llm_convertion_framework.bat"
+set "DEST=%ROOT_DIR%\start-llm_convertion_framework.bat"
 
-set "TARGET_PATH=%CD%\%DEST_SCRIPT%"
-set "ICON_FULL_PATH=%CD%\%ICON_PATH%"
-set "DESKTOP_DIR=%USERPROFILE%\Desktop"
-set "WORK_DIR=%CD%"
+if exist "%SOURCE%" (
+    copy /Y "%SOURCE%" "%DEST%" >nul
+    echo [OK] Launcher ins Root kopiert.
+) else (
+    echo [FEHLER] Launcher-Vorlage nicht gefunden in: "%SOURCE%"
+    pause
+    exit /b
+)
 
-:: WICHTIG: Alles in einer Zeile, um "^"-Fehler zu vermeiden
-powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%DESKTOP_DIR%\%SHORTCUT_NAME%'); $s.TargetPath = '!TARGET_PATH!'; $s.WorkingDirectory = '!WORK_DIR!'; $s.IconLocation = '!ICON_FULL_PATH!'; $s.Save()"
+:: 4. Verknuepfung erstellen (PowerShell Einzeiler - KEINE Umbrueche!)
+echo [INFO] Erstelle Desktop-Icon...
+set "LNK_PATH=%USERPROFILE%\Desktop\LLM Conversion Framework.lnk"
+set "ICON_PATH=%ROOT_DIR%\assets\app_icon.ico"
 
-echo       [OK] Verknuepfung auf dem Desktop erstellt.
+powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%LNK_PATH%'); $s.TargetPath = '%DEST%'; $s.WorkingDirectory = '%ROOT_DIR%'; $s.IconLocation = '%ICON_PATH%'; $s.Save()"
 
-:: Zurück zum Ursprung
-popd
-
+echo [OK] Installation sauber abgeschlossen.
 echo.
-echo ===================================================
-echo      Installation erfolgreich!
-echo ===================================================
-timeout /t 5 >nul
+pause

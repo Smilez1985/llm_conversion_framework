@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.1 Fixed)
-DIREKTIVE: Goldstandard, Robustness, Registry-Based Config.
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.2 Fixed)
+DIREKTIVE: Goldstandard, Robustness, User Experience.
 """
 
 import os
@@ -11,7 +11,7 @@ import subprocess
 import threading
 import time
 import ctypes
-import winreg  # NATIVE WINDOWS REGISTRY SUPPORT
+import winreg
 from pathlib import Path
 
 # GUI Imports
@@ -24,8 +24,7 @@ REG_PATH = r"Software\Smilez1985\LLM-Framework"
 
 # Standard-Pfade
 DEFAULT_APP_PATH = Path(os.environ.get("LocalAppData", "C:")) / "Programs" / APP_NAME
-# Wir nutzen LocalAppData statt ProgramFiles, um Admin-Zwang zu vermeiden (User-Mode Install)
-# Wer Admin ist, kann es ändern.
+DEFAULT_DATA_PATH = Path(os.environ.get("PUBLIC", "C:\\Users\\Public")) / "Documents" / APP_NAME
 
 SOURCE_DIR = Path(__file__).resolve().parent.parent
 
@@ -37,7 +36,7 @@ IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "bui
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME} Installer v2.1")
+        self.title(f"{APP_NAME} Installer v2.2")
         self.geometry("750x600")
         self.resizable(True, True)
         
@@ -55,7 +54,7 @@ class InstallerGUI(tk.Tk):
         lbl_title.pack(anchor=tk.W)
         
         # Installation Directory
-        grp_app = ttk.LabelFrame(main_frame, text="Installation Directory", padding="10")
+        grp_app = ttk.LabelFrame(main_frame, text="Application Directory (Launcher)", padding="10")
         grp_app.pack(fill=tk.X, pady=5)
         
         self.var_app_path = tk.StringVar(value=str(DEFAULT_APP_PATH))
@@ -63,6 +62,16 @@ class InstallerGUI(tk.Tk):
         e_app.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         btn_app = ttk.Button(grp_app, text="Browse...", command=lambda: self._browse(self.var_app_path))
         btn_app.pack(side=tk.RIGHT)
+        
+        # Data Directory
+        grp_data = ttk.LabelFrame(main_frame, text="Data Directory (Core, Targets, VENV)", padding="10")
+        grp_data.pack(fill=tk.X, pady=5)
+        
+        self.var_data_path = tk.StringVar(value=str(DEFAULT_DATA_PATH))
+        e_data = ttk.Entry(grp_data, textvariable=self.var_data_path)
+        e_data.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        btn_data = ttk.Button(grp_data, text="Browse...", command=lambda: self._browse(self.var_data_path))
+        btn_data.pack(side=tk.RIGHT)
         
         # Options
         opt_frame = ttk.Frame(main_frame)
@@ -107,115 +116,140 @@ class InstallerGUI(tk.Tk):
 
     def _start_install(self):
         target_dir = Path(self.var_app_path.get())
+        data_dir = Path(self.var_data_path.get())
+        
         self.btn_install.config(state='disabled')
         self.btn_cancel.config(state='disabled')
         self.progress['value'] = 0
-        threading.Thread(target=self._install_process, args=(target_dir,), daemon=True).start()
+        threading.Thread(target=self._install_process, args=(target_dir, data_dir), daemon=True).start()
 
-    def _install_process(self, target: Path):
+    def _install_process(self, app_dir: Path, data_dir: Path):
         try:
-            self.log(f"Installing to: {target}")
+            self.log(f"Starting installation...")
             
-            if not target.exists(): target.mkdir(parents=True, exist_ok=True)
+            # 1. Create Directories
+            self.log("Creating directories...")
+            if not app_dir.exists(): app_dir.mkdir(parents=True, exist_ok=True)
+            if not data_dir.exists(): data_dir.mkdir(parents=True, exist_ok=True)
             
-            # 1. Copy Files
+            # Hide Data Dir
+            try:
+                ctypes.windll.kernel32.SetFileAttributesW(str(data_dir), 0x02)
+            except: pass
+
+            # 2. Copy Files
             self.log("Copying files...")
             total_items = len(INCLUDE_DATA_DIRS) + len(INCLUDE_DATA_FILES) + len(INCLUDE_APP_FILES)
             current = 0
             
-            # Dirs
             for item in INCLUDE_DATA_DIRS:
                 src = SOURCE_DIR / item
-                dst = target / item
+                dst = data_dir / item
                 if src.exists():
                     if dst.exists(): shutil.rmtree(dst)
                     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*IGNORE_PATTERNS))
                 current += 1
                 self.progress['value'] = (current / total_items) * 50
             
-            # Data Files
             for item in INCLUDE_DATA_FILES:
                 src = SOURCE_DIR / item
-                dst = target / item
+                dst = data_dir / item
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
                 
-            # App Files
             for item in INCLUDE_APP_FILES:
                 src = SOURCE_DIR / item
-                dst = target / item
+                dst = app_dir / item
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
 
-            # 2. Setup VENV
+            # 3. Setup VENV
             self.log("Setting up Python Environment...")
-            venv_path = target / ".venv"
-            python_exe = sys.executable
-            subprocess.run([python_exe, "-m", "venv", str(venv_path)], check=True)
+            venv_path = data_dir / ".venv"
+            subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
             
+            # 4. Dependencies
             self.log("Installing dependencies...")
             pip_exe = venv_path / "Scripts" / "pip.exe"
-            cwd = str(target)
+            cwd = str(data_dir)
+            
+            subprocess.run([str(pip_exe), "install", "--upgrade", "pip"], 
+                         capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            
             subprocess.run([str(pip_exe), "install", "."], cwd=cwd, 
                          capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
             
             self.progress['value'] = 90
 
-            # 3. Create Shortcuts (Desktop & Start Menu)
+            # 5. Shortcuts
             if self.var_desktop.get():
-                self._create_shortcut(target, "Desktop")
-            
+                self._create_shortcut(app_dir, "Desktop")
             if self.var_startmenu.get():
-                self._create_shortcut(target, "StartMenu")
+                self._create_shortcut(app_dir, "StartMenu")
 
-            # 4. Write Registry Key (The reliable Marker)
+            # 6. Registry
             self.log("Registering application...")
             try:
                 key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_PATH)
-                winreg.SetValueEx(key, "InstallPath", 0, winreg.REG_SZ, str(target))
+                winreg.SetValueEx(key, "InstallPath", 0, winreg.REG_SZ, str(app_dir))
                 winreg.CloseKey(key)
             except Exception as e:
                 self.log(f"Registry Warning: {e}")
 
             self.progress['value'] = 100
-            self.log("Done!")
-            messagebox.showinfo("Success", f"Installation complete.\nYou can find the app on your Desktop.")
-            self.quit()
+            self.log("Installation Complete!")
+            
+            # UX Fix: Nicht schließen, Button aktivieren
+            messagebox.showinfo("Success", f"Installation complete.\nYou can now close this window.")
+            self.btn_cancel.config(text="Close", state='normal', command=self.destroy)
             
         except Exception as e:
             self.log(f"ERROR: {e}")
             messagebox.showerror("Error", str(e))
             self.btn_install.config(state='normal')
+            self.btn_cancel.config(state='normal')
 
     def _create_shortcut(self, target_dir: Path, location: str):
+        # AUTO-INSTALL DEPENDENCY CHECK
         try:
             import winshell
             from win32com.client import Dispatch
+        except ImportError:
+            self.log("Installing pywin32/winshell for shortcuts...")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "pywin32", "winshell"])
+                import winshell
+                from win32com.client import Dispatch
+            except Exception as e:
+                self.log(f"Failed to install shortcut dependencies: {e}")
+                return
 
+        try:
             shell = Dispatch('WScript.Shell')
             
             if location == "Desktop":
                 folder = winshell.desktop()
             else:
-                folder = winshell.programs() # Start Menu
+                folder = winshell.programs()
 
             shortcut_path = os.path.join(folder, f"{APP_NAME}.lnk")
             target_bat = str(target_dir / "Launch-LLM-Conversion-Framework.bat")
-            
             icon_path = str(target_dir / "assets" / "logo.ico")
-            if not os.path.exists(icon_path): icon_path = target_bat # Fallback
+            
+            # Check for icon in DATA dir if not in APP dir
+            if not os.path.exists(icon_path):
+                 # Try to find data dir via registry or assumption? 
+                 # Simplest: Look relative to this script if running from source
+                 pass 
 
             shortcut = shell.CreateShortCut(shortcut_path)
             shortcut.Targetpath = target_bat
             shortcut.WorkingDirectory = str(target_dir)
-            shortcut.IconLocation = icon_path
+            if os.path.exists(icon_path):
+                shortcut.IconLocation = icon_path
             shortcut.save()
             self.log(f"Shortcut created in {location}")
             
-        except ImportError:
-            self.log("Warning: pywin32/winshell missing. Cannot create shortcut.")
-            # Try PowerShell fallback if pywin32 fails?
-            # For now, we log warning. 'pip install pywin32' is in requirements?
         except Exception as e:
             self.log(f"Shortcut Error ({location}): {e}")
 

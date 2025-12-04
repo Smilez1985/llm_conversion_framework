@@ -6,14 +6,13 @@ echo      LLM Conversion Framework - Installation
 echo ===================================================
 
 :: --- PFAD KORREKTUR ---
-:: %~dp0 = Pfad dieses Skripts (...\llm_conversion_framework\scripts\)
-:: wir wechseln eine Ebene hoch (..) ins Root-Verzeichnis.
+:: %~dp0 = Pfad dieses Skripts (...\scripts\)
+:: Wir wechseln eine Ebene hoch (..) ins Root-Verzeichnis.
 pushd "%~dp0.."
 
 echo [INFO] Arbeitsverzeichnis gesetzt auf: %CD%
 
 :: -- Konfiguration --
-:: Da wir jetzt virtuell im Root sind, ist die Quelle in "scripts/..."
 set "SOURCE_SCRIPT=scripts\start-llm_convertion_framework.bat"
 set "DEST_SCRIPT=start-llm_convertion_framework.bat"
 set "ICON_PATH=assets\app_icon.ico"
@@ -47,23 +46,17 @@ if exist "%SOURCE_SCRIPT%" (
 :: 3. Desktop Verknüpfung erstellen
 echo [3/3] Erstelle Desktop-Verknuepfung...
 
-:: Zielpfad ist das Root-Verzeichnis (wo wir gerade per pushd sind)
 set "TARGET_PATH=%CD%\%DEST_SCRIPT%"
 set "ICON_FULL_PATH=%CD%\%ICON_PATH%"
 set "DESKTOP_DIR=%USERPROFILE%\Desktop"
 set "WORK_DIR=%CD%"
 
-powershell -NoProfile -Command ^
-    "$ws = New-Object -ComObject WScript.Shell; ^
-    $s = $ws.CreateShortcut('%DESKTOP_DIR%\%SHORTCUT_NAME%'); ^
-    $s.TargetPath = '!TARGET_PATH!'; ^
-    $s.WorkingDirectory = '!WORK_DIR!'; ^
-    $s.IconLocation = '!ICON_FULL_PATH!'; ^
-    $s.Save()"
+:: WICHTIG: Alles in einer Zeile, um "^"-Fehler zu vermeiden
+powershell -NoProfile -Command "$ws = New-Object -ComObject WScript.Shell; $s = $ws.CreateShortcut('%DESKTOP_DIR%\%SHORTCUT_NAME%'); $s.TargetPath = '!TARGET_PATH!'; $s.WorkingDirectory = '!WORK_DIR!'; $s.IconLocation = '!ICON_FULL_PATH!'; $s.Save()"
 
 echo       [OK] Verknuepfung auf dem Desktop erstellt.
 
-:: Zurück zum Ursprung (sauber beenden)
+:: Zurück zum Ursprung
 popd
 
 echo.

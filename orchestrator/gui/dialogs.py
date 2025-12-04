@@ -3,8 +3,9 @@
 LLM Cross-Compiler Framework - Dialogs
 DIREKTIVE: Goldstandard, GUI-Komponenten, Internationalisierung.
 
-Updates v1.7.0:
-- Added DeploymentDialog for SSH/SCP credentials (RAM-only storage).
+Updates v2.0.0:
+- Added HealingDialog for Self-Healing (Error Analysis Presentation).
+- Maintained all v1.7 features (Deployment, URL Input, Chat Config).
 """
 
 import requests
@@ -174,6 +175,15 @@ class AIConfigurationDialog(QDialog):
         )
         rag_layout.addWidget(self.chk_rag)
         
+        # --- NEW v2.0.0: Offline Mode & Telemetry ---
+        self.chk_offline = QCheckBox("Force Offline Mode (Use Tiny Models)")
+        self.chk_offline.setToolTip("Uses local transformers models instead of APIs. Requires download.")
+        rag_layout.addWidget(self.chk_offline)
+        
+        self.chk_telemetry = QCheckBox("Enable Anonymous Error Reporting (GitHub)")
+        self.chk_telemetry.setToolTip("Helps us improve the framework by creating Issues on crash.")
+        rag_layout.addWidget(self.chk_telemetry)
+        
         layout.addWidget(grp_rag)
         
         self._update_models(self.provider_combo.currentText())
@@ -206,7 +216,9 @@ class AIConfigurationDialog(QDialog):
         config = {
             "provider": provider, 
             "model": model,
-            "enable_rag_knowledge": self.chk_rag.isChecked()
+            "enable_rag_knowledge": self.chk_rag.isChecked(),
+            "offline_mode": self.chk_offline.isChecked(),
+            "enable_telemetry": self.chk_telemetry.isChecked()
         }
         
         if self.stack.currentWidget() == self.page_cloud:
@@ -232,7 +244,6 @@ class AskTokenDialog(QDialog):
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
         
-        # Link Button
         link_btn = QPushButton(tr("dlg.token.get_key"))
         link_btn.setFlat(True)
         link_btn.setStyleSheet("color: #4da6ff; text-align: left; font-weight: bold;")
@@ -385,7 +396,6 @@ class URLInputDialog(QDialog):
     def get_options(self):
         return {"depth": self.spin_depth.value(), "max_pages": self.spin_pages.value()}
 
-# --- NEU v1.7.0: Deployment Dialog ---
 class DeploymentDialog(QDialog):
     """
     Dialog to configure SSH deployment to a target device.
@@ -402,7 +412,6 @@ class DeploymentDialog(QDialog):
     def _init_ui(self, default_ip):
         layout = QVBoxLayout(self)
         
-        # Info Banner
         info = QLabel("<b>Zero-Dependency Deployment</b><br>"
                       "Transfer the Golden Artifact to your edge device via SSH.<br>"
                       "<i>Note: Passwords are never stored on disk.</i>")
@@ -430,7 +439,6 @@ class DeploymentDialog(QDialog):
         
         layout.addWidget(grp)
         
-        # Actions
         btns = QHBoxLayout()
         self.btn_cancel = QPushButton(tr("btn.cancel"))
         self.btn_cancel.clicked.connect(self.reject)
@@ -461,3 +469,65 @@ class DeploymentDialog(QDialog):
         
     def get_credentials(self):
         return self.credentials
+
+# --- NEW v2.0.0: Healing Dialog ---
+class HealingDialog(QDialog):
+    """
+    'The Doctor's Report'.
+    Displays AI-driven diagnosis and proposed fixes for build errors.
+    """
+    def __init__(self, proposal, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Self-Healing Diagnosis")
+        self.setMinimumWidth(500)
+        self.proposal = proposal
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Header with Icon (Mental image: Doctor/First Aid)
+        header = QLabel("🏥 <b>Diagnosis Report</b>")
+        header.setStyleSheet("font-size: 16px;")
+        layout.addWidget(header)
+        
+        # Error Summary
+        grp_error = QGroupBox("Problem Detected")
+        l_err = QVBoxLayout(grp_error)
+        l_err.addWidget(QLabel(f"<b>Summary:</b> {self.proposal.error_summary}"))
+        l_err.addWidget(QLabel(f"<b>Root Cause:</b> {self.proposal.root_cause}"))
+        layout.addWidget(grp_error)
+        
+        # Fix
+        grp_fix = QGroupBox("Proposed Solution")
+        l_fix = QVBoxLayout(grp_fix)
+        
+        target_str = "TARGET DEVICE (SSH)" if self.proposal.is_remote_fix else "HOST CONTAINER"
+        l_fix.addWidget(QLabel(f"<b>Context:</b> {target_str}"))
+        
+        self.txt_command = QTextEdit()
+        self.txt_command.setPlainText(self.proposal.fix_command)
+        self.txt_command.setReadOnly(True)
+        self.txt_command.setMaximumHeight(80)
+        l_fix.addWidget(self.txt_command)
+        
+        layout.addWidget(grp_fix)
+        
+        # Confidence
+        conf_color = "green" if self.proposal.confidence_score > 0.8 else "orange"
+        lbl_conf = QLabel(f"Confidence Score: {self.proposal.confidence_score*100:.1f}%")
+        lbl_conf.setStyleSheet(f"color: {conf_color}; font-weight: bold;")
+        layout.addWidget(lbl_conf)
+        
+        # Buttons
+        btns = QHBoxLayout()
+        self.btn_ignore = QPushButton("Ignore")
+        self.btn_ignore.clicked.connect(self.reject)
+        btns.addWidget(self.btn_ignore)
+        
+        self.btn_apply = QPushButton("🚑 Apply Fix")
+        self.btn_apply.setStyleSheet("background-color: #2ea043; color: white; font-weight: bold;")
+        self.btn_apply.clicked.connect(self.accept)
+        btns.addWidget(self.btn_apply)
+        
+        layout.addLayout(btns)

@@ -3,9 +3,11 @@
 LLM Cross-Compiler Framework - Core Framework Manager
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 
-Updates v1.6.0:
-- Version Bump auf 1.6.0 ("The Deep Ingest").
-- Integration des CrawlerManagers für Web/PDF Ingestion.
+Updates v2.0.0:
+- Version Bump to 2.0.0 (The Brain Update).
+- Initialization of Guardian Layers (Consistency, Self-Healing, Telemetry).
+- Integration of Deployment and Model Managers.
+- Enhanced Configuration Model.
 """
 
 import os
@@ -27,22 +29,40 @@ from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError, validate_path, validate_config
 from orchestrator.utils.helpers import ensure_directory, check_command_exists, safe_json_load
 
-# Import Managers (Optional features via try-import)
+# --- COMPONENT IMPORTS (Lazy/Optional) ---
 try:
     from orchestrator.Core.dataset_manager import DatasetManager
-except ImportError:
-    DatasetManager = None
+except ImportError: DatasetManager = None
 
 try:
     from orchestrator.Core.rag_manager import RAGManager
-except ImportError:
-    RAGManager = None
+except ImportError: RAGManager = None
 
-# NEU v1.6.0: Crawler Manager
 try:
     from orchestrator.Core.crawler_manager import CrawlerManager
-except ImportError:
-    CrawlerManager = None
+except ImportError: CrawlerManager = None
+
+try:
+    from orchestrator.Core.deployment_manager import DeploymentManager
+except ImportError: DeploymentManager = None
+
+try:
+    from orchestrator.Core.model_manager import ModelManager
+except ImportError: ModelManager = None
+
+# v2.0 Guardian Layers
+try:
+    from orchestrator.Core.consistency_manager import ConsistencyManager
+except ImportError: ConsistencyManager = None
+
+try:
+    from orchestrator.Core.self_healing_manager import SelfHealingManager
+except ImportError: SelfHealingManager = None
+
+try:
+    from orchestrator.utils.telemetry import TelemetryManager
+except ImportError: TelemetryManager = None
+
 
 @dataclass
 class FrameworkInfo:
@@ -63,7 +83,7 @@ class SystemRequirements:
     min_disk_gb: int = 20
     required_commands: List[str] = None
     def __post_init__(self):
-        if self.required_commands is None: self.required_commands = ["docker", "docker-compose", "git"]
+        if self.required_commands is None: self.required_commands = ["docker", "git"]
 
 @dataclass
 class FrameworkConfig:
@@ -88,14 +108,20 @@ class FrameworkConfig:
     api_host: str = "127.0.0.1"
     source_repositories: Dict[str, str] = field(default_factory=dict)
     
-    # RAG Configuration (Opt-In v1.5.0)
+    # v1.5+ Features
     enable_rag_knowledge: bool = False
     
-    # Crawler Configuration (v1.6.0)
+    # v1.6+ Crawler Settings
     crawler_respect_robots: bool = True
     crawler_max_depth: int = 2
     crawler_max_pages: int = 50
     input_history: List[str] = field(default_factory=list)
+    
+    # v2.0+ Brain Settings
+    chat_context_limit: int = 4096
+    enable_telemetry: bool = False
+    offline_mode: bool = False
+    preferred_tiny_model: str = "tinyllama_1b"
 
     def __post_init__(self):
         if self.default_build_args is None: self.default_build_args = {"BUILD_JOBS": "4", "PYTHON_VERSION": "3.11"}
@@ -109,19 +135,30 @@ class FrameworkManager:
         
         if isinstance(config, dict):
             known = FrameworkConfig.__annotations__.keys()
-            self.config = FrameworkConfig(**{k:v for k,v in config.items() if k in known})
+            # Safe filtering of unknown keys
+            valid_config = {k:v for k,v in config.items() if k in known}
+            self.config = FrameworkConfig(**valid_config)
         elif isinstance(config, FrameworkConfig): 
             self.config = config
         else: 
             self.config = FrameworkConfig()
         
-        # UPDATE: Version 1.6.0 (Deep Ingest Release)
-        self.info = FrameworkInfo("1.6.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
+        # UPDATE: Version 2.0.0 (The Brain Update)
+        self.info = FrameworkInfo("2.0.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
         
+        # Components Registry
         self._components = {}
+        
+        # Manager References (Properties)
         self.dataset_manager = None
         self.rag_manager = None
-        self.crawler_manager = None # Placeholder v1.6.0
+        self.crawler_manager = None
+        self.deployment_manager = None
+        self.model_manager = None
+        self.consistency_manager = None
+        self.healing_manager = None
+        self.telemetry_manager = None
+        self.config_manager = None # Reference usually passed externally or init here if needed
         
         self._event_queue = queue.Queue()
         self._build_counter = 0
@@ -151,7 +188,9 @@ class FrameworkManager:
         if version.parse(f"{sys.version_info.major}.{sys.version_info.minor}") < version.parse(req.min_python_version):
             raise Exception(f"Python {req.min_python_version}+ required")
         for cmd in req.required_commands:
-            if not check_command_exists(cmd): raise Exception(f"Command missing: {cmd}")
+            if not check_command_exists(cmd): 
+                # Don't fail hard on windows if git is missing in path but installed, just warn
+                self.logger.warning(f"Command might be missing: {cmd}")
 
     def _setup_directories(self):
         for d in [self.config.targets_dir, self.config.models_dir, self.config.output_dir, self.config.configs_dir, self.config.cache_dir, self.config.logs_dir]:
@@ -178,38 +217,70 @@ class FrameworkManager:
             self.info.docker_available = False
 
     def _initialize_core_components(self):
-        """Initializes internal managers like DatasetManager, RAGManager and CrawlerManager."""
+        """Initializes and registers all internal manager components."""
         
-        # 1. Dataset Manager
+        # 1. Telemetry (First, to catch errors in others)
+        if TelemetryManager:
+            try:
+                self.telemetry_manager = TelemetryManager(self)
+                self.register_component("telemetry_manager", self.telemetry_manager)
+            except Exception as e: self.logger.error(f"Telemetry init failed: {e}")
+
+        # 2. Dataset Manager
         if DatasetManager:
             try:
                 self.dataset_manager = DatasetManager(self)
                 self.register_component("dataset_manager", self.dataset_manager)
-                self.logger.info("DatasetManager initialized")
-            except Exception as e:
-                self.logger.error(f"Failed to init DatasetManager: {e}")
-                
-        # 2. RAG Manager (Nur wenn aktiviert)
+            except Exception as e: self.logger.error(f"DatasetManager init failed: {e}")
+
+        # 3. Model Manager (Needs to be before RAG/Ditto for offline models)
+        if ModelManager:
+            try:
+                self.model_manager = ModelManager(self)
+                self.model_manager.initialize()
+                self.register_component("model_manager", self.model_manager)
+            except Exception as e: self.logger.error(f"ModelManager init failed: {e}")
+
+        # 4. RAG Manager (Optional)
         if RAGManager:
             if self.config.enable_rag_knowledge:
                 try:
                     self.rag_manager = RAGManager(self)
                     self.register_component("rag_manager", self.rag_manager)
                     self.logger.info("RAGManager initialized (Knowledge Base Active)")
-                except Exception as e:
-                    self.logger.error(f"Failed to init RAGManager: {e}")
+                except Exception as e: self.logger.error(f"RAGManager init failed: {e}")
             else:
-                self.logger.info("RAGManager disabled via config (Opt-In).")
+                self.logger.info("RAGManager disabled via config.")
 
-        # 3. Crawler Manager (NEU v1.6.0)
-        # Wird immer initialisiert, aber nur genutzt, wenn RAG aktiv ist oder manuell aufgerufen wird
+        # 5. Crawler Manager (Optional)
         if CrawlerManager:
             try:
                 self.crawler_manager = CrawlerManager(self)
                 self.register_component("crawler_manager", self.crawler_manager)
-                self.logger.info("CrawlerManager initialized (Deep Ingest Ready)")
-            except Exception as e:
-                self.logger.error(f"Failed to init CrawlerManager: {e}")
+            except Exception as e: self.logger.error(f"CrawlerManager init failed: {e}")
+
+        # 6. Deployment Manager (v1.7)
+        if DeploymentManager:
+            try:
+                self.deployment_manager = DeploymentManager(self)
+                self.register_component("deployment_manager", self.deployment_manager)
+            except Exception as e: self.logger.error(f"DeploymentManager init failed: {e}")
+
+        # 7. Consistency Manager (v2.0 Guardian)
+        if ConsistencyManager:
+            try:
+                self.consistency_manager = ConsistencyManager(self)
+                self.register_component("consistency_manager", self.consistency_manager)
+                self.logger.info("Consistency Manager activated")
+            except Exception as e: self.logger.error(f"ConsistencyManager init failed: {e}")
+
+        # 8. Self-Healing Manager (v2.0 Guardian)
+        if SelfHealingManager:
+            try:
+                self.healing_manager = SelfHealingManager(self)
+                self.register_component("healing_manager", self.healing_manager)
+                self.logger.info("Self-Healing Manager activated")
+            except Exception as e: self.logger.error(f"SelfHealingManager init failed: {e}")
 
     def register_component(self, n, c):
         with self._lock: self._components[n] = c

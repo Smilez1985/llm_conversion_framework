@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.2 Fixed)
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.3 Fixed)
 DIREKTIVE: Goldstandard, Robustness, User Experience.
 """
 
@@ -36,7 +36,7 @@ IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "bui
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_NAME} Installer v2.2")
+        self.title(f"{APP_NAME} Installer v2.3")
         self.geometry("750x600")
         self.resizable(True, True)
         
@@ -115,20 +115,19 @@ class InstallerGUI(tk.Tk):
         self.update_idletasks()
 
     def _start_install(self):
-        target_dir = Path(self.var_app_path.get())
+        app_dir = Path(self.var_app_path.get())
         data_dir = Path(self.var_data_path.get())
         
         self.btn_install.config(state='disabled')
         self.btn_cancel.config(state='disabled')
         self.progress['value'] = 0
-        threading.Thread(target=self._install_process, args=(target_dir, data_dir), daemon=True).start()
+        threading.Thread(target=self._install_process, args=(app_dir, data_dir), daemon=True).start()
 
     def _install_process(self, app_dir: Path, data_dir: Path):
         try:
             self.log(f"Starting installation...")
             
             # 1. Create Directories
-            self.log("Creating directories...")
             if not app_dir.exists(): app_dir.mkdir(parents=True, exist_ok=True)
             if not data_dir.exists(): data_dir.mkdir(parents=True, exist_ok=True)
             
@@ -142,6 +141,7 @@ class InstallerGUI(tk.Tk):
             total_items = len(INCLUDE_DATA_DIRS) + len(INCLUDE_DATA_FILES) + len(INCLUDE_APP_FILES)
             current = 0
             
+            # Copy Data
             for item in INCLUDE_DATA_DIRS:
                 src = SOURCE_DIR / item
                 dst = data_dir / item
@@ -156,36 +156,36 @@ class InstallerGUI(tk.Tk):
                 dst = data_dir / item
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
-                
+            
+            # Copy App (Launcher)
             for item in INCLUDE_APP_FILES:
                 src = SOURCE_DIR / item
                 dst = app_dir / item
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
+                self.progress['value'] = (current / total_items) * 40
 
-            # 3. Setup VENV
+            # 3. Setup VENV in DATA DIR
             self.log("Setting up Python Environment...")
             venv_path = data_dir / ".venv"
             subprocess.run([sys.executable, "-m", "venv", str(venv_path)], check=True)
             
-            # 4. Dependencies
+            # 4. Install Dependencies
             self.log("Installing dependencies...")
             pip_exe = venv_path / "Scripts" / "pip.exe"
             cwd = str(data_dir)
-            
             subprocess.run([str(pip_exe), "install", "--upgrade", "pip"], 
                          capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-            
             subprocess.run([str(pip_exe), "install", "."], cwd=cwd, 
                          capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
             
             self.progress['value'] = 90
 
-            # 5. Shortcuts
+            # 5. Shortcuts (FIXED)
             if self.var_desktop.get():
-                self._create_shortcut(app_dir, "Desktop")
+                self._create_shortcut(app_dir, data_dir, "Desktop")
             if self.var_startmenu.get():
-                self._create_shortcut(app_dir, "StartMenu")
+                self._create_shortcut(app_dir, data_dir, "StartMenu")
 
             # 6. Registry
             self.log("Registering application...")
@@ -199,7 +199,6 @@ class InstallerGUI(tk.Tk):
             self.progress['value'] = 100
             self.log("Installation Complete!")
             
-            # UX Fix: Nicht schließen, Button aktivieren
             messagebox.showinfo("Success", f"Installation complete.\nYou can now close this window.")
             self.btn_cancel.config(text="Close", state='normal', command=self.destroy)
             
@@ -209,19 +208,19 @@ class InstallerGUI(tk.Tk):
             self.btn_install.config(state='normal')
             self.btn_cancel.config(state='normal')
 
-    def _create_shortcut(self, target_dir: Path, location: str):
-        # AUTO-INSTALL DEPENDENCY CHECK
+    def _create_shortcut(self, app_dir: Path, data_dir: Path, location: str):
+        # Auto-Install Dependency
         try:
             import winshell
             from win32com.client import Dispatch
         except ImportError:
-            self.log("Installing pywin32/winshell for shortcuts...")
+            self.log("Installing shortcut libraries...")
             try:
                 subprocess.check_call([sys.executable, "-m", "pip", "install", "pywin32", "winshell"])
                 import winshell
                 from win32com.client import Dispatch
             except Exception as e:
-                self.log(f"Failed to install shortcut dependencies: {e}")
+                self.log(f"Failed to install dependencies: {e}")
                 return
 
         try:
@@ -233,22 +232,32 @@ class InstallerGUI(tk.Tk):
                 folder = winshell.programs()
 
             shortcut_path = os.path.join(folder, f"{APP_NAME}.lnk")
-            target_bat = str(target_dir / "Launch-LLM-Conversion-Framework.bat")
-            icon_path = str(target_dir / "assets" / "logo.ico")
+            target_bat = str(app_dir / "Launch-LLM-Conversion-Framework.bat")
             
-            # Check for icon in DATA dir if not in APP dir
-            if not os.path.exists(icon_path):
-                 # Try to find data dir via registry or assumption? 
-                 # Simplest: Look relative to this script if running from source
-                 pass 
+            # ICON FIX: Suche Icon im DATA Ordner (da wir assets dorthin kopiert haben)
+            # Priorität: logo.ico -> icon.ico -> logo.png (falls unterstützt, aber ico ist sicherer)
+            icon_path = ""
+            candidates = ["logo.ico", "icon.ico"]
+            for c in candidates:
+                p = data_dir / "assets" / c
+                if p.exists():
+                    icon_path = str(p)
+                    break
+            
+            if not icon_path:
+                # Fallback: Wenn im App Dir
+                p = app_dir / "assets" / "logo.ico"
+                if p.exists(): icon_path = str(p)
 
             shortcut = shell.CreateShortCut(shortcut_path)
             shortcut.Targetpath = target_bat
-            shortcut.WorkingDirectory = str(target_dir)
-            if os.path.exists(icon_path):
+            shortcut.WorkingDirectory = str(app_dir) # Launcher erwartet, im App Dir zu starten
+            
+            if icon_path:
                 shortcut.IconLocation = icon_path
+                
             shortcut.save()
-            self.log(f"Shortcut created in {location}")
+            self.log(f"Shortcut created in {location} -> {target_bat}")
             
         except Exception as e:
             self.log(f"Shortcut Error ({location}): {e}")

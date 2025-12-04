@@ -37,13 +37,28 @@ class UpdateManager:
             
             cmd_next = f'start "" "{setup_name}" --update' if major else (f'start "" "{exe_name}"' if is_frozen else f'python "{sys.argv[0]}"')
             
+            # --- HIER IST DIE ÄNDERUNG ---
+            # Wir fügen 'copy /Y scripts\start-llm_convertion_framework.bat .' ein.
+            # Das aktualisiert den Launcher im Root-Verzeichnis direkt nach dem git pull.
+            batch_content = (
+                f'@echo off\n'
+                f'cd /d "{self.app_root}"\n'
+                f'git pull\n'
+                f'copy /Y "scripts\\start-llm_convertion_framework.bat" .\n'
+                f'{cmd_next}\n'
+                f'del "%~f0"\n'
+                f'exit\n'
+            )
+
             with open(batch_file, "w") as f:
-                f.write(f'@echo off\ncd /d "{self.app_root}"\ngit pull\n{cmd_next}\ndel "%~f0"\nexit\n')
+                f.write(batch_content)
             
             if sys.platform == "win32":
                 subprocess.Popen(["cmd.exe", "/c", str(batch_file)], creationflags=subprocess.CREATE_NEW_CONSOLE)
             else:
+                # Für Linux/Mac müsste man theoretisch auch kopieren, falls dort ein Shell-Skript genutzt wird
                 subprocess.Popen(["/bin/bash", "-c", f"cd {self.app_root} && git pull && ./llm-builder"])
+            
             sys.exit(0)
         except Exception as e:
             self.logger.error(f"Update failed: {e}")

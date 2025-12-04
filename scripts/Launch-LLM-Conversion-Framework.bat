@@ -4,7 +4,6 @@ CLS
 SETLOCAL ENABLEDELAYEDEXPANSION
 
 :: --- KONFIGURATION ---
-:: ZENTRALER PFAD für die Checkfile (Wie angefordert)
 SET "CHECKFILE_DIR=C:\Users\Public\Documents\llm_conversion_framework"
 SET "CHECKFILE=%CHECKFILE_DIR%\checkfile.txt"
 SET "PYTHON_CMD=python"
@@ -15,7 +14,6 @@ IF EXIST "..\orchestrator\main.py" (
     echo [INFO] Launcher im Unterordner. Wechsle zu Root
     cd ..
 )
-SET "SOURCE_ROOT=%CD%"
 
 :: --- 1. SYSTEM-CHECK ---
 echo [INIT] Pruefe Systemumgebung
@@ -36,76 +34,95 @@ IF %ERRORLEVEL% NEQ 0 (
 
 :: --- 2. CHECKFILE PRÜFUNG ---
 IF EXIST "%CHECKFILE%" (
-    :: Lese Pfad aus Datei (Toleriert Leerzeichen durch usebackq)
     FOR /F "usebackq tokens=1,* delims==" %%A IN ("%CHECKFILE%") DO (
         IF /I "%%A"=="Path" SET "INSTALL_PATH=%%B"
     )
     
-    :: FIX: Anfuehrungszeichen entfernen, falls welche in der Datei stehen
     IF DEFINED INSTALL_PATH (
         set "INSTALL_PATH=!INSTALL_PATH:"=!"
-        
         echo [INFO] Installation gefunden: "!INSTALL_PATH!"
         
         IF EXIST "!INSTALL_PATH!\orchestrator\main.py" (
             GOTO :LAUNCH_APP
         ) ELSE (
-            echo [WARN] Pfad aus Checkfile ist ungueltig oder App wurde verschoben.
-            echo [INFO] Starte Reparatur/Neu-Installation
+            echo [WARN] Pfad ungueltig. Starte Reparatur
         )
     )
 )
 
-:: --- 3. SETUP MODE (Wenn Checkfile fehlt oder ungültig) ---
+:: --- 3. SETUP MODE ---
 :RUN_SETUP
 echo [SETUP] Starte Installer
 
-:: Installer-Dependencies (Minimal)
 python -c "import win32com.client, winshell" >nul 2>&1
 IF %ERRORLEVEL% NEQ 0 (
-    echo [INSTALL] Installiere Hilfs-Pakete (pywin32, winshell)
+    echo [INSTALL] Installiere Hilfs-Pakete
     python -m pip install --upgrade pywin32 winshell requests >nul
 )
 
-:: Starte GUI Installer
-python "%SOURCE_ROOT%\scripts\setup_windows.py"
+python scripts\setup_windows.py
 
 IF %ERRORLEVEL% EQU 0 (
-    :: Re-Check nach erfolgreichem Installer
     IF EXIST "%CHECKFILE%" (
         FOR /F "usebackq tokens=1,* delims==" %%A IN ("%CHECKFILE%") DO (
             IF /I "%%A"=="Path" SET "INSTALL_PATH=%%B"
         )
-        :: Erneutes Cleaning für den frischen Pfad
         if defined INSTALL_PATH set "INSTALL_PATH=!INSTALL_PATH:"=!"
-        
         IF EXIST "!INSTALL_PATH!\orchestrator\main.py" GOTO :LAUNCH_APP
     )
 )
-
-echo [ERROR] Setup fehlgeschlagen oder abgebrochen.
+echo [ERROR] Setup fehlgeschlagen.
 PAUSE
 EXIT /B
 
 :: --- 4. LAUNCH APP ---
 :LAUNCH_APP
-:: Wechsel in das Installationsverzeichnis
-:: Hier nutzen wir Anfuehrungszeichen, um Leerzeichen im Pfad zu schuetzen
 pushd "!INSTALL_PATH!"
 echo [BOOT] Starte Framework aus: %CD%
 
-:: Update Check (Nur wenn git verfügbar)
-git --version >nul 2>&1
-IF %ERRORLEVEL% EQU 0 (
-    git pull >nul 2>&1
-)
-
-:: VENV nutzen (Falls vorhanden)
+:: VENV aktivieren
 IF EXIST ".venv\Scripts\activate.bat" (
     CALL ".venv\Scripts\activate.bat"
 )
 
-:: Start
+:: --- DEPENDENCY GUARD (SELF-HEALING) ---
+echo [CHECK] Pruefe kritische Bibliotheken
+
+:: 1. PyYAML Check
+python -c "import yaml" >nul 2>&1
+IF %ERRORLEVEL% NEQ 0 (
+    echo [MISSING] PyYAML fehlt. Installiere nach
+    python -m pip install PyYAML
+)
+
+:: 2. PySide6 Check
+python -c "import PySide6" >nul 2>&1
+IF %ERRORLEVEL% NEQ 0 (
+    echo [MISSING] PySide6 fehlt. Installiere nach
+    python -m pip install PySide6
+)
+
+:: 3. Docker Check
+python -c "import docker" >nul 2>&1
+IF %ERRORLEVEL% NEQ 0 (
+    echo [MISSING] Docker SDK fehlt. Installiere nach
+    python -m pip install docker
+)
+
+:: 4. Requests/Psutil Check
+python -c "import requests, psutil" >nul 2>&1
+IF %ERRORLEVEL% NEQ 0 (
+    echo [MISSING] Utils fehlen. Installiere nach
+    python -m pip install requests psutil
+)
+
+:: Start Main
+echo [START] GUI wird geladen
 python orchestrator\main.py
-IF %ERRORLEVEL% NEQ 0 PAUSE
+
+IF %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo [CRASH] Anwendung unerwartet beendet (Code: %ERRORLEVEL%).
+    PAUSE
+)
 popd

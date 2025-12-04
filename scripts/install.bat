@@ -2,104 +2,87 @@
 setlocal EnableDelayedExpansion
 
 :: ===================================================
-:: LLM Conversion Framework - Smart Installer
+:: LLM Conversion Framework - Installer Launcher
+:: Startet die GUI-Installation (setup_windows.py)
 :: ===================================================
 
-:: 1. Admin-Rechte prüfen
+:: 1. Admin-Rechte prüfen (Notwendig fuer den Python Installer)
 openfiles >nul 2>&1
 if %errorlevel% NEQ 0 (
     echo.
     echo [ACHTUNG] Bitte Rechtsklick auf die Datei und "Als Administrator ausfuehren".
-    echo Das ist notwendig fuer Installation und System-Updates.
+    echo Das ist notwendig, damit der Installer Schreibrechte hat.
     echo.
     pause
     exit /b
 )
 
-:: 2. Pfade bestimmen
+:: 2. Pfade setzen (Root Verzeichnis)
 pushd "%~dp0.."
 set "REPO_DIR=%CD%"
 popd
-set "GLOBAL_CONFIG_DIR=C:\Users\Public\Documents\llm_conversion_framework"
-set "CHECKFILE=%GLOBAL_CONFIG_DIR%\checkfile.txt"
+set "INSTALLER_VENV=%REPO_DIR%\.installer_venv"
+set "SETUP_SCRIPT=%REPO_DIR%\scripts\setup_windows.py"
 
 cls
 echo ===================================================
-echo      LLM Conversion Framework - Installation
+echo      LLM Conversion Framework - Setup
 echo ===================================================
 echo.
 echo [INFO] Framework Root: "%REPO_DIR%"
+echo [INFO] Installer GUI:  "%SETUP_SCRIPT%"
 echo.
 
-:: 3. Python Check & Auto-Install
-echo [1/4] Pruefe Python Installation...
+:: 3. Python Check & Auto-Install (Winget Fallback)
+echo [1/3] Pruefe Python Umgebung...
 python --version >nul 2>&1
 if !errorlevel! NEQ 0 (
     echo [WARNUNG] Python wurde nicht gefunden!
-    echo.
     set /p "INSTALL_PY=Soll Python 3.11 jetzt via Winget installiert werden? (j/n): "
-    
     if /i "!INSTALL_PY!"=="j" (
-        echo [INFO] Starte Winget Installation...
         winget install -e --id Python.Python.3.11 --scope machine --accept-source-agreements --accept-package-agreements
-        
         echo.
-        echo [WICHTIG] Python wurde installiert.
-        echo Damit die Pfade aktualisiert werden, muss dieses Skript NEU GESTARTET werden.
-        echo Bitte druecke eine Taste, um zu beenden, und starte die install.bat erneut.
+        echo [WICHTIG] Python wurde installiert. Bitte Skript NEU STARTEN.
         pause
         exit /b
     ) else (
-        echo [FEHLER] Ohne Python kann die Installation nicht fortgesetzt werden.
+        echo [FEHLER] Ohne Python kann der Installer nicht starten.
         pause
         exit /b
     )
+)
+
+:: 4. Installer-Umgebung vorbereiten (Vermeidet Dependency-Konflikte!)
+:: Wir erstellen ein temporaeres VENV nur um den Installer zu starten.
+echo.
+echo [2/3] Bereite Installer-Umgebung vor...
+
+if not exist "%INSTALLER_VENV%" (
+    echo       Erstelle isolierte Umgebung...
+    python -m venv "%INSTALLER_VENV%"
+)
+
+:: Installiere NUR die Pakete, die setup_windows.py braucht (psutil, requests, tk)
+echo       Lade Hilfs-Pakete fuer den Installer...
+"%INSTALLER_VENV%\Scripts\python.exe" -m pip install psutil requests >nul 2>&1
+
+:: 5. GUI Installer starten
+echo.
+echo [3/3] Starte grafischen Installer...
+echo.
+
+if exist "%SETUP_SCRIPT%" (
+    "%INSTALLER_VENV%\Scripts\python.exe" "%SETUP_SCRIPT%"
 ) else (
-    for /f "tokens=*" %%v in ('python --version') do echo [OK] %%v gefunden.
-)
-
-:: 4. Ordnerstruktur erstellen
-echo.
-echo [2/4] Erstelle Ordnerstruktur...
-if not exist "%REPO_DIR%\logs" mkdir "%REPO_DIR%\logs"
-if not exist "%REPO_DIR%\data" mkdir "%REPO_DIR%\data"
-
-if not exist "%GLOBAL_CONFIG_DIR%" (
-    mkdir "%GLOBAL_CONFIG_DIR%"
-    echo [OK] Globaler Config-Ordner erstellt.
-)
-
-:: 5. Checkfile schreiben (Pointer)
-echo.
-echo [3/4] Registriere Framework...
-(
-    echo Path="%REPO_DIR%"
-) > "%CHECKFILE%" || (
-    echo [FEHLER] Schreibzugriff auf Checkfile verweigert!
+    echo [FEHLER] Konnte 'scripts\setup_windows.py' nicht finden!
+    echo Pfad: %SETUP_SCRIPT%
     pause
     exit /b
 )
-attrib +h "%GLOBAL_CONFIG_DIR%" /D >nul 2>&1
-echo [OK] Checkfile aktualisiert.
 
-:: 6. Abhängigkeiten installieren
+:: Aufräumen (Optional: Wenn der Installer durch ist, schließt sich das Fenster)
 echo.
-echo [4/4] Installiere Python-Abhaengigkeiten...
-if exist "%REPO_DIR%\requirements.txt" (
-    pip install -r "%REPO_DIR%\requirements.txt"
-    if !errorlevel! NEQ 0 (
-        echo [FEHLER] Bei der Installation der Requirements ist ein Fehler aufgetreten.
-        echo Pruefe deine Internetverbindung oder Proxy-Einstellungen.
-    ) else (
-        echo [OK] Alle Abhaengigkeiten erfolgreich installiert.
-    )
-) else (
-    echo [INFO] Keine requirements.txt gefunden - ueberspringe pip install.
-)
-
-echo.
-echo ===================================================
-echo [ERFOLG] Installation vollstaendig abgeschlossen.
-echo ===================================================
+echo Installer gestartet. Dieses Fenster kann geschlossen werden,
+echo sobald die GUI erscheint.
 echo.
 pause

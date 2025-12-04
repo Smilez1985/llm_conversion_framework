@@ -4,7 +4,8 @@ LLM Cross-Compiler Framework - Command Line Interface
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 
 Professional CLI for automation, CI/CD integration, and power users.
-Supports all framework operations including Source Management, Module Generation, and AI Assistance.
+Supports all framework operations including Source Management, Module Generation, 
+AI Assistance, and now Deployment/Self-Healing (v2.0.0).
 """
 
 import sys
@@ -27,9 +28,10 @@ from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
 
 from orchestrator.Core.framework import FrameworkManager, FrameworkConfig
-from orchestrator.Core.orchestrator import LLMOrchestrator, BuildRequest, WorkflowType, PriorityLevel
+from orchestrator.Core.orchestrator import LLMOrchestrator, BuildRequest, WorkflowType, PriorityLevel, OrchestrationStatus
 from orchestrator.Core.builder import BuildEngine, ModelFormat, OptimizationLevel
 from orchestrator.Core.module_generator import ModuleGenerator
+from orchestrator.Core.deployment_manager import DeploymentManager
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.validation import ValidationError
 
@@ -65,7 +67,7 @@ class TargetConfig:
 # ============================================================================
 
 console = Console()
-__version__ = "1.2.0"
+__version__ = "2.0.0"
 
 DEFAULT_CONFIG = {
     "targets_dir": "targets",
@@ -91,6 +93,7 @@ class FrameworkContext:
         self.framework_manager: Optional[FrameworkManager] = None
         self.orchestrator: Optional[LLMOrchestrator] = None
         self.build_engine: Optional[BuildEngine] = None
+        self.deployment_manager: Optional[DeploymentManager] = None
         self.verbose: bool = False
         self.quiet: bool = False
         self._initialized: bool = False
@@ -110,6 +113,9 @@ class FrameworkContext:
             
             # Orchestrator initialisieren  
             self.orchestrator = LLMOrchestrator(framework_config)
+            
+            # Deployment Manager
+            self.deployment_manager = DeploymentManager(self.framework_manager)
             
             # Synchrone Initialisierung für CLI
             loop = asyncio.new_event_loop()
@@ -191,7 +197,7 @@ def model_format_from_string(format_str: str) -> ModelFormat:
         try:
             return ModelFormat(format_str.lower())
         except ValueError:
-            return ModelFormat.HUGGINGFACE
+            return ModelFormat.GGUF
 
 
 # ============================================================================
@@ -207,10 +213,10 @@ def model_format_from_string(format_str: str) -> ModelFormat:
 @pass_context
 def cli(ctx: FrameworkContext, config: Optional[str], verbose: bool, quiet: bool, log_level: str):
     """
-    🚀 LLM Cross-Compiler Framework CLI
+    🚀 LLM Cross-Compiler Framework CLI v2.0.0
     
     Professional command-line interface for cross-compiling Large Language Models
-    for edge hardware. Supports automation, CI/CD integration, and power users.
+    for edge hardware. Supports automation, CI/CD integration, Deployment, and Self-Healing.
     """
     # Setup logging
     setup_cli_logging("DEBUG" if verbose else log_level)
@@ -365,7 +371,6 @@ def module_create(ctx: FrameworkContext, name: str, arch: str, sdk: str):
         sys.exit(1)
 
 
-# NEU: AI Generierungs-Befehl im Module-Group (Ditto Integration)
 @module.command('generate-ai')
 @click.argument('probe_file', type=click.Path(exists=True))
 @pass_context
@@ -413,7 +418,6 @@ def generate_ai(ctx: FrameworkContext, probe_file):
     
     if "Local" in provider or "Compatible" in provider:
         base_url = Prompt.ask("Base URL", default="http://localhost:11434")
-        # Lokale Modelle brauchen oft keinen Key, aber litellm erwartet evtl. einen String
         api_key = "sk-dummy"
     else:
         env_var_map = {
@@ -421,7 +425,6 @@ def generate_ai(ctx: FrameworkContext, probe_file):
             "Anthropic": "ANTHROPIC_API_KEY",
             "Google": "GEMINI_API_KEY"
         }
-        # Standard auf API_KEY fallbacken wenn nicht in Map
         env_var = env_var_map.get(provider.split()[0], "API_KEY") 
         existing_key = os.environ.get(env_var)
         
@@ -451,7 +454,6 @@ def generate_ai(ctx: FrameworkContext, probe_file):
         
         if Confirm.ask("Generate module with these settings?"):
             targets_dir = Path(ctx.config["targets_dir"])
-            # Fallback Name falls AI keinen liefert
             mod_name_raw = config.get("module_name", "Unknown_Target")
             module_name = mod_name_raw.replace(" ", "_")
             
@@ -460,6 +462,43 @@ def generate_ai(ctx: FrameworkContext, probe_file):
             
     except Exception as e:
         console.print(f"[bold red]AI Generation failed: {e}[/bold red]")
+        sys.exit(1)
+
+
+# ============================================================================
+# DEPLOYMENT COMMANDS (NEU v2.0.0)
+# ============================================================================
+
+@cli.command('deploy')
+@click.argument('artifact_path', type=click.Path(exists=True))
+@click.option('--ip', prompt='Target IP', help='IP address of the target device')
+@click.option('--user', prompt='Username', help='SSH Username')
+@click.option('--password', prompt=True, hide_input=True, help='SSH Password (RAM only)')
+@click.option('--path', default='/opt/llm_deploy', help='Remote destination path')
+@pass_context
+def deploy(ctx: FrameworkContext, artifact_path, ip, user, password, path):
+    """
+    🚀 Deploy a built artifact to an edge device via SSH/SCP.
+    Zero-Dependency: Uses Paramiko or System SSH. Credentials valid for session only.
+    """
+    if not ctx.deployment_manager:
+        console.print("[red]Deployment Manager not initialized.[/red]")
+        sys.exit(1)
+        
+    console.print(Panel(f"[bold cyan]Starting Deployment[/bold cyan]\nArtifact: {artifact_path}\nTarget: {user}@{ip}:{path}", title="Deploy"))
+    
+    success = ctx.deployment_manager.deploy_artifact(
+        artifact_path=Path(artifact_path),
+        target_ip=ip,
+        user=user,
+        password=password,
+        target_dir=path
+    )
+    
+    if success:
+        console.print("[bold green]✅ Deployment Successful![/bold green]")
+    else:
+        console.print("[bold red]❌ Deployment Failed. Check logs.[/bold red]")
         sys.exit(1)
 
 
@@ -558,8 +597,25 @@ def start_build(ctx: FrameworkContext, model: str, target: str, format: str,
                     while True:
                         workflow_status = loop.run_until_complete(ctx.orchestrator.get_workflow_status(request_id))
                         if workflow_status:
-                            console.print(f"[yellow]Status: {workflow_status.status.value} - {workflow_status.current_stage}[/yellow]")
+                            # v2.0: Enhanced Status Reporting
+                            status_color = "yellow"
+                            if workflow_status.status == OrchestrationStatus.READY: status_color = "green"
+                            if workflow_status.status == OrchestrationStatus.ERROR: status_color = "red"
+                            if workflow_status.status.value == "healing": status_color = "magenta"
+                            
+                            console.print(f"[{status_color}]Status: {workflow_status.status.value} - {workflow_status.current_stage}[/{status_color}]")
                             console.print(f"[cyan]Progress: {workflow_status.progress_percent}% ({workflow_status.completed_builds}/{workflow_status.total_builds} builds)[/cyan]")
+                            
+                            # Show Consistency Warnings
+                            if workflow_status.warnings:
+                                for w in workflow_status.warnings[-1:]: # Show latest
+                                    console.print(f"[orange3]{w}[/orange3]")
+                            
+                            # Show Healing Info
+                            if workflow_status.healing_proposal:
+                                hp = workflow_status.healing_proposal
+                                console.print(f"[bold magenta]🚑 Self-Healing Active: {hp.error_summary}[/bold magenta]")
+                                console.print(f"Proposed Fix: [italic]{hp.fix_command}[/italic]")
                             
                             if workflow_status.status.value in ["ready", "error"]:
                                 break
@@ -630,4 +686,5 @@ def build_status(ctx: FrameworkContext, request_id: Optional[str], all: bool):
 
 @cli.group()
 def config():
-    """Configuration
+    """Configuration Management"""
+    pass

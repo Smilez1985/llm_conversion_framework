@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.8 FINAL)
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.9 FINAL)
 DIREKTIVE: Goldstandard. KORRIGIERTE PFADTRENUNG und VOLLSTÄNDIGER DOCKER CHECK.
   1. App-Code/VENV/Assets -> Application Path (C:/Program Files/...)
   2. Output/Logs/Cache/Models/Targets -> Data Path (C:/Users/Public/Documents/...)
@@ -45,21 +45,23 @@ CHECKFILE_PATH = CHECKFILE_DIR / "checkfile.txt"
 
 # Standard-Installationspfad
 DEFAULT_APP_PATH = Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / APP_NAME
-DEFAULT_DATA_PATH = Path(os.environ.get("PUBLIC", "C:\\Users\\Public")) / "Documents" / APP_NAME
+# KORREKTUR: Hart codierter Pfad C:\Users\Public\Documents\LLM-CF für universelle Schreibrechte.
+DEFAULT_DATA_PATH = Path("C:/Users/Public/Documents") / APP_NAME 
 
 SOURCE_DIR = Path(__file__).resolve().parent.parent
 
-# Diese Dateien gehen in den Application Path
-INCLUDE_APP_DIRS = ["orchestrator", "targets", "configs", "assets", "Docker Setup"]
-INCLUDE_APP_FILES = ["pyproject.toml", "poetry.lock", "requirements.txt", ".gitignore"]
-# Diese Dateien gehen nur in den Launcher-Ordner
-INCLUDE_LAUNCHER_FILES = ["Launch-LLM-Conversion-Framework.bat", "README.md", "LICENSE.txt"]
+# NEU: Trennung der Verzeichnisse nach Zielort
+CODE_DIRS = ["orchestrator", "configs", "assets", "Docker Setup"] # Geht in den App Path
+DATA_TEMPLATES_DIRS = ["targets", "models"] # Geht DIREKT in den Data Path
+
+INCLUDE_APP_FILES = ["pyproject.toml", "poetry.lock", "requirements.txt", ".gitignore"] # Geht in den App Path
+INCLUDE_LAUNCHER_FILES = ["Launch-LLM-Conversion-Framework.bat", "README.md", "LICENSE.txt"] # Geht in den App Path
 IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "build", ".installer_venv"]
 
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_TITLE} Installer v2.8")
+        self.title(f"{APP_TITLE} Installer v2.9")
         self.geometry("800x700")
         self.resizable(True, True)
         
@@ -139,10 +141,8 @@ class InstallerGUI(tk.Tk):
     def _check_docker(self):
         self.log("Checking Docker environment...")
         
-        # Prueft, ob die notwendigen Pakete fuer den Check geladen wurden
         if 'psutil' not in sys.modules or 'requests' not in sys.modules:
             self.lbl_status.config(text="Installer-Abh. fehlen. Installer neu starten.", foreground="red")
-            self.log("FEHLER: Notwendige Python-Module (psutil, requests) fehlen im Installer-VENV.")
             return
 
         docker_exe = shutil.which("docker")
@@ -218,21 +218,21 @@ class InstallerGUI(tk.Tk):
             
             # 2. Copy Content: Source Code in den App-Pfad
             self.log("Kopiere Framework-Dateien in den App-Pfad...")
-            total_items = len(INCLUDE_APP_DIRS) + len(INCLUDE_APP_FILES) + len(INCLUDE_LAUNCHER_FILES) + 2
+            total_items = len(CODE_DIRS) + len(DATA_TEMPLATES_DIRS) + len(INCLUDE_APP_FILES) + len(INCLUDE_LAUNCHER_FILES) + 2
             current = 0
             
-            # Kopiere Quellcode-Ordner (orchestrator, targets, assets etc.)
-            for item in INCLUDE_APP_DIRS:
+            # Kopiere Code-Ordner (orchestrator, configs, assets, Docker Setup)
+            for item in CODE_DIRS:
                 src = SOURCE_DIR / item
                 dst = app_dir / item
                 if src.exists():
                     if dst.exists(): shutil.rmtree(dst)
                     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*IGNORE_PATTERNS))
-                    self.log(f"  Kopiert: {item}")
+                    self.log(f"  Kopiert (App): {item}")
                 current += 1
-                self.progress['value'] = (current / total_items) * 30
+                self.progress['value'] = (current / total_items) * 20
             
-            # Kopiere Quellcode-Dateien (pyproject.toml etc.)
+            # Kopiere App-Dateien (pyproject.toml etc.)
             for item in INCLUDE_APP_FILES:
                 src = SOURCE_DIR / item
                 dst = app_dir / item
@@ -250,9 +250,22 @@ class InstallerGUI(tk.Tk):
             if src_uninstaller.exists():
                 shutil.copy2(src_uninstaller, app_dir / "Uninstall-LLM-Conversion-Framework.bat")
                 
-            self.progress['value'] = 40
+            self.progress['value'] = 30
+            
+            # 4. Copy Data-Templates DIREKT in den Data Path
+            self.log("Kopiere Daten-Templates (Targets/Models) in den Data Path...")
+            for item in DATA_TEMPLATES_DIRS:
+                src = SOURCE_DIR / item
+                dst = data_dir / item
+                if src.exists():
+                    if dst.exists(): shutil.rmtree(dst)
+                    shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*IGNORE_PATTERNS))
+                    self.log(f"  Kopiert (Data): {item}")
+                current += 1
+                self.progress['value'] = (current / total_items) * 45
 
-            # 4. VENV Creation & Dependencies Installation im App-Pfad
+
+            # 5. VENV Creation & Dependencies Installation im App-Pfad
             self.log("Erstelle isolierte Python-Umgebung (.venv)...")
             venv_path = app_dir / ".venv"
             subprocess.run([sys.executable, "-m", "venv", str(venv_path)], 
@@ -271,20 +284,14 @@ class InstallerGUI(tk.Tk):
             
             self.progress['value'] = 75
 
-            # 5. Konfigurationsdateien für Output/Logs anpassen
+            # 6. Konfigurationsdateien für Output/Logs anpassen
             self.log("Konfiguriere ALLE Datenpfade...")
             
-            # Subdirectories, die im Data Path (C:\Users\Public\Documents\...) liegen MÜSSEN
-            data_subdirs = ["output", "logs", "models", "targets", "cache"]
+            # Sicherstellen, dass die Data-Ordner existieren (Output, Logs, Cache)
+            (data_dir / "output").mkdir(parents=True, exist_ok=True)
+            (data_dir / "logs").mkdir(parents=True, exist_ok=True)
+            (data_dir / "cache").mkdir(parents=True, exist_ok=True) # Stelle sicher, dass Cache auch existiert
             
-            # Sicherstellen, dass die Data-Ordner existieren
-            for subdir in data_subdirs:
-                # Hier liegt der Fehler: Wir kopieren die targets/configs Ordner oben in den app_dir.
-                # Wir muessen nur die Ausgabe-Ordner im data_dir erstellen.
-                if subdir in ["output", "logs", "cache"]:
-                     (data_dir / subdir).mkdir(parents=True, exist_ok=True)
-
-
             config_file = app_dir / "configs" / "user_config.yml" 
             config_data = {}
             if config_file.exists():
@@ -297,23 +304,6 @@ class InstallerGUI(tk.Tk):
             config_data["output_dir"] = str(data_dir / "output")
             config_data["logs_dir"] = str(data_dir / "logs")
             config_data["cache_dir"] = str(data_dir / "cache")
-            
-            # WICHTIG: targets_dir und models_dir zeigen auf den App-Pfad (wo sie hingekopiert wurden)
-            # ABER: Die Dateien werden WÄHREND DER LAUFZEIT vom Framework gelesen/geschrieben.
-            # Sie MÜSSEN im Data-Pfad liegen, damit der Benutzer sie ändern kann.
-            # Daher muessen wir die Ordner targets und models im App-Pfad löschen und hierher verschieben
-            
-            self.log("  Verschiebe Models/Targets in den Data Path...")
-            
-            # Targets
-            if (app_dir / "targets").exists():
-                shutil.move(str(app_dir / "targets"), str(data_dir / "targets"))
-            
-            # Models
-            if (app_dir / "models").exists():
-                shutil.move(str(app_dir / "models"), str(data_dir / "models"))
-
-            # Passe config an die neuen, verschobenen Pfade an
             config_data["targets_dir"] = str(data_dir / "targets")
             config_data["models_dir"] = str(data_dir / "models")
             
@@ -322,7 +312,7 @@ class InstallerGUI(tk.Tk):
             
             self.log(f"  Alle Datenpfade in {config_file.name} auf Data Path gesetzt.")
 
-            # 6. Checkfile (Pointer)
+            # 7. Checkfile (Pointer)
             self.log("Finalisiere Registrierung...")
             if not CHECKFILE_DIR.exists():
                 CHECKFILE_DIR.mkdir(parents=True, exist_ok=True)
@@ -338,7 +328,7 @@ class InstallerGUI(tk.Tk):
 
             self.progress['value'] = 85
 
-            # 7. Shortcuts
+            # 8. Shortcuts
             if self.var_desktop.get():
                 self.log("Erstelle Desktop-Verknüpfungen (App & Data)...")
                 self._create_shortcut_pair(app_dir, data_dir)
@@ -356,7 +346,6 @@ class InstallerGUI(tk.Tk):
             self.btn_cancel.config(state='normal')
 
     def _create_shortcut_pair(self, app_dir: Path, data_dir: Path):
-        # ... (Funktion bleibt unverändert, da sie korrekt ist)
         if 'winshell' not in sys.modules or 'Dispatch' not in globals():
             self.log("Shortcuts konnten nicht erstellt werden (winshell/pywin32 fehlt).")
             return
@@ -364,6 +353,7 @@ class InstallerGUI(tk.Tk):
         shell = Dispatch('WScript.Shell')
         desktop = winshell.desktop()
         
+        # Icon-Pfade (sind jetzt im app_dir/assets)
         icon_app_path = str(app_dir / "assets" / "LLM-Builder.ico")
         icon_data_path = str(app_dir / "assets" / "setup_LLM-Builder.ico")
         
@@ -385,8 +375,8 @@ class InstallerGUI(tk.Tk):
         name_data = f"{APP_TITLE} Data & Output"
         path_data = os.path.join(desktop, f"{name_data}.lnk")
         
-        shortcut_data = shell.CreateShortOut(path_data)
-        shortcut_data.Targetpath = str(data_dir)
+        shortcut_data = shell.CreateShortCut(path_data)
+        shortcut_data.Targetpath = str(data_dir) # Ziel ist das Verzeichnis selbst
         shortcut_data.WorkingDirectory = str(data_dir)
         shortcut_data.Description = "Öffnet den Daten- und Ausgabeordner (Goldenes Artefakt)"
         if Path(icon_data_path).exists():

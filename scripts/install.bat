@@ -2,27 +2,29 @@
 setlocal EnableDelayedExpansion
 
 :: ===================================================
-:: LLM Conversion Framework - Installer Launcher
+:: LLM Conversion Framework - Installer Launcher (Final)
+:: Startet die GUI-Installation (setup_windows.py)
 :: ===================================================
 
-:: 1. Admin-Rechte prüfen
+:: 1. Admin-Rechte prüfen (Notwendig fuer den Python Installer)
 openfiles >nul 2>&1
 if %errorlevel% NEQ 0 (
     echo.
     echo [ACHTUNG] Bitte Rechtsklick auf die Datei und "Als Administrator ausfuehren".
+    echo Das ist notwendig, damit der Installer Schreibrechte fuer C:\Program Files hat.
     echo.
     pause
     exit /b
 )
 
-:: 2. Pfade setzen
+:: 2. Pfade setzen (Root Verzeichnis)
 pushd "%~dp0.."
 set "REPO_DIR=%CD%"
 popd
 set "INSTALLER_VENV=%REPO_DIR%\.installer_venv"
 set "SETUP_SCRIPT=%REPO_DIR%\scripts\setup_windows.py"
 
-:: WICHTIG: Pointer File Pfad (Sichtbar lassen!)
+:: Globaler Pfad fuer das Checkfile (Der Pointer)
 set "GLOBAL_DATA_DIR=C:\Users\Public\Documents\llm_conversion_framework"
 
 cls
@@ -50,22 +52,28 @@ if !errorlevel! NEQ 0 (
     exit /b
 )
 
-:: 4. Installer-Umgebung (Mini-VENV für Setup)
+:: 4. Installer-Umgebung vorbereiten (Mini-VENV für Setup)
 echo.
 echo [2/3] Bereite Installer-Umgebung vor...
+
 if not exist "%INSTALLER_VENV%" (
+    echo       Erstelle isolierte Umgebung...
     python -m venv "%INSTALLER_VENV%"
 )
-:: Installiere Abhängigkeiten für das GUI-Skript (pywin32 für Shortcuts!)
-"%INSTALLER_VENV%\Scripts\python.exe" -m pip install psutil requests pywin32 winshell >nul 2>&1
+
+:: WICHTIG: Installiere PyYAML (yaml) ZUSÄTZLICH
+echo       Lade Hilfs-Pakete fuer den Installer (psutil, pyyaml, etc.)...
+"%INSTALLER_VENV%\Scripts\python.exe" -m pip install psutil requests pywin32 winshell pyyaml >nul 2>&1
 
 :: 5. GUI Installer starten
 echo.
 echo [3/3] Starte grafischen Installer...
+echo.
+
 if exist "%SETUP_SCRIPT%" (
     "%INSTALLER_VENV%\Scripts\python.exe" "%SETUP_SCRIPT%"
 ) else (
-    echo [FEHLER] setup_windows.py nicht gefunden in:
-    echo %SETUP_SCRIPT%
+    echo [FEHLER] Konnte 'scripts\setup_windows.py' nicht finden!
+    echo Pfad: %SETUP_SCRIPT%
     pause
 )

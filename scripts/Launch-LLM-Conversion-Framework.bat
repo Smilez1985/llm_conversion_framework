@@ -6,7 +6,7 @@ SETLOCAL ENABLEDELAYEDEXPANSION
 :: --- KONFIGURATION ---
 SET "VENV_DIR=.venv"
 SET "MARKER_FILE=.install_complete"
-SET "INSTALLER_SCRIPT=scripts\setup_windows.py"
+SET "INSTALLER_SCRIPT=setup_windows.py"
 SET "MAIN_SCRIPT=orchestrator\main.py"
 
 :: --- 1. UMWELT PRÜFEN (Goldstandard) ---

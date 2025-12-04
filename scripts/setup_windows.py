@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.13 FINAL)
-DIREKTIVE: Goldstandard. KORRIGIERTER LAUNCHER-PFAD und KOPIER-ROUTINE.
-  FIX: Kopiert scripts/start-llm_convertion_framework.bat ohne Umbenennung in app_dir/.
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.14 FINAL)
+DIREKTIVE: Goldstandard. KORRIGIERTER COM-THREAD-FEHLER.
+  FIX: Fügt pythoncom.CoInitialize() zum Installer-Thread hinzu, um den Fehler (-2147221008) zu beheben.
 """
 
 import os
@@ -16,6 +16,7 @@ import winreg
 import webbrowser
 import yaml
 from pathlib import Path
+import pythoncom # NEU: Für die COM-Initialisierung
 
 # Dependencies (vom Launcher vorinstalliert oder im Host-Environment erwartet)
 try:
@@ -37,7 +38,7 @@ APP_NAME = "LLM-Conversion-Framework"
 APP_TITLE = "LLM Conversion Framework"
 
 # Deployment Name für den Launcher (Muss dem Quellnamen entsprechen, um Altlasten zu vermeiden)
-LAUNCHER_FILE_NAME = "start-llm_convertion_framework.bat" #
+LAUNCHER_FILE_NAME = "start-llm_convertion_framework.bat"
 
 # Zentrale Config (Pointer)
 CHECKFILE_DIR = Path("C:/Users/Public/Documents/llm_conversion_framework")
@@ -62,7 +63,7 @@ IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "bui
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_TITLE} Installer v2.13")
+        self.title(f"{APP_TITLE} Installer v2.14")
         self.geometry("800x700")
         self.resizable(True, True)
         
@@ -227,6 +228,8 @@ class InstallerGUI(tk.Tk):
         threading.Thread(target=self._install_process, args=(target_dir, data_dir), daemon=True).start()
 
     def _install_process(self, app_dir: Path, data_dir: Path):
+        pythoncom.CoInitialize() # FIX: Initialisiert COM für den Installations-Thread
+
         try:
             self.log(f"--- Starte Installation ---")
             self.log(f"App (Code/VENV): {app_dir}")
@@ -377,6 +380,8 @@ class InstallerGUI(tk.Tk):
             messagebox.showerror("Installationsfehler", f"Ein kritischer Fehler ist aufgetreten: {str(e)}")
             self.btn_install.config(state='normal')
             self.btn_cancel.config(state='normal')
+        finally:
+            pythoncom.CoUninitialize() # Bereinigt COM, unabhängig vom Erfolg oder Misserfolg.
 
     def _create_shortcut_pair(self, app_dir: Path, data_dir: Path):
         if 'winshell' not in sys.modules or 'Dispatch' not in globals():
@@ -393,7 +398,7 @@ class InstallerGUI(tk.Tk):
         # --- Shortcut 1: Die App Launcher
         name_app = f"{APP_TITLE}"
         path_app = os.path.join(desktop, f"{name_app}.lnk")
-        # ZIEL: Muss auf den korrekten Dateinamen zeigen
+        # ZIEL: Muss auf den korrekten Dateinamen zeigen (keine Altlast)
         target_bat = str(app_dir / LAUNCHER_FILE_NAME)
         
         shortcut_app = shell.CreateShortCut(path_app)

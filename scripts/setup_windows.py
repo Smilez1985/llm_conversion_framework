@@ -2,8 +2,8 @@
 """
 LLM Cross-Compiler Framework - Windows GUI Installer (v2.7 FINAL)
 DIREKTIVE: Goldstandard. KORRIGIERTE PFADTRENUNG und VOLLSTÄNDIGER DOCKER CHECK.
-  1. App-Code/VENV/Assets -> Application Path (C:\Program Files\...)
-  2. Output/Logs/Cache -> Data Path (C:\Users\Public\Documents\...)
+  1. App-Code/VENV/Assets -> Application Path (C:/Program Files/...)
+  2. Output/Logs/Cache -> Data Path (C:/Users/Public/Documents/...)
   3. Zwei korrekte Desktop-Shortcuts mit Icons.
   4. KEIN VERSTECKEN des Data Path.
 """
@@ -143,7 +143,6 @@ class InstallerGUI(tk.Tk):
         if not docker_exe:
             self.lbl_status.config(text="Docker not found!", foreground="red")
             self.log("CRITICAL: Docker not found.")
-            # Es wird davon ausgegangen, dass psutil/requests vorhanden ist
             if messagebox.askyesno("Docker Missing", "Docker Desktop is required. Download now?"):
                 webbrowser.open("https://www.docker.com/products/docker-desktop/")
             return
@@ -156,21 +155,17 @@ class InstallerGUI(tk.Tk):
                     running = True
                     break
         except:
-            # Fallback if psutil fails or access denied
             pass
         
         if not running:
             self.log("Starting Docker Desktop...")
             try:
-                # Versuche Docker Desktop manuell zu starten
                 dd_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
                 if os.path.exists(dd_path):
                     subprocess.Popen([dd_path], creationflags=subprocess.CREATE_NO_WINDOW)
-                    # Warte auf den Docker Daemon
                     for i in range(30):
                         time.sleep(1)
                         try:
-                            # Finaler Check über die CLI
                             if subprocess.run(["docker", "info"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0:
                                 running = True
                                 break
@@ -178,7 +173,6 @@ class InstallerGUI(tk.Tk):
             except Exception as e:
                 self.log(f"Start failed: {e}")
 
-        # Final check via CLI
         try:
             if subprocess.run(["docker", "info"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0:
                 running = True
@@ -275,11 +269,9 @@ class InstallerGUI(tk.Tk):
             # 5. Konfigurationsdateien für Output/Logs anpassen
             self.log("Konfiguriere Output-Pfade...")
             
-            # Sicherstellen, dass die Output/Logs Ordner im Data Path existieren
             (data_dir / "output").mkdir(parents=True, exist_ok=True)
             (data_dir / "logs").mkdir(parents=True, exist_ok=True)
             
-            # Lese die vorhandene user_config.yml ein (falls vorhanden)
             config_file = app_dir / "configs" / "user_config.yml" 
             config_data = {}
             if config_file.exists():
@@ -288,7 +280,6 @@ class InstallerGUI(tk.Tk):
                         config_data = yaml.safe_load(f) or {}
                 except: pass
             
-            # Setze oder überschreibe die Pfade
             config_data["output_dir"] = str(data_dir / "output")
             config_data["logs_dir"] = str(data_dir / "logs")
             

@@ -107,6 +107,55 @@ class DeploymentManager:
 
         return success
 
+    def execute_command(self, cmd: str, target_ip: str, user: str, password: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Führt einen beliebigen Shell-Befehl auf dem Remote-Gerät aus.
+        Wird vom Self-Healing-Manager genutzt.
+        """
+        self.logger.info(f"Remote Exec ({target_ip}): {cmd}")
+        
+        # Verbindung prüfen
+        if not self.check_connectivity(target_ip):
+            return False, "Target not reachable"
+
+        # Paramiko (Bevorzugt)
+        if PARAMIKO_AVAILABLE and password:
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            try:
+                ssh.connect(target_ip, username=user, password=password, timeout=self.timeout)
+                stdin, stdout, stderr = ssh.exec_command(cmd)
+                exit_status = stdout.channel.recv_exit_status()
+                out_msg = stdout.read().decode().strip()
+                err_msg = stderr.read().decode().strip()
+                
+                full_log = f"STDOUT: {out_msg}\nSTDERR: {err_msg}"
+                if exit_status == 0:
+                    return True, full_log
+                else:
+                    return False, full_log
+            except Exception as e:
+                return False, str(e)
+            finally:
+                ssh.close()
+        
+        # System SSH (Fallback)
+        else:
+            target_str = f"{user}@{target_ip}"
+            try:
+                res = subprocess.run(
+                    ["ssh", target_str, cmd], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=30
+                )
+                if res.returncode == 0:
+                    return True, res.stdout
+                else:
+                    return False, f"{res.stdout}\n{res.stderr}"
+            except Exception as e:
+                return False, str(e)
+
     def _deploy_via_paramiko(self, artifact_path: Path, ip: str, user: str, password: str, target_dir: str) -> bool:
         """
         Deployment mittels Paramiko (Python Native).

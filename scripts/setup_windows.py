@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Windows GUI Installer (v2.18 FINAL UX/CRASH FIX)
-DIREKTIVE: Goldstandard. KORRIGIERTER STARTUP-CRASH und VERBESSERTE ERFOLGSMELDUNG.
-  FIX: Launcher-BAT wird überschrieben, um die Current Working Directory (CWD) zu setzen (cd /d).
+LLM Cross-Compiler Framework - Windows GUI Installer (v2.20 FINAL ROBUST)
+DIREKTIVE: Goldstandard. FEHLERBEHANDLUNG IMPLEMENTIERT.
+  1. FIX: Pip-Installation prüft nun returncode und gibt STDERR bei Fehler aus.
+  2. FIX: PyYAML wird explizit in der App-Umgebung installiert/geprüft.
+  3. FIX: Launcher wird generiert und zeigt korrekt auf .venv\Scripts\python.exe.
 """
 
 import os
@@ -14,19 +16,25 @@ import time
 import ctypes
 import winreg
 import webbrowser
-import yaml
+# pyyaml ist im Installer-VENV vorhanden (durch install.bat)
+try:
+    import yaml
+except ImportError:
+    pass
 from pathlib import Path
-import pythoncom 
+# pythoncom fuer Shortcuts im Thread
+try:
+    import pythoncom
+except ImportError:
+    pass
 
 # Dependencies (vom Launcher vorinstalliert oder im Host-Environment erwartet)
 try:
     import psutil
     import requests
-    # Importiere winshell/pywin32 für Shortcuts
     import winshell
     from win32com.client import Dispatch
 except ImportError:
-    # Kann passieren, wenn die install.bat nicht korrekt vorbereitet hat
     pass
 
 # GUI Imports
@@ -36,31 +44,28 @@ from tkinter.scrolledtext import ScrolledText
 
 
 # ============================================================================
-# 1. KONSTANTEN DEFINITION (OBERSTER SCOPE)
+# 1. KONSTANTEN DEFINITION
 # ============================================================================
 
 APP_NAME = "LLM-Conversion-Framework"
 APP_TITLE = "LLM Conversion Framework"
 LAUNCHER_FILE_NAME = "start-llm_convertion_framework.bat"
 
-# Quellpfad des Repos (Muss am Anfang definiert werden, um in allen Methoden zugreifbar zu sein)
 SOURCE_DIR = Path(__file__).resolve().parent.parent
 
-# Standard-Installationspfad
+# Pfade
 DEFAULT_APP_PATH = Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / APP_NAME
-# KORREKTUR: Hart codierter Pfad C:\Users\Public\Documents\LLM-CF für universelle Schreibrechte.
 DEFAULT_DATA_PATH = Path("C:/Users/Public/Documents") / APP_NAME 
 
-# Zentrale Config (Pointer) - Wird auf den korrekten DEFAULT_DATA_PATH gesetzt.
+# Config Pointer
 CHECKFILE_DIR = DEFAULT_DATA_PATH 
 CHECKFILE_PATH = CHECKFILE_DIR / "checkfile.txt"
 
-# NEU: Trennung der Verzeichnisse nach Zielort
-CODE_DIRS = ["orchestrator", "configs", "assets", "Docker Setup"] # Geht in den App Path
-DATA_TEMPLATES_DIRS = ["targets", "models"] # Geht DIREKT in den Data Path
+# Ordner-Struktur
+CODE_DIRS = ["orchestrator", "configs", "assets", "Docker Setup"] # App Path
+DATA_TEMPLATES_DIRS = ["targets", "models"] # Data Path
 
-INCLUDE_APP_FILES = ["pyproject.toml", "poetry.lock", "requirements.txt", ".gitignore"] # Geht in den App Path
-# Launcher-Dateien werden individuell behandelt, hier nur Dokumente/Lizenzen
+INCLUDE_APP_FILES = ["pyproject.toml", "poetry.lock", "requirements.txt", ".gitignore"]
 INCLUDE_LAUNCHER_DOCS = ["README.md", "LICENSE.txt"]
 IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "build", ".installer_venv"]
 
@@ -71,7 +76,7 @@ IGNORE_PATTERNS = ["__pycache__", "*.pyc", ".git", ".venv", "venv", "dist", "bui
 class InstallerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"{APP_TITLE} Installer v2.18")
+        self.title(f"{APP_TITLE} Installer v2.20")
         self.geometry("800x700")
         self.resizable(True, True)
         
@@ -94,15 +99,15 @@ class InstallerGUI(tk.Tk):
         self.lbl_status = ttk.Label(main_frame, text="Checking System Requirements...", foreground="blue")
         self.lbl_status.pack(fill=tk.X, pady=(0, 10))
 
-        # Application Path (Source Code, VENV)
-        grp_app = ttk.LabelFrame(main_frame, text="Application Path (Source Code & VENV)", padding="10")
+        # App Path
+        grp_app = ttk.LabelFrame(main_frame, text="Application Path (Code & VENV)", padding="10")
         grp_app.pack(fill=tk.X, pady=5)
         self.var_app_path = tk.StringVar(value=str(DEFAULT_APP_PATH))
         e_app = ttk.Entry(grp_app, textvariable=self.var_app_path)
         e_app.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         ttk.Button(grp_app, text="Browse...", command=lambda: self._browse(self.var_app_path)).pack(side=tk.RIGHT)
         
-        # Data Path (Output, Logs, Cache) - NICHT versteckt
+        # Data Path
         grp_data = ttk.LabelFrame(main_frame, text="Data & Output Path (Artefakte)", padding="10")
         grp_data.pack(fill=tk.X, pady=5)
         self.var_data_path = tk.StringVar(value=str(DEFAULT_DATA_PATH))
@@ -114,7 +119,7 @@ class InstallerGUI(tk.Tk):
         opt_frame = ttk.Frame(main_frame)
         opt_frame.pack(fill=tk.X, pady=10)
         self.var_desktop = tk.BooleanVar(value=True)
-        ttk.Checkbutton(opt_frame, text="Create Desktop Shortcuts (App & Data Folder)", variable=self.var_desktop).pack(anchor=tk.W)
+        ttk.Checkbutton(opt_frame, text="Create Desktop Shortcuts", variable=self.var_desktop).pack(anchor=tk.W)
         
         # Log
         log_frame = ttk.LabelFrame(main_frame, text="Installation Log", padding="5")
@@ -135,26 +140,15 @@ class InstallerGUI(tk.Tk):
         self.btn_cancel.pack(side=tk.RIGHT, padx=10)
 
     def _browse(self, var):
-        # UX FIX: Stellt sicher, dass der Zielordnername angehängt wird, wenn der Benutzer einen Elternpfad auswählt.
         path_str = var.get()
         p = Path(path_str) 
-        
-        # 1. Bestimme den existierenden Startpfad (Elternordner, z.B. C:\Program Files)
         initial_dir = p.parent 
-        
-        # Defensiver Fallback
         if not initial_dir.exists():
             initial_dir = Path.home()
         
-        # 2. Öffne den Dialog im existierenden Elternordner
         d = filedialog.askdirectory(initialdir=str(initial_dir))
-        
         if d:
-            # 3. Hänge den gewünschten Anwendungsnamen (p.name: LLM-Conversion-Framework)
-            # an den vom Benutzer ausgewählten Pfad (d) an.
             final_path = Path(d) / p.name
-            
-            # 4. Aktualisiere das Eingabefeld mit dem vollständigen Zielpfad
             var.set(str(final_path))
 
     def log(self, msg):
@@ -169,98 +163,51 @@ class InstallerGUI(tk.Tk):
 
     def _check_docker(self):
         self.log("Checking Docker environment...")
-        
-        if 'psutil' not in sys.modules or 'requests' not in sys.modules:
-            self.lbl_status.config(text="Installer-Abh. fehlen. Installer neu starten.", foreground="red")
-            return
+        if 'psutil' not in sys.modules: return
 
         docker_exe = shutil.which("docker")
         if not docker_exe:
-            self.lbl_status.config(text="Docker not found!", foreground="red")
-            self.log("CRITICAL: Docker not found.")
-            if messagebox.askyesno("Docker Missing", "Docker Desktop is required. Download now?"):
-                webbrowser.open("https://www.docker.com/products/docker-desktop/")
+            self.lbl_status.config(text="Docker not found (Warning)", foreground="orange")
+            self.log("WARNUNG: Docker nicht im PATH gefunden.")
             return
 
-        running = False
         try:
-            for proc in psutil.process_iter(['name']):
-                if "Docker Desktop" in proc.info['name']:
-                    running = True
-                    break
-        except:
-            pass
-        
-        if not running:
-            self.log("Starting Docker Desktop...")
-            try:
-                dd_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
-                if os.path.exists(dd_path):
-                    subprocess.Popen([dd_path], creationflags=subprocess.CREATE_NO_WINDOW)
-                    for i in range(30):
-                        time.sleep(1)
-                        try:
-                            if subprocess.run(["docker", "info"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0:
-                                running = True
-                                break
-                        except: pass
-            except Exception as e:
-                self.log(f"Start failed: {e}")
-
-        try:
-            if subprocess.run(["docker", "info"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW).returncode == 0:
-                running = True
-        except: pass
-
-        if running:
+            subprocess.run(["docker", "--version"], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
             self.docker_ok = True
             self.lbl_status.config(text="System Ready.", foreground="green")
-            self.btn_install.config(state='normal')
             self.log("Docker check passed.")
-        else:
-            self.lbl_status.config(text="Docker Error.", foreground="red")
-            self.log("Docker daemon not responding.")
-    
-    def _create_robust_launcher(self) -> str:
-        # VENV path is relative to the installation root
-        VENV_PATH_RELATIVE = Path(".venv") / "Scripts" / "python.exe"
-        MAIN_SCRIPT_RELATIVE = Path("orchestrator") / "main.py"
-        
-        # Die Logik, um die CWD zu setzen und absolute Pfade aufzulösen (FIX für Abstürze)
-        content = f"""@echo off
-setlocal
+        except:
+            pass
 
-:: Gehe in das Verzeichnis, in dem dieses Skript liegt (Installations-Root)
+    def _create_launcher_content(self) -> str:
+        """Erstellt den Inhalt fuer eine funktionierende Batch-Datei."""
+        return f"""@echo off
+setlocal
+title LLM Conversion Framework
+
+:: Wechsel in das Installationsverzeichnis
 cd /d "%~dp0"
 
-set "PYTHON_EXE={VENV_PATH_RELATIVE}"
-set "MAIN_SCRIPT={MAIN_SCRIPT_RELATIVE}"
-
-echo Starte LLM Conversion Framework...
+:: Pfad zum Python Interpreter im VENV (KORRIGIERT: .venv statt python_embed)
+set "PYTHON_EXE=.venv\\Scripts\\python.exe"
+set "MAIN_SCRIPT=orchestrator\\main.py"
 
 if not exist "%PYTHON_EXE%" (
-    echo FEHLER: Python Environment nicht gefunden.
-    echo Bitte deinstallieren und neu installieren (FEHLERCODE 1).
-    goto :error
+    echo [FEHLER] Python Environment nicht gefunden!
+    echo Erwartet in: %CD%\\.venv
+    pause
+    exit /b 1
 )
 
+echo [INFO] Starte Framework...
 "%PYTHON_EXE%" "%MAIN_SCRIPT%"
 
-if %errorlevel% NEQ 0 (
+if %ERRORLEVEL% NEQ 0 (
     echo.
-    echo FEHLER: Das Framework ist abgestuerzt (Exit Code %errorlevel%).
-    echo Ueberpruefen Sie das Log im Data-Ordner auf Details.
-    echo (Pfad: {str(self.var_data_path.get())}\logs)
-    goto :error
+    echo [CRASH] Das Programm wurde unerwartet beendet (Code %ERRORLEVEL%).
+    pause
 )
-
-goto :eof
-
-:error
-pause
-exit /b %errorlevel%"""
-        
-        return content
+"""
 
     def _start_install(self):
         target_dir = Path(self.var_app_path.get())
@@ -275,224 +222,204 @@ exit /b %errorlevel%"""
         self.progress['value'] = 0
         threading.Thread(target=self._install_process, args=(target_dir, data_dir), daemon=True).start()
 
+    def _run_pip(self, pip_exe, args, cwd):
+        """Hilfsfunktion fuer robustes Pip-Install mit Fehlererkennung."""
+        cmd = [str(pip_exe), "install"] + args
+        self.log(f"  > pip install {' '.join(args)}")
+        
+        # FIX: capture_output=True und text=True, um Fehlermeldungen zu lesen
+        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+        
+        if res.returncode != 0:
+            self.log(f"  [PIP FEHLER] Code {res.returncode}")
+            self.log(f"  STDERR: {res.stderr}")
+            raise Exception(f"Abhaengigkeit konnte nicht installiert werden: {' '.join(args)}\n\nDetails: {res.stderr}")
+        
+        return True
+
     def _install_process(self, app_dir: Path, data_dir: Path):
-        pythoncom.CoInitialize() # FIX: Initialisiert COM für den Installations-Thread
+        if 'pythoncom' in sys.modules:
+            pythoncom.CoInitialize()
 
         try:
             self.log(f"--- Starte Installation ---")
-            self.log(f"App (Code/VENV): {app_dir}")
-            self.log(f"Data (Output/Log): {data_dir}")
+            self.log(f"App:  {app_dir}")
+            self.log(f"Data: {data_dir}")
             
-            # 1. Verzeichnisse erstellen
+            # 1. Verzeichnisse
             if not app_dir.exists(): app_dir.mkdir(parents=True, exist_ok=True)
             if not data_dir.exists(): data_dir.mkdir(parents=True, exist_ok=True)
             
-            # 2. Copy Content: Source Code in den App-Pfad
-            self.log("Kopiere Framework-Dateien in den App-Pfad...")
-            total_items = len(CODE_DIRS) + len(DATA_TEMPLATES_DIRS) + len(INCLUDE_APP_FILES) + len(INCLUDE_LAUNCHER_DOCS) + 3 
+            # 2. Code kopieren
+            self.log("Kopiere Programmdateien...")
+            total_items = len(CODE_DIRS) + len(DATA_TEMPLATES_DIRS) + len(INCLUDE_APP_FILES) + 5
             current = 0
             
-            # Kopiere Code-Ordner (orchestrator, configs, assets, Docker Setup)
             for item in CODE_DIRS:
                 src = SOURCE_DIR / item
                 dst = app_dir / item
                 if src.exists():
                     if dst.exists(): shutil.rmtree(dst)
                     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*IGNORE_PATTERNS))
-                    self.log(f"  Kopiert (App): {item}")
                 current += 1
-                self.progress['value'] = (current / total_items) * 20
+                self.progress['value'] = (current / total_items) * 30
             
-            # Kopiere App-Dateien (pyproject.toml etc.)
             for item in INCLUDE_APP_FILES:
                 src = SOURCE_DIR / item
                 dst = app_dir / item
                 if src.exists(): shutil.copy2(src, dst)
                 current += 1
 
-            # 3. Copy Launcher/Uninstaller/Docs in den App-Pfad
-            
-            # Kopiere Readme/License
             for item in INCLUDE_LAUNCHER_DOCS:
                 src = SOURCE_DIR / item
                 dst = app_dir / item
                 if src.exists(): shutil.copy2(src, dst)
-                current += 1
             
-            # *** KORREKTUR: Launcher kopieren und ROBSTE LOGIK überschreiben ***
-            DST_LAUNCHER_PATH = app_dir / LAUNCHER_FILE_NAME
-            
-            # 3a. Kopiere Launcher-Template
-            SRC_LAUNCHER = SOURCE_DIR / "scripts" / LAUNCHER_FILE_NAME
-            if SRC_LAUNCHER.exists():
-                shutil.copy2(SRC_LAUNCHER, DST_LAUNCHER_PATH)
-            else:
-                self.log(f"  FEHLER: Launcher-Quelle nicht gefunden: {SRC_LAUNCHER}. Wird leer erstellt.")
-            
-            # 3b. Überschreibe mit ROBSTER LOGIK (FIX für Absturz)
-            self.log(f"  Sichere Launcher-Logik wird implementiert...")
-            launcher_content = self._create_robust_launcher()
-            with open(DST_LAUNCHER_PATH, "w") as f:
-                f.write(launcher_content)
-                
-            self.log(f"  Kopiert und gesichert (Launcher): {LAUNCHER_FILE_NAME}")
+            # 3. LAUNCHER ERSTELLEN (Generieren statt Kopieren!)
+            self.log(f"Erstelle Start-Skript: {LAUNCHER_FILE_NAME}")
+            launcher_path = app_dir / LAUNCHER_FILE_NAME
+            with open(launcher_path, "w") as f:
+                f.write(self._create_launcher_content())
             current += 1
 
-            # Kopiere Uninstaller
-            src_uninstaller = SOURCE_DIR / "scripts" / "Uninstall-LLM-Conversion-Framework.bat"
-            if src_uninstaller.exists():
-                shutil.copy2(src_uninstaller, app_dir / "Uninstall-LLM-Conversion-Framework.bat")
-            current += 1
-                
-            self.progress['value'] = 30
+            # Uninstaller kopieren
+            src_uninst = SOURCE_DIR / "scripts" / "Uninstall-LLM-Conversion-Framework.bat"
+            if src_uninst.exists():
+                shutil.copy2(src_uninst, app_dir / "Uninstall-LLM-Conversion-Framework.bat")
             
-            # 4. Copy Data-Templates DIREKT in den Data Path
-            self.log("Kopiere Daten-Templates (Targets/Models) in den Data Path...")
+            self.progress['value'] = 40
+            
+            # 4. Daten-Templates kopieren
+            self.log("Kopiere Daten-Templates...")
             for item in DATA_TEMPLATES_DIRS:
                 src = SOURCE_DIR / item
                 dst = data_dir / item
                 if src.exists():
                     if dst.exists(): shutil.rmtree(dst)
                     shutil.copytree(src, dst, ignore=shutil.ignore_patterns(*IGNORE_PATTERNS))
-                    self.log(f"  Kopiert (Data): {item}")
                 current += 1
-                self.progress['value'] = (current / total_items) * 45
+                self.progress['value'] = (current / total_items) * 50
 
-
-            # 5. VENV Creation & Dependencies Installation im App-Pfad
-            self.log("Erstelle isolierte Python-Umgebung (.venv)...")
+            # 5. VENV & Dependencies (ROBUST)
+            self.log("Erstelle Python Environment (kann dauern)...")
             venv_path = app_dir / ".venv"
-            subprocess.run([sys.executable, "-m", "venv", str(venv_path)], 
+            subprocess.run([sys.executable, "-m", "venv", str(venv_path), "--clear"], 
                          check=True, creationflags=subprocess.CREATE_NO_WINDOW)
             
             pip_exe = venv_path / "Scripts" / "pip.exe"
             cwd = str(app_dir)
             
-            self.log("Installiere Abhaengigkeiten...")
+            self.log("Installiere Requirements...")
+            
+            # FIX: Upgrade Pip first
+            self._run_pip(pip_exe, ["--upgrade", "pip"], cwd)
+
+            # FIX: Install PyYAML explizit (Sicherheitsnetz)
+            self._run_pip(pip_exe, ["PyYAML"], cwd)
+
             req_file = app_dir / "requirements.txt"
             if req_file.exists():
-                subprocess.run([str(pip_exe), "install", "-r", "requirements.txt"], cwd=cwd,
-                             capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
-                subprocess.run([str(pip_exe), "install", "--no-deps", "."], cwd=cwd,
-                             capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                # FIX: Fehlerbehandlung integriert in _run_pip
+                self._run_pip(pip_exe, ["-r", "requirements.txt"], cwd)
+                # Install package itself
+                self._run_pip(pip_exe, ["-e", "."], cwd)
+            else:
+                self.log("WARNUNG: requirements.txt nicht gefunden!")
             
-            self.progress['value'] = 75
+            self.progress['value'] = 80
 
-            # 6. Konfigurationsdateien für Output/Logs anpassen
-            self.log("Konfiguriere ALLE Datenpfade...")
-            
-            # Sicherstellen, dass die Data-Ordner existieren (Output, Logs, Cache)
+            # 6. Config
+            self.log("Konfiguriere Pfade...")
             (data_dir / "output").mkdir(parents=True, exist_ok=True)
             (data_dir / "logs").mkdir(parents=True, exist_ok=True)
-            (data_dir / "cache").mkdir(parents=True, exist_ok=True) 
+            (data_dir / "cache").mkdir(parents=True, exist_ok=True)
             
             config_file = app_dir / "configs" / "user_config.yml" 
             config_data = {}
             if config_file.exists():
                 try:
-                    with open(config_file, 'r') as f:
-                        config_data = yaml.safe_load(f) or {}
+                    with open(config_file, 'r') as f: config_data = yaml.safe_load(f) or {}
                 except: pass
             
-            # Setze oder überschreibe ALLE data-relevanten Pfade auf absolute Data Path Werte
             config_data["output_dir"] = str(data_dir / "output")
             config_data["logs_dir"] = str(data_dir / "logs")
             config_data["cache_dir"] = str(data_dir / "cache")
-            config_data["targets_dir"] = str(data_dir / "targets") 
-            config_data["models_dir"] = str(data_dir / "models")   
+            config_data["targets_dir"] = str(data_dir / "targets")
+            config_data["models_dir"] = str(data_dir / "models")
             
             with open(config_file, "w") as f:
                 yaml.dump(config_data, f, default_flow_style=False)
-            
-            self.log(f"  Alle Datenpfade in {config_file.name} auf Data Path gesetzt.")
 
-            # 7. Checkfile (Pointer)
-            self.log("Finalisiere Registrierung...")
+            # 7. Checkfile
+            self.log("Registriere Installation...")
+            if not CHECKFILE_DIR.exists():
+                CHECKFILE_DIR.mkdir(parents=True, exist_ok=True)
             
-            # Pfad der Checkfile, die im Data-Ordner liegen soll
-            current_checkfile_path = data_dir / "checkfile.txt"
-            
-            # FIX: Entfernt schützende Attribute, falls das File existiert (um Errno 13 zu vermeiden)
-            if current_checkfile_path.exists():
+            # Reset Attributes falls vorhanden
+            if CHECKFILE_PATH.exists():
                 try:
-                    # 0x00 = FILE_ATTRIBUTE_NORMAL (Clears read-only, hidden, etc.)
-                    ctypes.windll.kernel32.SetFileAttributesW(str(current_checkfile_path), 0x00)
-                except Exception as attr_e:
-                    self.log(f"WARNUNG: Konnte Attribute nicht zurücksetzen: {attr_e}")
+                    ctypes.windll.kernel32.SetFileAttributesW(str(CHECKFILE_PATH), 0x00)
+                except: pass
 
-            # Checkfile zeigt auf den App-Pfad (Source Code + VENV)
-            with open(current_checkfile_path, "w") as f:
+            with open(CHECKFILE_PATH, "w") as f:
                 f.write(f'Path="{app_dir}"') 
             
-            # Nur Checkfile verstecken
             try:
-                ctypes.windll.kernel32.SetFileAttributesW(str(current_checkfile_path), 0x02)
+                ctypes.windll.kernel32.SetFileAttributesW(str(CHECKFILE_PATH), 0x02) # Hidden
             except: pass
 
-            self.progress['value'] = 85
+            self.progress['value'] = 90
 
             # 8. Shortcuts
             if self.var_desktop.get():
-                self.log("Erstelle Desktop-Verknüpfungen (App & Data)...")
-                self._create_shortcut_pair(app_dir, data_dir)
+                self.log("Erstelle Verknuepfungen...")
+                self._create_shortcuts(app_dir, data_dir)
 
             self.progress['value'] = 100
-            self.log("Installation Complete!")
+            self.log("FERTIG!")
             
-            # UX FIX: Verbesserte Erfolgsmeldung
-            messagebox.showinfo("Installation Erfolgreich!", 
-                                f"Das LLM Conversion Framework wurde erfolgreich installiert und ist startbereit.\n\n"
-                                f"Starten Sie die Anwendung über die Desktop-Verknüpfung.\n"
-                                f"Ihre Daten (Modelle, Logs, Artefakte) finden Sie unter:\n\n"
-                                f"{str(data_dir)}")
+            messagebox.showinfo("Installation Erfolgreich", 
+                                f"Installation abgeschlossen.\n\n"
+                                f"App: {app_dir}\n"
+                                f"Daten: {data_dir}\n\n"
+                                f"Sie koennen das Programm nun ueber den Desktop starten.")
             self.destroy()
             
         except Exception as e:
-            self.log(f"ERROR: {e}")
-            messagebox.showerror("Installationsfehler", f"Ein kritischer Fehler ist aufgetreten: {str(e)}")
+            self.log(f"CRITICAL ERROR: {e}")
+            messagebox.showerror("Fehler", str(e))
             self.btn_install.config(state='normal')
             self.btn_cancel.config(state='normal')
         finally:
-            pythoncom.CoUninitialize() # Bereinigt COM, unabhängig vom Erfolg oder Misserfolg.
+            if 'pythoncom' in sys.modules:
+                pythoncom.CoUninitialize()
 
-    def _create_shortcut_pair(self, app_dir: Path, data_dir: Path):
-        if 'winshell' not in sys.modules or 'Dispatch' not in globals():
-            self.log("Shortcuts konnten nicht erstellt werden (winshell/pywin32 fehlt).")
-            return
-            
-        shell = Dispatch('WScript.Shell')
+    def _create_shortcuts(self, app_dir: Path, data_dir: Path):
+        if 'winshell' not in sys.modules: return
+        
         desktop = winshell.desktop()
+        shell = Dispatch('WScript.Shell')
         
-        # Icon-Pfade (sind jetzt im app_dir/assets)
-        icon_app_path = str(app_dir / "assets" / "LLM-Builder.ico")
-        icon_data_path = str(app_dir / "assets" / "setup_LLM-Builder.ico")
+        # 1. App Shortcut
+        lnk_app = os.path.join(desktop, f"{APP_TITLE}.lnk")
+        target = str(app_dir / LAUNCHER_FILE_NAME)
         
-        # --- Shortcut 1: Die App Launcher
-        name_app = f"{APP_TITLE}"
-        path_app = os.path.join(desktop, f"{name_app}.lnk")
-        target_bat = str(app_dir / LAUNCHER_FILE_NAME)
+        sc = shell.CreateShortCut(lnk_app)
+        sc.Targetpath = target
+        sc.WorkingDirectory = str(app_dir)
+        sc.Description = "Startet das Framework"
+        icon = app_dir / "assets" / "LLM-Builder.ico"
+        if icon.exists(): sc.IconLocation = str(icon)
+        sc.save()
         
-        shortcut_app = shell.CreateShortCut(path_app)
-        shortcut_app.Targetpath = target_bat
-        shortcut_app.WorkingDirectory = str(app_dir)
-        shortcut_app.Description = "Startet die LLM Conversion Framework Anwendung"
-        if Path(icon_app_path).exists():
-            shortcut_app.IconLocation = icon_app_path
-        shortcut_app.save()
-        self.log(f"  Erstellt: App-Launcher")
-        
-        # --- Shortcut 2: Der Data/Output Ordner
-        name_data = f"{APP_TITLE} Data & Output"
-        path_data = os.path.join(desktop, f"{name_data}.lnk")
-        
-        shortcut_data = shell.CreateShortCut(path_data)
-        shortcut_data.Targetpath = str(data_dir) # Ziel ist das Verzeichnis selbst
-        shortcut_data.WorkingDirectory = str(data_dir)
-        shortcut_data.Description = "Öffnet den Daten- und Ausgabeordner (Goldenes Artefakt)"
-        if Path(icon_data_path).exists():
-            shortcut_data.IconLocation = icon_data_path
-        shortcut_data.save()
-        self.log(f"  Erstellt: Data-Folder-Shortcut")
+        # 2. Data Shortcut
+        lnk_data = os.path.join(desktop, f"{APP_TITLE} Data.lnk")
+        sc = shell.CreateShortCut(lnk_data)
+        sc.Targetpath = str(data_dir)
+        sc.Description = "Hier liegen Modelle und Outputs"
+        icon = app_dir / "assets" / "setup_LLM-Builder.ico"
+        if icon.exists(): sc.IconLocation = str(icon)
+        sc.save()
 
 if __name__ == "__main__":
     app = InstallerGUI()

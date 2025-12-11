@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - GUI Dialogs (v2.0 Enterprise)
+LLM Cross-Compiler Framework - GUI Dialogs (v2.1 Enterprise)
 DIREKTIVE: Goldstandard UI Components.
 
 Updates:
-- Added SecretInputDialog for secure Keyring storage.
-- Standardized dialog styling.
+- SecretInputDialog supports Keyring.
+- HealingDialog allows editing of AI proposals.
 """
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QLineEdit, 
     QDialogButtonBox, QMessageBox, QComboBox, 
-    QWidget, QFormLayout
+    QWidget, QFormLayout, QTextEdit
 )
 from PySide6.QtCore import Qt
 from orchestrator.utils.localization import get_instance as get_i18n
@@ -49,7 +49,7 @@ class LanguageSelectionDialog(QDialog):
 class SecretInputDialog(QDialog):
     """
     Secure dialog to input API Keys and secrets.
-    Stores directly to SecretsManager (Keyring), NOT config files.
+    Stores directly to SecretsManager (Keyring).
     """
     def __init__(self, framework, secret_key: str, display_name: str, parent=None):
         super().__init__(parent)
@@ -71,7 +71,6 @@ class SecretInputDialog(QDialog):
         self.input_field.setEchoMode(QLineEdit.Password)
         self.input_field.setPlaceholderText("sk-...")
         
-        # Check if secret exists (visual hint only, never show the secret!)
         if self.framework.secrets_manager:
             exists = self.framework.secrets_manager.get_secret(secret_key)
             if exists:
@@ -101,18 +100,43 @@ class SecretInputDialog(QDialog):
         else:
             QMessageBox.critical(self, "Error", "SecretsManager is not initialized!")
 
-class BuildConfirmDialog(QDialog):
+class HealingConfirmDialog(QDialog):
     """
-    Confirmation dialog before starting a build.
+    Dialog to review and EDIT an AI healing proposal.
     """
-    def __init__(self, target_name, model_name, parent=None):
+    def __init__(self, proposal, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Confirm Build")
+        self.proposal = proposal
+        self.setWindowTitle("Self-Healing Proposal")
+        self.resize(500, 400)
         
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"Start conversion for:\nTarget: {target_name}\nModel: {model_name}"))
         
-        buttons = QDialogButtonBox(QDialogButtonBox.Yes | QDialogButtonBox.No)
+        # Summary
+        lbl_sum = QLabel(f"<b>Issue:</b> {proposal.error_summary}")
+        layout.addWidget(lbl_sum)
+        
+        lbl_root = QLabel(f"<b>Root Cause:</b> {proposal.root_cause}")
+        lbl_root.setWordWrap(True)
+        layout.addWidget(lbl_root)
+        
+        # Command (Editable!)
+        layout.addWidget(QLabel("<b>Proposed Fix (You can edit this):</b>"))
+        self.txt_command = QTextEdit()
+        self.txt_command.setPlainText(proposal.fix_command)
+        self.txt_command.setReadOnly(False) # FIX: User can edit!
+        self.txt_command.setStyleSheet("background-color: #222; color: #0f0; font-family: Consolas;")
+        layout.addWidget(self.txt_command)
+        
+        # Confidence
+        conf_color = "green" if proposal.confidence_score > 0.8 else "orange"
+        layout.addWidget(QLabel(f"Confidence: <span style='color:{conf_color}'>{proposal.confidence_score*100:.1f}%</span>"))
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def get_final_command(self):
+        """Returns the (potentially edited) command."""
+        return self.txt_command.toPlainText().strip()

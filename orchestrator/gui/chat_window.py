@@ -1,203 +1,185 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Chat Interface
-DIREKTIVE: Goldstandard, GUI, UX.
+LLM Cross-Compiler Framework - Chat Window (v2.0 Goldstandard)
+DIREKTIVE: Echter Threading-Support (QThread) & Persistenz.
 
-Zweck:
-Interaktives Chat-Fenster für Ditto.
-Erlaubt dem User, Fragen an das RAG-System zu stellen ("Warum dieser Treiber?").
-Integriert Visuals (Avatare) und Session-Management.
+Features:
+- Asynchrone AI-Antworten (Kein GUI-Freeze).
+- Persistente Chat-History (JSON im Cache).
+- Manuelles Löschen der History.
 """
 
+import json
+from pathlib import Path
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QTextEdit, 
-    QLineEdit, QPushButton, QLabel, QScrollArea, QFrame,
-    QSizePolicy
+    QWidget, QVBoxLayout, QTextBrowser, QLineEdit, 
+    QPushButton, QHBoxLayout, QLabel, QProgressBar, QMessageBox
 )
-from PySide6.QtCore import Qt, Signal, QTimer, QSize
-from PySide6.QtGui import QIcon, QPixmap, QTextCursor, QColor
+from PySide6.QtCore import Qt, QTimer, Signal, QThread
+from PySide6.QtGui import QIcon, QAction
 
-from orchestrator.utils.localization import tr
+from orchestrator.utils.localization import get_instance as get_i18n
 
-class ChatBubble(QFrame):
-    """Custom Widget for a single chat message."""
-    def __init__(self, text: str, is_user: bool, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QFrame.StyledPanel)
-        self.setFrameShadow(QFrame.Raised)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 5, 10, 5)
-        
-        # Style
-        color = "#007acc" if is_user else "#404040"
-        align = "right" if is_user else "left"
-        border_radius = "15px"
-        
-        self.setStyleSheet(f"""
-            ChatBubble {{
-                background-color: {color};
-                border-radius: {border_radius};
-                border: 1px solid #555;
-            }}
-            QLabel {{
-                color: white;
-                font-size: 13px;
-                background: transparent;
-            }}
-        """)
-        
-        self.lbl = QLabel(text)
-        self.lbl.setWordWrap(True)
-        self.lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self.lbl)
+class ChatWorker(QThread):
+    """
+    Führt die AI-Anfrage im Hintergrund aus, damit die GUI responsive bleibt.
+    """
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, ditto, question, history):
+        super().__init__()
+        self.ditto = ditto
+        self.question = question
+        self.history = history
+
+    def run(self):
+        try:
+            if not self.ditto:
+                raise Exception("AI Core (Ditto) not initialized.")
+            
+            # Hier läuft die teure Operation
+            answer = self.ditto.ask_ditto(self.question, self.history)
+            self.finished.emit(answer)
+        except Exception as e:
+            self.error.emit(str(e))
 
 class ChatWindow(QWidget):
-    """
-    Main Chat Widget. Can be docked or standalone.
-    """
-    def __init__(self, ditto_manager, parent=None):
+    def __init__(self, framework_manager, parent=None):
         super().__init__(parent)
-        self.ditto = ditto_manager
-        self.history = [] # For LLM Context
+        self.framework = framework_manager
+        self.ditto = framework_manager.ditto_manager
+        self.history = []
+        self.i18n = get_i18n()
+        self.worker = None
+        
+        # Pfad für Chat-History
+        self.history_file = Path(framework_manager.config.cache_dir) / "chat_history.json"
         
         self._init_ui()
-        
-        # Initial Greeting
-        QTimer.singleShot(500, lambda: self.add_message("Hi! I am Ditto. I can help you with hardware flags, SDK versions, and build errors. Just ask!", False))
+        self._load_history()
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
         
-        # --- Header / Toolbar ---
-        header = QHBoxLayout()
+        # Header mit Clear-Button
+        header_layout = QHBoxLayout()
+        title = QLabel("Ditto AI Assistant")
+        title.setStyleSheet("font-weight: bold; font-size: 14px;")
+        header_layout.addWidget(title)
         
-        # Avatar (Small)
-        self.lbl_avatar = QLabel()
-        self.lbl_avatar.setFixedSize(40, 40)
-        self._update_avatar("default")
-        header.addWidget(self.lbl_avatar)
+        self.btn_clear = QPushButton("🗑️ Clear History")
+        self.btn_clear.clicked.connect(self._confirm_clear_history)
+        self.btn_clear.setFixedWidth(120)
+        header_layout.addWidget(self.btn_clear, alignment=Qt.AlignRight)
         
-        header.addWidget(QLabel("<b>Ditto AI Expert</b>"))
-        header.addStretch()
+        layout.addLayout(header_layout)
         
-        # Clear Context Button
-        btn_clear = QPushButton("🧹")
-        btn_clear.setToolTip("Clear Chat History / Context")
-        btn_clear.setFixedSize(30, 30)
-        btn_clear.clicked.connect(self.reset_session)
-        header.addWidget(btn_clear)
+        # Chat Display
+        self.txt_display = QTextBrowser()
+        self.txt_display.setOpenExternalLinks(True)
+        layout.addWidget(self.txt_display)
         
-        layout.addLayout(header)
+        # Status Bar (Thinking...)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0) # Indeterminate (Ladebalken läuft hin und her)
+        self.progress.setFixedHeight(5)
+        self.progress.setVisible(False)
+        layout.addWidget(self.progress)
         
-        # --- Chat Area ---
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        
-        self.chat_container = QWidget()
-        self.chat_layout = QVBoxLayout(self.chat_container)
-        self.chat_layout.addStretch() # Push messages to bottom
-        
-        self.scroll_area.setWidget(self.chat_container)
-        layout.addWidget(self.scroll_area)
-        
-        # --- Input Area ---
-        input_box = QHBoxLayout()
-        
+        # Input Area
+        input_layout = QHBoxLayout()
         self.txt_input = QLineEdit()
-        self.txt_input.setPlaceholderText("Ask about drivers, flags, or errors...")
+        self.txt_input.setPlaceholderText(self.i18n.t("chat.placeholder", "Ask Ditto about compilation errors..."))
         self.txt_input.returnPressed.connect(self.send_message)
-        input_box.addWidget(self.txt_input)
         
-        self.btn_send = QPushButton("➤")
-        self.btn_send.setFixedSize(40, 30)
+        self.btn_send = QPushButton("Send")
         self.btn_send.clicked.connect(self.send_message)
-        input_box.addWidget(self.btn_send)
         
-        layout.addLayout(input_box)
+        input_layout.addWidget(self.txt_input)
+        input_layout.addWidget(self.btn_send)
+        layout.addLayout(input_layout)
 
-    def _update_avatar(self, state):
-        """Helper to set the mini avatar icon."""
-        # Assuming assets are in parent's root or known path
-        # For simplicity we assume 'assets/' relative to CWD
-        map_state = {
-            "default": "ditto.png",
-            "think": "ditto_think.png",
-            "error": "ditto_fail.png"
-        }
-        path = Path("assets") / map_state.get(state, "ditto.png")
-        if path.exists():
-             self.lbl_avatar.setPixmap(QPixmap(str(path)).scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+    def _add_message(self, text, is_user=False):
+        color = "#aaffaa" if is_user else "#ccccff"
+        sender = "You" if is_user else "Ditto"
+        align = "right" if is_user else "left"
+        
+        html = f"""
+        <div style='text-align: {align}; margin: 5px;'>
+            <span style='font-weight: bold; color: {color};'>{sender}:</span><br>
+            <span style='background-color: #333; padding: 5px; border-radius: 5px;'>{text}</span>
+        </div>
+        <hr style='border: 0; border-top: 1px solid #444;'>
+        """
+        self.txt_display.append(html)
+        
+        # Update internal history
+        role = "user" if is_user else "assistant"
+        self.history.append({"role": role, "content": text})
+        
+        # Auto-Save nach jeder Nachricht
+        self._save_history()
 
     def send_message(self):
         text = self.txt_input.text().strip()
         if not text: return
         
-        # 1. User Message
-        self.add_message(text, True)
         self.txt_input.clear()
-        self.txt_input.setEnabled(False)
+        self._add_message(text, True)
         
-        # 2. Process in Background (Simulated here via Timer to not block UI)
-        # In real implementation, use a QThread/Worker!
+        # UI Sperren und Ladebalken zeigen
         self._set_thinking(True)
         
-        # Quick hack for responsiveness: Using QTimer to decouple execution
-        QTimer.singleShot(100, lambda: self._process_ai_response(text))
+        # Worker starten (Echter Thread!)
+        self.worker = ChatWorker(self.ditto, text, self.history)
+        self.worker.finished.connect(self._on_ai_response)
+        self.worker.error.connect(self._on_ai_error)
+        self.worker.start()
 
-    def _process_ai_response(self, text):
-        """Calls Ditto Manager to get answer."""
+    def _on_ai_response(self, answer):
+        self._set_thinking(False)
+        self._add_message(answer, False)
+
+    def _on_ai_error(self, error_msg):
+        self._set_thinking(False)
+        self._add_message(f"⚠️ Error: {error_msg}", False)
+
+    def _set_thinking(self, active: bool):
+        self.txt_input.setEnabled(not active)
+        self.btn_send.setEnabled(not active)
+        self.progress.setVisible(active)
+
+    def _save_history(self):
         try:
-            if self.ditto:
-                answer = self.ditto.ask_ditto(text, self.history)
-            else:
-                answer = "Ditto Manager not connected. Offline mode."
-                
-            self.add_message(answer, False)
-            
-            # Update History
-            self.history.append({"role": "user", "content": text})
-            self.history.append({"role": "assistant", "content": answer})
-            
-            # Context Management (Simple Rolling Window)
-            if len(self.history) > 20:
-                self.history = self.history[-10:] # Keep last 5 turns
-                
+            with open(self.history_file, "w") as f:
+                json.dump(self.history, f, indent=2)
         except Exception as e:
-            self.add_message(f"Error: {str(e)}", False)
-            self._update_avatar("error")
-            
-        finally:
-            self.txt_input.setEnabled(True)
-            self.txt_input.setFocus()
-            self._set_thinking(False)
+            print(f"Warning: Could not save chat history: {e}")
 
-    def _set_thinking(self, thinking: bool):
-        if thinking:
-            self._update_avatar("think")
-            self.setWindowTitle("Ditto is thinking...")
-        else:
-            self._update_avatar("default")
-            self.setWindowTitle("Ditto AI Expert")
+    def _load_history(self):
+        if self.history_file.exists():
+            try:
+                with open(self.history_file, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.history = [] # Reset RAM history first
+                        self.txt_display.clear()
+                        for msg in data:
+                            # Re-Render history
+                            is_user = msg.get("role") == "user"
+                            content = msg.get("content", "")
+                            self._add_message(content, is_user)
+            except Exception as e:
+                print(f"Warning: Corrupt chat history: {e}")
 
-    def add_message(self, text: str, is_user: bool):
-        bubble = ChatBubble(text, is_user)
-        self.chat_layout.addWidget(bubble)
+    def _confirm_clear_history(self):
+        reply = QMessageBox.question(self, "Clear History", 
+                                   "Are you sure you want to delete the entire chat history?\nThis cannot be undone.",
+                                   QMessageBox.Yes | QMessageBox.No)
         
-        # Auto Scroll
-        QTimer.singleShot(50, lambda: self.scroll_area.verticalScrollBar().setValue(
-            self.scroll_area.verticalScrollBar().maximum()
-        ))
-
-    def reset_session(self):
-        """Clears history and UI."""
-        self.history = []
-        # Remove all widgets from layout (except stretch)
-        while self.chat_layout.count() > 1:
-            item = self.chat_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        
-        self.add_message("Context cleared. How can I help?", False)
+        if reply == QMessageBox.Yes:
+            self.history = []
+            self.txt_display.clear()
+            self._save_history() # Leere Datei schreiben
+            self._add_message("History cleared.", False)

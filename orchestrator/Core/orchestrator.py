@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Main Orchestrator
+LLM Cross-Compiler Framework - Core Orchestrator
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 
-Updates v2.0.0:
-- Integrated Consistency Manager (Pre-Flight Checks).
-- Integrated Self-Healing Manager (Post-Fail Recovery).
-- Enhanced Workflow Logic with 'Guardian Layers'.
+Zweck:
+Verwaltet den gesamten Build-Lebenszyklus, von der Anfrage bis zum Artefakt.
+Integriert Builder, ModuleGenerator und (neu) Self-Healing.
 """
 
 import os
@@ -14,349 +13,306 @@ import sys
 import json
 import logging
 import asyncio
-import threading
-import time
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union, Callable, Tuple, Set
+from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from enum import Enum
-import queue
-import signal
 
-import yaml
-from packaging import version
-
-from orchestrator.Core.framework import FrameworkManager, FrameworkConfig, FrameworkError
-from orchestrator.Core.builder import BuildEngine, BuildConfiguration, BuildProgress, BuildStatus, ModelFormat, OptimizationLevel
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.validation import ValidationError, validate_path, validate_config
-from orchestrator.utils.helpers import ensure_directory, check_command_exists, safe_json_load
+from orchestrator.Core.builder import BuildEngine, BuildJob, BuildStatus, OptimizationLevel, ModelFormat
+from orchestrator.Core.module_generator import ModuleGenerator
 
-# v2.0: Guardian Layers
-try:
-    from orchestrator.Core.consistency_manager import ConsistencyManager, ConsistencyIssue
-except ImportError:
-    ConsistencyManager = None
-
+# NEU: Self-Healing Integration (Optional Import)
 try:
     from orchestrator.Core.self_healing_manager import SelfHealingManager, HealingProposal
 except ImportError:
     SelfHealingManager = None
-
+    HealingProposal = None
 
 # ============================================================================
-# ENUMS AND CONSTANTS
+# DATENKLASSEN & ENUMS
 # ============================================================================
-
-class OrchestrationStatus(Enum):
-    INITIALIZING = "initializing"
-    READY = "ready"
-    BUILDING = "building"
-    PAUSED = "paused"
-    HEALING = "healing"           # v2.0: Analysis in progress
-    CONSISTENCY_CHECK = "checking" # v2.0: Pre-flight check
-    SHUTTING_DOWN = "shutting_down"
-    ERROR = "error"
 
 class WorkflowType(Enum):
     SIMPLE_CONVERSION = "simple_conversion"
-    BATCH_CONVERSION = "batch_conversion"
-    MULTI_TARGET = "multi_target"
-    FULL_MATRIX = "full_matrix"
+    FULL_CROSS_COMPILE = "full_cross_compile"
+    RAG_OPTIMIZED = "rag_optimized"
     CUSTOM_PIPELINE = "custom_pipeline"
 
 class PriorityLevel(Enum):
-    LOW = 1
-    NORMAL = 5
-    HIGH = 10
-    URGENT = 20
-    CRITICAL = 50
+    LOW = 0
+    NORMAL = 1
+    HIGH = 2
+    URGENT = 3
+    CRITICAL = 4
 
-class ResourceType(Enum):
-    CPU = "cpu"
-    MEMORY = "memory"
-    DISK = "disk"
-    DOCKER = "docker"
-    NETWORK = "network"
-
-# ============================================================================
-# DATA MODELS
-# ============================================================================
+class OrchestrationStatus(Enum):
+    QUEUED = "queued"
+    PREPARING = "preparing"
+    BUILDING = "building"
+    HEALING = "healing" # NEU: System repariert sich selbst
+    COMPLETED = "completed"
+    ERROR = "error"
+    CANCELLED = "cancelled"
 
 @dataclass
 class BuildRequest:
+    """Repräsentiert eine Anfrage vom User (CLI/GUI)"""
     request_id: str
     workflow_type: WorkflowType
-    priority: PriorityLevel = PriorityLevel.NORMAL
-    created_at: datetime = field(default_factory=datetime.now)
-    models: List[str] = field(default_factory=list)
-    model_branch: str = "main"
-    targets: List[str] = field(default_factory=list) 
-    target_formats: List[ModelFormat] = field(default_factory=list)
-    optimization_level: OptimizationLevel = OptimizationLevel.BALANCED
-    quantization_options: List[str] = field(default_factory=list)
-    parallel_builds: bool = True
-    max_concurrent: int = 2
-    output_base_dir: str = ""
-    output_naming: str = "default"
-    retry_count: int = 2
-    timeout: int = 3600
-    cleanup_on_success: bool = True
-    cleanup_on_failure: bool = False
-    tags: List[str] = field(default_factory=list)
+    priority: PriorityLevel
+    models: List[str]
+    targets: List[str]
+    target_formats: List[ModelFormat]
+    optimization_level: OptimizationLevel
+    quantization_options: List[str]
+    parallel_builds: bool
+    output_base_dir: str
     description: str = ""
-    user_id: Optional[str] = None
     use_gpu: bool = False
+    
+    def __post_init__(self):
+        if not self.request_id:
+            self.request_id = f"req_{uuid.uuid4().hex[:8]}"
 
-@dataclass 
-class WorkflowProgress:
+@dataclass
+class WorkflowState:
+    """Aktueller Zustand eines Workflows"""
     request_id: str
-    workflow_type: WorkflowType
     status: OrchestrationStatus
-    current_stage: str = ""
+    start_time: datetime
+    end_time: Optional[datetime] = None
+    current_stage: str = "init"
     total_builds: int = 0
     completed_builds: int = 0
     failed_builds: int = 0
-    skipped_builds: int = 0
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
-    estimated_completion: Optional[datetime] = None
-    build_ids: List[str] = field(default_factory=list)
-    active_builds: Set[str] = field(default_factory=set)
-    completed_builds_detail: List[Dict[str, Any]] = field(default_factory=list)
-    logs: List[str] = field(default_factory=list)
+    artifacts: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
-    
-    # v2.0 Data
-    consistency_issues: List[Any] = field(default_factory=list)
+    # NEU: Aktiver Heilungsvorschlag für GUI
     healing_proposal: Optional[Any] = None 
-    
+
     @property
     def progress_percent(self) -> int:
         if self.total_builds == 0: return 0
-        return int((self.completed_builds + self.failed_builds + self.skipped_builds) / self.total_builds * 100)
-    
-    def add_log(self, message: str, level: str = "INFO"):
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.logs.append(f"[{timestamp}] [{level}] {message}")
-    
-    def add_error(self, error: str):
-        self.errors.append(error); self.add_log(f"ERROR: {error}", "ERROR")
-    
-    def add_warning(self, warning: str):
-        self.warnings.append(warning); self.add_log(f"WARNING: {warning}", "WARNING")
+        return int((self.completed_builds / self.total_builds) * 100)
 
-@dataclass
-class ResourceUsage:
-    cpu_percent: float = 0.0
-    memory_percent: float = 0.0
-    disk_usage_gb: float = 0.0
-    docker_containers: int = 0
-    active_builds: int = 0
-    max_cpu_percent: float = 80.0
-    max_memory_percent: float = 80.0
-    max_disk_usage_gb: float = 100.0
-    max_containers: int = 10
-    max_builds: int = 4
-    
-    def is_resource_available(self, resource_type: ResourceType) -> bool:
-        if resource_type == ResourceType.CPU: return self.cpu_percent < self.max_cpu_percent
-        elif resource_type == ResourceType.MEMORY: return self.memory_percent < self.max_memory_percent
-        elif resource_type == ResourceType.DISK: return self.disk_usage_gb < self.max_disk_usage_gb
-        elif resource_type == ResourceType.DOCKER: return self.docker_containers < self.max_containers
-        return True
-    
-    def can_start_build(self) -> bool:
-        return (self.active_builds < self.max_builds and self.is_resource_available(ResourceType.CPU) and self.is_resource_available(ResourceType.MEMORY))
+# ============================================================================
+# ORCHESTRATOR KLASSE
+# ============================================================================
 
 class LLMOrchestrator:
-    def __init__(self, config: Optional[FrameworkConfig] = None):
+    def __init__(self, config_manager):
         self.logger = get_logger(__name__)
-        self.config = config or FrameworkConfig()
-        self.framework_manager = None
-        self.build_engine = None
+        self.config = config_manager
         
-        # Managers
-        self.target_manager = None
-        self.model_manager = None
-        self.consistency_manager = None # v2.0
-        self.healing_manager = None     # v2.0
+        # Sub-Engines
+        self.build_engine = BuildEngine(config_manager)
+        self.module_generator = ModuleGenerator(Path(config_manager.targets_dir))
         
-        self._lock = threading.RLock()
-        self._status = OrchestrationStatus.INITIALIZING
-        self._shutdown_event = threading.Event()
-        self._workflows: Dict[str, WorkflowProgress] = {}
-        self._build_queue = asyncio.Queue()
-        self._active_requests: Dict[str, BuildRequest] = {}
-        self._resource_usage = ResourceUsage()
-        self._resource_monitor_thread = None
-        self._event_listeners: Dict[str, List[Callable]] = {}
-        self._workflow_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="workflow")
-        self._monitoring_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="monitor")
-        self._metrics = {"total_requests": 0, "successful_workflows": 0, "failed_workflows": 0, "total_builds": 0, "uptime_start": datetime.now()}
-        self.logger.info("LLM Orchestrator initialized")
-    
-    async def initialize(self) -> bool:
-        try:
-            self.logger.info("Initializing LLM Orchestrator...")
-            with self._lock: self._status = OrchestrationStatus.INITIALIZING
-            
-            self.framework_manager = FrameworkManager(self.config)
-            if not self.framework_manager.initialize(): raise Exception("Framework Manager init failed")
-            
-            self.build_engine = BuildEngine(self.framework_manager, self.config.max_concurrent_builds)
-            
-            # v2.0: Guardian Layers Initialization
-            if ConsistencyManager:
-                self.consistency_manager = ConsistencyManager(self.framework_manager)
-                self.logger.info("Consistency Manager (Pre-Flight) activated")
-                
-            if SelfHealingManager:
-                self.healing_manager = SelfHealingManager(self.framework_manager)
-                self.logger.info("Self-Healing Manager (Post-Fail) activated")
+        # State Management
+        self._workflows: Dict[str, WorkflowState] = {}
+        self._queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
+        self._active_tasks: Dict[str, asyncio.Task] = {}
+        self._lock = asyncio.Lock()
+        
+        # NEU: Self-Healing Referenz (wird injected)
+        self.self_healing = None 
 
-            self._start_monitoring()
-            
-            with self._lock: self._status = OrchestrationStatus.READY
-            return True
-            
-        except Exception as e:
-            self._status = OrchestrationStatus.ERROR
-            self.logger.error(f"Orchestrator initialization failed: {e}")
+    async def initialize(self) -> bool:
+        """Asynchrone Initialisierung"""
+        self.logger.info("Initializing Orchestrator...")
+        # Check Docker connectivity via BuildEngine
+        if not self.build_engine.check_docker():
+            self.logger.error("Docker not ready. Orchestrator functionality limited.")
             return False
-    
-    def _start_monitoring(self):
-        pass # Monitoring logic placeholder
+        return True
+
+    # --- PUBLIC API ---
 
     async def submit_build_request(self, request: BuildRequest) -> str:
-        if not self._status == OrchestrationStatus.READY: raise Exception("Orchestrator not ready")
-        if not request.request_id: request.request_id = f"req_{uuid.uuid4().hex[:8]}"
-        
-        workflow = WorkflowProgress(request.request_id, request.workflow_type, OrchestrationStatus.BUILDING, start_time=datetime.now())
-        workflow.total_builds = len(request.models) * len(request.targets)
-        
-        with self._lock:
-            self._active_requests[request.request_id] = request
-            self._workflows[request.request_id] = workflow
+        """Nimmt einen neuen Build-Auftrag entgegen"""
+        async with self._lock:
+            # Workflow State erstellen
+            state = WorkflowState(
+                request_id=request.request_id,
+                status=OrchestrationStatus.QUEUED,
+                start_time=datetime.now()
+            )
+            self._workflows[request.request_id] = state
             
-        self._workflow_executor.submit(self._execute_workflow, request)
-        return request.request_id
+            # In Queue packen (Priorität beachten: Negativ, da PriorityQueue min-heap ist)
+            # Tuple: (priority_int, timestamp, request)
+            await self._queue.put((-request.priority.value, datetime.now().timestamp(), request))
+            
+            self.logger.info(f"Request {request.request_id} queued (Priority: {request.priority.name})")
+            
+            # Worker triggern (falls noch nicht läuft)
+            self._ensure_worker_running()
+            
+            return request.request_id
 
-    def _execute_workflow(self, request: BuildRequest):
-        wf = self._workflows[request.request_id]
-        try:
-            configs = []
-            # Config Generation
-            for m in request.models:
-                for t in request.targets:
-                    cfg = BuildConfiguration(
-                        build_id=f"bld_{uuid.uuid4().hex[:6]}",
-                        timestamp=datetime.now().isoformat(),
-                        model_source=m,
-                        target_arch=t,
-                        target_format=request.target_formats[0] if request.target_formats else ModelFormat.GGUF,
-                        output_dir=request.output_base_dir,
-                        quantization=request.quantization_options[0] if request.quantization_options else None,
-                        use_gpu=request.use_gpu
-                    )
-                    configs.append(cfg)
-            
-            # Sequential or Parallel Execution
-            for c in configs:
-                # --- 1. CONSISTENCY CHECK (Pre-Flight) ---
-                if self.consistency_manager:
-                    wf.status = OrchestrationStatus.CONSISTENCY_CHECK
-                    
-                    # Convert BuildConfig to Dict for Checker
-                    check_cfg = {
-                        "target": c.target_arch,
-                        "quantization": c.quantization,
-                        "format": c.target_format.value,
-                        "model_name": c.model_source
-                    }
-                    
-                    issues = self.consistency_manager.check_build_compatibility(check_cfg)
-                    
-                    # If CRITICAL Error found -> Skip Build
-                    critical_errors = [i for i in issues if i.severity == "ERROR"]
-                    if critical_errors:
-                        msg = f"Skipped build for {c.target_arch}: {critical_errors[0].message}"
-                        self.logger.error(msg)
-                        wf.add_error(msg)
-                        wf.consistency_issues.extend(critical_errors)
-                        wf.skipped_builds += 1
-                        continue # Skip this config
-                    
-                    # Warnings -> Log but proceed
-                    warnings = [i for i in issues if i.severity == "WARNING"]
-                    if warnings:
-                        for w in warnings:
-                            wf.add_warning(f"Consistency Warning: {w.message}")
+    async def get_workflow_status(self, request_id: str) -> Optional[WorkflowState]:
+        """Gibt den aktuellen Status zurück"""
+        return self._workflows.get(request_id)
 
-                # --- 2. BUILD EXECUTION ---
-                wf.status = OrchestrationStatus.BUILDING
-                try:
-                    build_id = self.build_engine.build_model(c)
-                    
-                    # Wait for completion (Blocking in this thread, async in architecture)
-                    success = self._wait_for_build(build_id)
-                    
-                    if success:
-                        wf.completed_builds += 1
-                    else:
-                        wf.failed_builds += 1
-                        
-                        # --- 3. SELF HEALING (Post-Fail) ---
-                        if self.healing_manager:
-                            self.logger.warning(f"Build {build_id} failed. Triggering Self-Healing Diagnosis...")
-                            wf.status = OrchestrationStatus.HEALING
-                            
-                            # Fetch Logs
-                            prog = self.build_engine.get_build_status(build_id)
-                            error_log = "\n".join(prog.logs[-50:]) if prog else "Unknown Error"
-                            
-                            # Ask Ditto
-                            proposal = self.healing_manager.analyze_error(error_log, f"Build: {c.target_arch} / {c.model_source}")
-                            
-                            if proposal:
-                                wf.healing_proposal = proposal
-                                msg = f"Healing Proposal: {proposal.fix_command} ({proposal.error_summary})"
-                                wf.add_warning(msg)
-                                self.logger.info(f"Self-Healing Proposed: {proposal.fix_command}")
-                                # In automated CLI mode, we might just log it. 
-                                # In GUI mode, DockerManager handles the signal emission.
-                            else:
-                                self.logger.warning("Self-Healing: No fix found.")
+    async def list_workflows(self) -> List[WorkflowState]:
+        """Listet alle bekannten Workflows"""
+        return list(self._workflows.values())
 
-                except Exception as e:
-                    self.logger.error(f"Build Execution Error: {e}")
-                    wf.failed_builds += 1
-            
-            wf.status = OrchestrationStatus.READY
-            wf.end_time = datetime.now()
-            
-        except Exception as e:
-            wf.status = OrchestrationStatus.ERROR
-            wf.add_error(str(e))
-
-    def _wait_for_build(self, build_id: str, timeout=3600) -> bool:
-        """Helper to wait for a build in the thread pool."""
-        start = time.time()
-        while time.time() - start < timeout:
-            status = self.build_engine.get_build_status(build_id)
-            if not status: return False
-            
-            if status.status == BuildStatus.COMPLETED:
-                return True
-            if status.status in [BuildStatus.FAILED, BuildStatus.CANCELLED]:
-                return False
-            
-            time.sleep(1)
+    async def cancel_request(self, request_id: str) -> bool:
+        """Bricht einen laufenden Request ab"""
+        if request_id in self._active_tasks:
+            self._active_tasks[request_id].cancel()
+            if request_id in self._workflows:
+                self._workflows[request_id].status = OrchestrationStatus.CANCELLED
+            return True
         return False
 
-    async def get_workflow_status(self, rid: str): return self._workflows.get(rid)
-    async def list_workflows(self): return list(self._workflows.values())
+    def inject_self_healing(self, manager):
+        """Dependency Injection für SelfHealingManager"""
+        self.self_healing = manager
+        self.logger.info("Self-Healing Manager injected into Orchestrator.")
+
+    # --- INTERNAL WORKER ---
+
+    def _ensure_worker_running(self):
+        # Einfache Implementierung: Fire & Forget Task pro Request in _process_queue
+        # In einer echten Queue würde hier ein dauerhafter Worker-Pool laufen.
+        asyncio.create_task(self._process_next_item())
+
+    async def _process_next_item(self):
+        if self._queue.empty(): return
+        
+        _, _, request = await self._queue.get()
+        
+        # Task erstellen und tracken
+        task = asyncio.create_task(self._run_build_pipeline(request))
+        self._active_tasks[request.request_id] = task
+        
+        try:
+            await task
+        except asyncio.CancelledError:
+            self.logger.warning(f"Task {request.request_id} cancelled")
+        except Exception as e:
+            self.logger.error(f"Task {request.request_id} failed: {e}", exc_info=True)
+            if request.request_id in self._workflows:
+                self._workflows[request.request_id].status = OrchestrationStatus.ERROR
+                self._workflows[request.request_id].errors.append(str(e))
+        finally:
+            self._active_tasks.pop(request.request_id, None)
+            self._queue.task_done()
+            # Nächsten Job holen (Rekursion / Loop)
+            self._ensure_worker_running()
+
+    async def _run_build_pipeline(self, req: BuildRequest):
+        """Die eigentliche Pipeline-Logik"""
+        state = self._workflows[req.request_id]
+        state.status = OrchestrationStatus.PREPARING
+        state.current_stage = "Initialization"
+        
+        self.logger.info(f"Starting pipeline for {req.request_id}")
+        
+        # 1. Expand Build Matrix (Models x Targets x Quantizations)
+        build_jobs: List[BuildJob] = []
+        
+        for model in req.models:
+            for target in req.targets:
+                # Validierung Target
+                if not (Path(self.config.targets_dir) / target).exists():
+                    state.warnings.append(f"Target '{target}' not found. Skipping.")
+                    continue
+                
+                # Formate
+                formats = req.target_formats if req.target_formats else [ModelFormat.GGUF]
+                
+                for fmt in formats:
+                    # Quantization (wenn leer, dann 'default' / 'fp16')
+                    quants = req.quantization_options if req.quantization_options else [None]
+                    
+                    for q in quants:
+                        job_id = f"{req.request_id}_{len(build_jobs)+1:03d}"
+                        
+                        # Pfad-Logik
+                        out_dir = Path(req.output_base_dir) / target / model.split("/")[-1]
+                        if q: out_dir = out_dir / q
+                        
+                        job = BuildJob(
+                            job_id=job_id,
+                            source_model=model,
+                            target_architecture=target,
+                            target_format=fmt,
+                            optimization=req.optimization_level,
+                            quantization=q,
+                            output_path=str(out_dir),
+                            status=BuildStatus.PENDING
+                        )
+                        build_jobs.append(job)
+
+        state.total_builds = len(build_jobs)
+        state.status = OrchestrationStatus.BUILDING
+        
+        self.logger.info(f"Generated {len(build_jobs)} build jobs.")
+        
+        # 2. Execution Loop
+        
+        for job in build_jobs:
+            state.current_stage = f"Building {job.source_model} for {job.target_architecture}"
+            
+            # --- START BUILD ---
+            success = await self.build_engine.run_job(job)
+            
+            # --- SELF-HEALING LOOP (NEU v2.0) ---
+            if not success and self.self_healing:
+                self.logger.warning(f"Build failed for {job.job_id}. Activating Self-Healing...")
+                
+                # Update Status for GUI
+                state.status = OrchestrationStatus.HEALING
+                
+                # 1. Log Analyse
+                error_log = job.error_log if hasattr(job, 'error_log') else "Unknown Error"
+                context = f"Target: {job.target_architecture}, Model: {job.source_model}"
+                
+                proposal = self.self_healing.analyze_error(error_log, context)
+                
+                if proposal:
+                    state.healing_proposal = proposal # Expose to GUI
+                    self.logger.info(f"Healing Proposal: {proposal.fix_command}")
+                    
+                    # Hier könnte Auto-Fix Logik greifen
+                    # z.B. wenn config.auto_heal == True -> apply_fix -> retry
+                
+                else:
+                    self.logger.error("Self-Healing found no solution.")
+                
+                # Reset Status to continue or fail
+                state.status = OrchestrationStatus.BUILDING
+
+            # --- END BUILD ---
+
+            if success:
+                state.completed_builds += 1
+                state.artifacts.append(job.output_path)
+            else:
+                state.failed_builds += 1
+                state.errors.append(f"Job {job.job_id} failed.")
+                if req.priority == PriorityLevel.CRITICAL:
+                    self.logger.error("Critical build failed. Aborting pipeline.")
+                    state.status = OrchestrationStatus.ERROR
+                    return
+
+        # 3. Finalization
+        state.end_time = datetime.now()
+        if state.failed_builds == 0:
+            state.status = OrchestrationStatus.COMPLETED
+            state.current_stage = "Done"
+        elif state.completed_builds > 0:
+            state.status = OrchestrationStatus.COMPLETED # Partial success
+            state.current_stage = "Completed with errors"
+        else:
+            state.status = OrchestrationStatus.ERROR
+            state.current_stage = "Failed"
+            
+        self.logger.info(f"Pipeline finished. Status: {state.status.name}")

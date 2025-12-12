@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Main Window (v2.1 Enterprise)
+LLM Cross-Compiler Framework - Main Window (v2.2 Enterprise)
 DIREKTIVE: Goldstandard GUI.
 
 Features:
 - Integration of SecretsManager UI.
 - Status display for Self-Healing/Guardian.
-- Connects ChatWindow and Healing Logic.
+- Connects ChatWindow, DeploymentWindow and Healing Logic.
 """
 
 import sys
@@ -24,6 +24,7 @@ from orchestrator.utils.localization import get_instance as get_i18n
 
 from orchestrator.gui.dialogs import SecretInputDialog, HealingConfirmDialog
 from orchestrator.gui.chat_window import ChatWindow
+from orchestrator.gui.deployment_window import DeploymentWindow # NEU
 
 class MainOrchestrator(QMainWindow):
     def __init__(self, app_root: Path):
@@ -84,6 +85,11 @@ class MainOrchestrator(QMainWindow):
         self.chat_window = ChatWindow(self.framework)
         self.tabs.addTab(self.chat_window, "💬 AI Chat")
         
+        # Deployment Window Integration (NEU)
+        self.deployment_window = DeploymentWindow(self.framework)
+        self.tabs.addTab(self.deployment_window, "🚀 Deployment")
+        
+        # Placeholders for future modules
         self.tabs.addTab(QLabel("Build Manager Placeholder"), "🏗️ Builds")
         self.tabs.addTab(QLabel("Model Manager Placeholder"), "🧠 Models")
 
@@ -110,21 +116,14 @@ class MainOrchestrator(QMainWindow):
         dlg = SecretInputDialog(self.framework, key, name, self)
         dlg.exec()
 
-    # --- Self-Healing Trigger Logic (Mockup Example) ---
+    # --- Self-Healing Trigger Logic ---
     def trigger_healing_dialog(self, proposal):
-        """
-        Called when SelfHealingManager detects an error and has a proposal.
-        """
         dlg = HealingConfirmDialog(proposal, self)
         if dlg.exec() == QDialog.Accepted:
-            # Hole den (möglicherweise editierten) Command
             final_cmd = dlg.get_final_command()
-            
-            # Update proposal mit User-Override
             proposal.fix_command = final_cmd
-            proposal.source = "USER_OVERRIDE" # Mark as edited
+            proposal.source = "USER_OVERRIDE" 
             
-            # Execute
             success = self.framework.self_healing_manager.apply_fix(proposal, auto_confirm=True)
             
             if success:

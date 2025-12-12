@@ -7,9 +7,9 @@
     Generates 'target_hardware_config.txt'.
     
     HISTORY:
-    v2.2.0: Added Strict VID/PID parsing for USB/PCI devices.
+    v2.3.0: Added CPU PID (ProcessorId/Revision) and strict NVIDIA/Intel IDs.
+    v2.2.0: Added VID/PID parsing for USB/PCI devices.
     v2.1.0: Added MemryX/Axelera detection.
-    v2.0.1: Native API Bridge.
     
 .NOTES
     File Name       : hardware_probe.ps1
@@ -51,7 +51,7 @@ function Get-DeviceIdPart {
 }
 
 # === INITIALIZATION ===
-Write-Host "=== LLM Framework Hardware Probe (v2.2) ===" -ForegroundColor Cyan
+Write-Host "=== LLM Framework Hardware Probe (v2.3) ===" -ForegroundColor Cyan
 New-Item -Path $OutputFile -ItemType File -Force | Out-Null
 Log-Output "GENERATED_AT" "$(Get-Date)"
 Log-Output "PLATFORM" "Windows"
@@ -75,11 +75,16 @@ public class HardwareInfo {
 try { Add-Type -TypeDefinition $Kernel32Code -Language CSharp } catch { Write-Warning "Native Bridge failed." }
 
 # === 2. SYSTEM RESOURCE DETECTION ===
-# --- CPU ---
+# --- CPU (With "PID") ---
 try {
     $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
     Log-Output "CPU_MODEL" $cpu.Name.Trim()
     Log-Output "CPU_CORES" $cpu.NumberOfCores
+    
+    # ProcessorId serves as a unique-ish ID (PID equivalent for CPU)
+    # Revision usually holds Stepping/Model info
+    Log-Output "CPU_DEVICE_ID" "$($cpu.ProcessorId)_REV$($cpu.Revision)"
+    Log-Output "CPU_VENDOR_ID" $cpu.Manufacturer
 } catch { Log-Output "CPU_MODEL" "Unknown" }
 
 $hasAvx2 = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_AVX2_INSTRUCTIONS_AVAILABLE)
@@ -100,11 +105,14 @@ Write-Host "Scanning for Accelerators..." -ForegroundColor Cyan
 $npuFound = $false
 
 # --- NVIDIA GPU (PCIe) ---
-# Check via WMI/CIM is safer than nvidia-smi for ID checking
-$nvidia = Get-PnpDevice -PresentOnly -Class Display | Where-Object { $_.InstanceId -match "VEN_10DE" } # NVIDIA Vendor ID
+# Check via WMI/CIM
+$nvidia = Get-PnpDevice -PresentOnly -Class Display | Where-Object { $_.InstanceId -match "VEN_10DE" }
 if ($nvidia) {
     $devId = Get-DeviceIdPart $nvidia.InstanceId "DEV"
+    $venId = Get-DeviceIdPart $nvidia.InstanceId "VEN"
+    
     Log-Output "GPU_VENDOR" "NVIDIA"
+    Log-Output "GPU_VENDOR_ID" "0x$venId"
     Log-Output "GPU_DEVICE_ID" "0x$devId"
     Log-Output "SUPPORTS_CUDA" "ON"
     
@@ -122,7 +130,10 @@ if ($nvidia) {
 $rkDev = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match "VID_2207" }
 if ($rkDev) {
     $pid = Get-DeviceIdPart $rkDev.InstanceId "PID"
+    $vid = Get-DeviceIdPart $rkDev.InstanceId "VID"
+    
     Log-Output "NPU_VENDOR" "Rockchip"
+    Log-Output "NPU_VENDOR_ID" "0x$vid"
     Log-Output "NPU_DEVICE_ID" "0x$pid"
     
     # Mode Detection based on PID
@@ -138,14 +149,23 @@ if ($rkDev) {
 }
 
 # --- MEMRYX MX3 (USB/PCIe) ---
-# Vendor ID: 0x3526 (Example) or 0x1D6B (Linux Foundation mapped)
-# Wir suchen primär nach VID, Fallback Name
+# Vendor ID: 0x3526 or Name Match
 $mx3 = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match "VID_3526" -or $_.FriendlyName -like "*MemryX*" }
 if ($mx3) {
+    # Try USB ID first
     $pid = Get-DeviceIdPart $mx3.InstanceId "PID"
+    $vid = Get-DeviceIdPart $mx3.InstanceId "VID"
+    
+    # If not USB, try PCI
+    if ($pid -eq "Unknown") {
+        $pid = Get-DeviceIdPart $mx3.InstanceId "DEV"
+        $vid = Get-DeviceIdPart $mx3.InstanceId "VEN"
+    }
+
     Log-Output "NPU_VENDOR" "MemryX"
-    Log-Output "NPU_MODEL" "MX3"
+    Log-Output "NPU_VENDOR_ID" "0x$vid"
     Log-Output "NPU_DEVICE_ID" "0x$pid"
+    Log-Output "NPU_MODEL" "MX3"
     Log-Output "SUPPORTS_MX3" "ON"
     $npuFound = $true
 }
@@ -155,9 +175,12 @@ if ($mx3) {
 $metis = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match "VEN_1F4B" }
 if ($metis) {
     $dev = Get-DeviceIdPart $metis.InstanceId "DEV"
+    $ven = Get-DeviceIdPart $metis.InstanceId "VEN"
+    
     Log-Output "NPU_VENDOR" "Axelera"
-    Log-Output "NPU_MODEL" "Metis"
+    Log-Output "NPU_VENDOR_ID" "0x$ven"
     Log-Output "NPU_DEVICE_ID" "0x$dev"
+    Log-Output "NPU_MODEL" "Metis"
     Log-Output "SUPPORTS_METIS" "ON"
     $npuFound = $true
 }
@@ -166,7 +189,12 @@ if ($metis) {
 # Vendor ID: 0x1E60
 $hailo = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -match "VEN_1E60" }
 if ($hailo) {
+    $dev = Get-DeviceIdPart $hailo.InstanceId "DEV"
+    $ven = Get-DeviceIdPart $hailo.InstanceId "VEN"
+    
     Log-Output "NPU_VENDOR" "Hailo"
+    Log-Output "NPU_VENDOR_ID" "0x$ven"
+    Log-Output "NPU_DEVICE_ID" "0x$dev"
     Log-Output "SUPPORTS_HAILO" "ON"
     $npuFound = $true
 }

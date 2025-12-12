@@ -1,367 +1,182 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Core Framework Manager
-DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+LLM Cross-Compiler Framework - Framework Core (v2.0 Enterprise)
+DIREKTIVE: Goldstandard, Central Dependency Injection.
 
-Integration v2.0:
-- SecretsManager (OS-Keyring Integration)
-- SelfHealingManager (Autonomous Repair)
-- DeploymentManager (Remote Execution)
-- Strict Initialization Order
+Der Kernel des Systems. Initialisiert alle Manager in strikter,
+sicherheitskritischer Reihenfolge.
+
+BOOT SEQUENCE:
+1. Config & Logging
+2. Secrets Manager (CRITICAL) - Must be ready before any API calls.
+3. Docker & Infrastructure
+4. Core Logic (Targets, Models)
+5. AI Services (Ditto, RAG)
+6. Guardians (Self-Healing)
+7. Operations (Deployment, Orchestrator)
 """
 
 import os
 import sys
-import json
 import logging
-import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
-from dataclasses import dataclass, asdict, field
-from datetime import datetime
-import threading
-import queue
-import time
-import yaml
-import docker
-from packaging import version
+from dataclasses import dataclass
+from typing import Optional, Dict, Any
 
-from orchestrator.utils.logging import get_logger
-from orchestrator.utils.validation import ValidationError, validate_path, validate_config
-from orchestrator.utils.helpers import ensure_directory, check_command_exists, safe_json_load
+# Utils
+from orchestrator.utils.logging import setup_logging, get_logger
+from orchestrator.utils.telemetry import TelemetryManager
+from orchestrator.utils.updater import UpdateManager
 
-# Lazy Imports / Optional Dependencies
-# Wir importieren hier explizit, um die Abhängigkeiten hart zu prüfen
-try: from orchestrator.Core.dataset_manager import DatasetManager
-except ImportError: DatasetManager = None
-
-try: from orchestrator.Core.rag_manager import RAGManager
-except ImportError: RAGManager = None
-
-try: from orchestrator.Core.crawler_manager import CrawlerManager
-except ImportError: CrawlerManager = None
-
-try: from orchestrator.Core.deployment_manager import DeploymentManager
-except ImportError: DeploymentManager = None
-
-try: from orchestrator.Core.model_manager import ModelManager
-except ImportError: ModelManager = None
-
-try: from orchestrator.Core.consistency_manager import ConsistencyManager
-except ImportError: ConsistencyManager = None
-
-try: from orchestrator.Core.self_healing_manager import SelfHealingManager
-except ImportError: SelfHealingManager = None
-
-try: from orchestrator.utils.telemetry import TelemetryManager
-except ImportError: TelemetryManager = None
-
-# NEU: Secrets Manager und AI Brain
-try: from orchestrator.Core.secrets_manager import SecretsManager
-except ImportError: SecretsManager = None
-
-try: from orchestrator.Core.ditto_manager import DittoCoder
-except ImportError: DittoCoder = None
-
+# Managers
+from orchestrator.Core.config_manager import ConfigManager
+from orchestrator.Core.secrets_manager import SecretsManager
+from orchestrator.Core.docker_manager import DockerManager
+from orchestrator.Core.target_manager import TargetManager
+from orchestrator.Core.model_manager import ModelManager
+from orchestrator.Core.rag_manager import RAGManager
+from orchestrator.Core.ditto_manager import DittoCoder
+from orchestrator.Core.self_healing_manager import SelfHealingManager
+from orchestrator.Core.deployment_manager import DeploymentManager
+from orchestrator.Core.community_manager import CommunityManager
+from orchestrator.Core.orchestrator import LLMOrchestrator
 
 @dataclass
 class FrameworkInfo:
-    version: str
-    build_date: str
-    git_commit: Optional[str] = None
-    installation_path: Optional[str] = None
-    config_path: Optional[str] = None
-    docker_available: bool = False
-    targets_count: int = 0
-    active_builds: int = 0
-
-@dataclass
-class SystemRequirements:
-    min_python_version: str = "3.10"
-    min_docker_version: str = "20.10"
-    min_memory_gb: int = 8
-    min_disk_gb: int = 20
-    required_commands: List[str] = None
-    def __post_init__(self):
-        if self.required_commands is None: self.required_commands = ["docker", "git"]
-
-@dataclass
-class FrameworkConfig:
-    targets_dir: str = "targets"
-    models_dir: str = "models"
-    output_dir: str = "output"
-    configs_dir: str = "configs"
-    cache_dir: str = "cache"
-    logs_dir: str = "logs"
-    log_level: str = "INFO"
-    max_concurrent_builds: int = 2
-    build_timeout: int = 3600
-    auto_cleanup: bool = True
-    docker_registry: str = "ghcr.io"
-    docker_namespace: str = "llm-framework"
-    default_build_args: Dict[str, str] = None
-    gui_theme: str = "dark"
-    gui_auto_refresh: bool = True
-    gui_refresh_interval: int = 30
-    api_enabled: bool = False
-    api_port: int = 8000
-    api_host: str = "127.0.0.1"
-    source_repositories: Dict[str, str] = field(default_factory=dict)
-    
-    enable_rag_knowledge: bool = False
-    crawler_respect_robots: bool = True
-    crawler_max_depth: int = 2
-    crawler_max_pages: int = 50
-    input_history: List[str] = field(default_factory=list)
-    chat_context_limit: int = 4096
-    enable_telemetry: bool = False
-    offline_mode: bool = False
-    preferred_tiny_model: str = "tinyllama_1b"
-
-    def __post_init__(self):
-        if self.default_build_args is None: self.default_build_args = {"BUILD_JOBS": "4", "PYTHON_VERSION": "3.11"}
+    name: str = "LLM Cross-Compiler Framework"
+    version: str = "2.0.0"
+    edition: str = "Enterprise"
+    installation_path: Path = Path(".")
 
 class FrameworkManager:
-    def __init__(self, config: Optional[Union[Dict[str, Any], FrameworkConfig]] = None):
-        self.logger = get_logger(__name__)
-        self._lock = threading.Lock()
+    """
+    Zentrale Instanz, die den Lebenszyklus aller Sub-Systeme steuert.
+    """
+    
+    def __init__(self, config_file: Optional[str] = None):
+        # 0. Basic Setup (Pfade)
+        self.app_root = Path(__file__).resolve().parents[2] # Root dir calculation
+        self.info = FrameworkInfo(installation_path=self.app_root)
+        
+        # Init Config & Logger first
+        self.config = ConfigManager(config_file)
+        setup_logging(self.config.log_level, self.config.logs_dir)
+        self.logger = get_logger("FrameworkKernel")
+        
+        self.logger.info(f"Booting {self.info.name} v{self.info.version} ({self.info.edition})...")
+
+        # Manager Placeholders
+        self.secrets_manager: Optional[SecretsManager] = None
+        self.telemetry: Optional[TelemetryManager] = None
+        self.docker_manager: Optional[DockerManager] = None
+        self.target_manager: Optional[TargetManager] = None
+        self.model_manager: Optional[ModelManager] = None
+        self.rag_manager: Optional[RAGManager] = None
+        self.ditto_manager: Optional[DittoCoder] = None
+        self.self_healing_manager: Optional[SelfHealingManager] = None
+        self.deployment_manager: Optional[DeploymentManager] = None
+        self.community_manager: Optional[CommunityManager] = None
+        self.orchestrator: Optional[LLMOrchestrator] = None
+        self.updater: Optional[UpdateManager] = None
+
         self._initialized = False
-        self._shutdown_event = threading.Event()
-        self._build_counter = 0
-        
-        # Config Setup
-        if isinstance(config, dict):
-            known = FrameworkConfig.__annotations__.keys()
-            valid_config = {k:v for k,v in config.items() if k in known}
-            self.config = FrameworkConfig(**valid_config)
-        elif isinstance(config, FrameworkConfig): 
-            self.config = config
-        else: 
-            self.config = FrameworkConfig()
-        
-        self.info = FrameworkInfo("2.1.0", datetime.now().isoformat(), installation_path=str(Path(__file__).parent.parent.parent))
-        
-        # Component Registry
-        self._components = {}
-        self._active_builds = {}
-        
-        # Explicit Placeholders for Type Hinting / IDE support
-        self.secrets_manager = None
-        self.deployment_manager = None
-        self.ditto_manager = None
-        self.self_healing_manager = None
-        self.model_manager = None
-        self.rag_manager = None
-        self.dataset_manager = None
-        self.crawler_manager = None
-        
-        self.logger.info(f"Framework Manager instantiated (v{self.info.version})")
 
     def initialize(self) -> bool:
-        """
-        Main initialization sequence with strict dependency ordering.
-        """
-        with self._lock:
-            if self._initialized: return True
+        """Führt die Boot-Sequenz durch."""
+        if self._initialized: return True
+        
+        try:
+            # === PHASE 1: SECURITY & BASE ===
+            self.logger.info("[Boot Phase 1] Security & Infrastructure")
             
-            try:
-                self.logger.info("--- Starting Initialization Sequence ---")
-                
-                self.logger.info("[1/6] Validating System Requirements...")
-                self._validate_system_requirements()
-                
-                self.logger.info("[2/6] Setting up Directory Structure...")
-                self._setup_directories()
-                
-                self.logger.info("[3/6] Loading Extended Configuration (SSOT)...")
-                self._load_extended_configuration()
-                
-                self.logger.info("[4/6] Initializing Docker Interface...")
-                self._initialize_docker()
-                
-                self.logger.info("[5/6] Loading Core Managers & Security Layer...")
-                # WICHTIG: Die Reihenfolge ist hier entscheidend!
-                self._initialize_core_components()
-                
-                self.logger.info("[6/6] Finalizing Setup...")
-                self._initialized = True
-                self.logger.info("--- Framework Ready ---")
-                return True
-                
-            except Exception as e:
-                self.logger.error(f"Initialization FAILED: {e}", exc_info=True)
+            # 1. Secrets (Keyring) - MUSS ZUERST KOMMEN
+            self.secrets_manager = SecretsManager(self)
+            if not self.secrets_manager.initialize():
+                self.logger.critical("Failed to initialize SecretsManager. Aborting for security reasons.")
                 return False
 
-    def _validate_system_requirements(self):
-        req = SystemRequirements()
-        if version.parse(f"{sys.version_info.major}.{sys.version_info.minor}") < version.parse(req.min_python_version):
-            raise Exception(f"Python {req.min_python_version}+ required")
-        
-        for cmd in req.required_commands:
-            if not check_command_exists(cmd): 
-                self.logger.warning(f"System Command missing in PATH: {cmd} (Functionality might be limited)")
-
-    def _setup_directories(self):
-        dirs = [
-            self.config.targets_dir, 
-            self.config.models_dir, 
-            self.config.output_dir, 
-            self.config.configs_dir, 
-            self.config.cache_dir, 
-            self.config.logs_dir
-        ]
-        for d in dirs:
-            ensure_directory(Path(d))
-
-    def _load_extended_configuration(self):
-        src_file = Path(self.config.configs_dir) / "project_sources.yml"
-        if src_file.exists():
-            try:
-                with open(src_file, 'r') as f:
-                    data = yaml.safe_load(f)
-                    if data:
-                        self.config.source_repositories = data
-            except Exception as e: 
-                self.logger.warning(f"Failed to load SSOT {src_file}: {e}")
-
-    def _initialize_docker(self):
-        try:
-            c = docker.from_env(timeout=10)
-            c.ping()
-            self.register_component("docker_client", c)
-            self.info.docker_available = True
-            self.logger.info("Docker connection established.")
-        except Exception as e:
-            self.logger.error(f"Docker unavailable: {e}")
-            self.info.docker_available = False
-
-    def _initialize_core_components(self):
-        """
-        Initialisiert Komponenten in der korrekten Abhängigkeits-Reihenfolge.
-        1. Secrets (für Passwörter/Keys)
-        2. Telemetry (für Fehler-Tracking)
-        3. Deployment (Netzwerk/SSH)
-        4. Ditto (AI Brain)
-        5. Core Logic (Models, RAG, etc.)
-        6. Self-Healing (Braucht Deployment + Ditto)
-        """
-        
-        # 1. SECURITY FIRST: Secrets Manager
-        if SecretsManager:
-            try:
-                self.secrets_manager = SecretsManager(Path(self.config.configs_dir))
-                self.register_component("secrets_manager", self.secrets_manager)
-                self.logger.info("SecretsManager initialized (OS-Keyring active).")
-            except Exception as e:
-                self.logger.critical(f"SecretsManager Init FAILED: {e}")
-                # Wir brechen hier nicht hart ab, aber markieren es
-        
-        # 2. Telemetry
-        if TelemetryManager and self.config.enable_telemetry:
-            try:
-                self.telemetry_manager = TelemetryManager(self)
-                self.register_component("telemetry_manager", self.telemetry_manager)
-            except Exception as e: self.logger.error(f"Telemetry init failed: {e}")
-
-        # 3. Deployment Manager (Braucht evtl. Secrets später)
-        if DeploymentManager:
-            try:
-                self.deployment_manager = DeploymentManager(self)
-                self.register_component("deployment_manager", self.deployment_manager)
-            except Exception as e: self.logger.error(f"DeploymentManager init failed: {e}")
-
-        # 4. AI Brain (Ditto)
-        if DittoCoder:
-            try:
-                # Ditto braucht Config und Framework Referenz
-                self.ditto_manager = DittoCoder(config_manager=self.config, framework_manager=self)
-                self.register_component("ditto_manager", self.ditto_manager)
-            except Exception as e: self.logger.error(f"Ditto (AI) init failed: {e}")
-
-        # 5. Core Business Logic
-        if DatasetManager:
-            try:
-                self.dataset_manager = DatasetManager(self)
-                self.register_component("dataset_manager", self.dataset_manager)
-            except Exception as e: self.logger.error(f"DatasetManager init failed: {e}")
-
-        if ModelManager:
-            try:
-                self.model_manager = ModelManager(self)
-                self.model_manager.initialize()
-                self.register_component("model_manager", self.model_manager)
-            except Exception as e: self.logger.error(f"ModelManager init failed: {e}")
-
-        if RAGManager:
+            # 2. Telemetry (Opt-In check happens inside)
+            self.telemetry = TelemetryManager(self.config)
+            
+            # 3. Docker Connectivity
+            self.docker_manager = DockerManager(self.config)
+            if not self.docker_manager.initialize():
+                self.logger.warning("Docker Engine not reachable. Build capabilities will be disabled.")
+            
+            # === PHASE 2: CORE LOGIC ===
+            self.logger.info("[Boot Phase 2] Core Logic Managers")
+            
+            self.target_manager = TargetManager(self)
+            self.target_manager.initialize() # Lädt Profile & Targets
+            
+            self.model_manager = ModelManager(self.config)
+            
+            self.community_manager = CommunityManager(self) # Swarm Logic
+            
+            # === PHASE 3: AI SERVICES ===
+            self.logger.info("[Boot Phase 3] AI & Knowledge Services")
+            
+            # RAG (Optional)
             if self.config.enable_rag_knowledge:
-                try:
-                    self.rag_manager = RAGManager(self)
-                    self.register_component("rag_manager", self.rag_manager)
-                    self.logger.info("RAGManager active (Qdrant)")
-                except Exception as e: self.logger.error(f"RAGManager init failed: {e}")
-            else:
-                self.logger.info("RAGManager disabled via Config.")
+                self.rag_manager = RAGManager(self.config)
+                # Async Connect via Thread or check later? For CLI speed, we lazy load or check quick.
+                # Hier simple init.
+            
+            # Ditto (The Brain) - needs Secrets!
+            self.ditto_manager = DittoCoder(
+                config_manager=self.config,
+                framework_manager=self # Pass self to access secrets_manager
+            )
+            
+            # === PHASE 4: GUARDIANS & OPS ===
+            self.logger.info("[Boot Phase 4] Guardians & Operations")
+            
+            # Self-Healing - needs Ditto!
+            self.self_healing_manager = SelfHealingManager(self)
+            
+            # Deployment - needs Targets & Secrets!
+            self.deployment_manager = DeploymentManager(self)
+            
+            # Orchestrator - needs everything
+            self.orchestrator = LLMOrchestrator(self.config)
+            # Inject Dependencies manually (Cleaner than passing Framework blob)
+            self.orchestrator.inject_self_healing(self.self_healing_manager)
+            
+            # Updater
+            self.updater = UpdateManager(self)
 
-        if CrawlerManager:
-            try:
-                self.crawler_manager = CrawlerManager(self)
-                self.register_component("crawler_manager", self.crawler_manager)
-            except Exception as e: self.logger.error(f"CrawlerManager init failed: {e}")
+            self._initialized = True
+            self.logger.info("Framework successfully initialized.")
+            return True
 
-        # 6. Guardian Layer (Self-Healing & Consistency)
-        if ConsistencyManager:
-            try:
-                self.consistency_manager = ConsistencyManager(self)
-                self.register_component("consistency_manager", self.consistency_manager)
-            except Exception as e: self.logger.error(f"ConsistencyManager init failed: {e}")
+        except Exception as e:
+            self.logger.critical(f"Fatal Error during framework initialization: {e}", exc_info=True)
+            return False
 
-        if SelfHealingManager:
-            try:
-                # Self-Healing ist abhängig von Deployment & Ditto (oben initialisiert)
-                self.self_healing_manager = SelfHealingManager(self)
-                self.register_component("self_healing_manager", self.self_healing_manager)
-                self.logger.info("SelfHealingManager active (Monitoring Build Process).")
-            except Exception as e: self.logger.error(f"SelfHealingManager init failed: {e}")
+    def get_component(self, name: str) -> Any:
+        """Service Locator für CLI/GUI Zugriff."""
+        if not self._initialized:
+            self.logger.warning("Framework not initialized. Auto-initializing...")
+            self.initialize()
+            
+        components = {
+            "secrets_manager": self.secrets_manager,
+            "target_manager": self.target_manager,
+            "model_manager": self.model_manager,
+            "rag_manager": self.rag_manager,
+            "ditto_manager": self.ditto_manager,
+            "self_healing_manager": self.self_healing_manager,
+            "deployment_manager": self.deployment_manager,
+            "community_manager": self.community_manager,
+            "orchestrator": self.orchestrator,
+            "docker_client": self.docker_manager.client if self.docker_manager else None
+        }
+        return components.get(name)
 
-    def register_component(self, n, c):
-        with self._lock: self._components[n] = c
-
-    def get_component(self, n): 
-        return self._components.get(n)
-
-    def validate_target(self, name):
-        p = Path(self.config.targets_dir) / name
-        if not p.exists(): return {"valid": False, "errors": ["Not found"]}
-        return {"valid": True, "target_path": str(p)}
-
-    def create_build_id(self):
-        with self._lock: self._build_counter += 1; return f"build_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{self._build_counter:04d}"
-
-    def register_build(self, bid, data):
-        with self._lock: self._active_builds[bid] = data
-
-    def update_build_status(self, bid, stat, prog=None):
-        with self._lock:
-            if bid in self._active_builds:
-                j = self._active_builds[bid]
-                if hasattr(j, 'status'): j.status = stat; j.progress = prog or j.progress
-                else: j['status'] = stat; j['progress'] = prog or j['progress']
-
-    def get_next_queued_build_status(self):
-        with self._lock:
-            for j in self._active_builds.values():
-                s = getattr(j, 'status', None) or j.get('status')
-                if s == "queued": return asdict(j) if hasattr(j, 'id') else j
-        return None
-
-    def get_info(self):
-        try:
-            targets = list(Path(self.config.targets_dir).glob("*"))
-            self.info.targets_count = len([t for t in targets if t.is_dir() and not t.name.startswith('_')])
-        except: pass
-        self.info.active_builds = len(self._active_builds)
-        return self.info
-
-    def shutdown(self): 
+    def shutdown(self):
+        """Graceful Shutdown."""
         self.logger.info("Shutting down Framework...")
-        self._initialized = False
+        # Close DB connections, stop threads if needed
+        if self.telemetry:
+            self.telemetry.flush()
+        self.logger.info("Shutdown complete.")

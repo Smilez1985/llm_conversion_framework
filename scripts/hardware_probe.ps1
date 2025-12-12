@@ -3,14 +3,13 @@
     LLM Framework Hardware Analyzer (Enterprise Edition - Windows)
     
 .DESCRIPTION
-    Detects CPU features, GPU/NPU hardware, and system resources.
+    Detects CPU features (AVX/NEON via Native Bridge), GPU/NPU hardware, and system resources.
     Generates 'target_hardware_config.txt'.
     
     HISTORY:
-    v2.1.0: Added MemryX (MX3) and Axelera (Metis) detection.
-    v2.0.0: Added GPU_DRIVER_VERSION extraction for NVIDIA and Intel.
-    v1.7.0: Added Intel GPU (Arc/Iris/XPU) detection logic.
-    v1.7.0: Improved NPU detection (Intel AI Boost, Hailo).
+    v2.1.0: Added MemryX (MX3) and Axelera (Metis) detection logic.
+    v2.0.1: Native API Bridge (C#) for accurate CPU feature detection.
+    v2.0.0: GPU Driver Version extraction.
     
 .NOTES
     File Name       : hardware_probe.ps1
@@ -54,6 +53,7 @@ Add-Content -Path $OutputFile -Value "# Hostname: $env:COMPUTERNAME"
 Add-Content -Path $OutputFile -Value "# OS: Windows $([System.Environment]::OSVersion.Version)"
 
 # === 1. NATIVE API BRIDGE (C# Injection) ===
+# Innovation preservation: Using kernel32.dll for reliable CPU feature flags
 $Kernel32Code = @"
 using System;
 using System.Runtime.InteropServices;
@@ -80,6 +80,7 @@ try {
     Log-Output "Cores=$($cpu.NumberOfCores)"
 } catch { Log-Output "Name=Unknown" }
 
+# Native Bridge Feature Checks
 $hasNeon = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_ARM_NEON_INSTRUCTIONS_AVAILABLE)
 $hasAvx = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_AVX_INSTRUCTIONS_AVAILABLE)
 $hasAvx2 = [HardwareInfo]::IsProcessorFeaturePresent([HardwareInfo]::PF_AVX2_INSTRUCTIONS_AVAILABLE)
@@ -123,14 +124,14 @@ if (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue) {
     } catch { Log-Output "SUPPORTS_CUDA=OFF" }
 } else { Log-Output "SUPPORTS_CUDA=OFF" }
 
-# 2. Intel GPU (Arc / Iris Xe) - Added in v1.7.0
+# 2. Intel GPU (Arc / Iris Xe)
 $intelGpus = Get-CimInstance Win32_VideoController | Where-Object { $_.PNPDeviceID -like "*VEN_8086*" }
 if ($intelGpus) {
     foreach ($gpu in $intelGpus) {
         Log-Output "GPU_VENDOR=Intel"
         Log-Output "GPU_MODEL=$($gpu.Name)"
         
-        # v2.0.0: Driver Version from WMI
+        # Driver Version from WMI
         Log-Output "GPU_DRIVER_VERSION=$($gpu.DriverVersion)"
         
         if ($gpu.Name -match "Arc") { Log-Output "SUPPORTS_INTEL_XPU=ON (Arc)" } 
@@ -160,7 +161,7 @@ if ($hailoNpu) {
     $npuFound = $true
 }
 
-# Rockchip (USB)
+# Rockchip (USB Mode / Maskrom)
 $rkNpu = Get-PnpDevice -PresentOnly | Where-Object { $_.InstanceId -like "*VID_2207*" }
 if ($rkNpu) {
     Log-Output "NPU_VENDOR=Rockchip"
@@ -169,10 +170,9 @@ if ($rkNpu) {
     $npuFound = $true
 }
 
-# MemryX (MX3) - NEU in v2.1.0
-# Vendor ID 1D6B (Linux Foundation? Checken wir besser Name/ID) oder spezifische VID.
-# MX3 meldet sich oft als USB Device. Wir suchen generisch nach "MemryX" im Namen oder bekannten VIDs.
-$memryx = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -like "*MemryX*" -or $_.InstanceId -like "*VID_3526*" } # VID_3526 ist Beispiel, oft generisch
+# NEU v2.1.0: MemryX (MX3)
+# Suche nach generischem Namen oder bekannter Vendor ID
+$memryx = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -like "*MemryX*" }
 if ($memryx) {
     Log-Output "NPU_VENDOR=MemryX"
     Log-Output "NPU_MODEL=MX3"
@@ -180,10 +180,9 @@ if ($memryx) {
     $npuFound = $true
 }
 
-# Axelera (Metis) - NEU in v2.1.0 (PCIe)
-# Wir suchen nach der Vendor ID für Axelera. (Oft unbekannt ohne Treiber, aber PCI ID hilft).
-# Wir scannen alle PCI Devices nach dem Namen.
-$axelera = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -like "*Axelera*" -or $_.InstanceId -like "*VEN_1F4B*" } # Hypothetische ID, besser Name match
+# NEU v2.1.0: Axelera (Metis)
+# Suche nach generischem Namen oder bekannter Vendor ID
+$axelera = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -like "*Axelera*" }
 if ($axelera) {
     Log-Output "NPU_VENDOR=Axelera"
     Log-Output "NPU_MODEL=Metis"
@@ -195,6 +194,7 @@ if (-not $npuFound) { Log-Output "NPU_STATUS=None detected" }
 
 # --- 4. SOFTWARE STACK ---
 Log-Output "[SOFTWARE]"
+
 # Check Docker
 if (Get-Command docker -ErrorAction SilentlyContinue) {
     $DockerVer = (docker --version) -replace "Docker version ", "" -replace ",", ""

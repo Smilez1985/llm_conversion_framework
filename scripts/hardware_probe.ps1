@@ -7,14 +7,15 @@
     Generates 'target_hardware_config.txt'.
     
     HISTORY:
+    v2.1.0: Added MemryX (MX3) and Axelera (Metis) detection.
     v2.0.0: Added GPU_DRIVER_VERSION extraction for NVIDIA and Intel.
     v1.7.0: Added Intel GPU (Arc/Iris/XPU) detection logic.
     v1.7.0: Improved NPU detection (Intel AI Boost, Hailo).
     
 .NOTES
-    File Name      : hardware_probe.ps1
-    Author         : LLM Framework Team
-    Prerequisite   : Windows PowerShell 5.1 or PowerShell Core 7+
+    File Name       : hardware_probe.ps1
+    Author          : LLM Framework Team
+    Prerequisite    : Windows PowerShell 5.1 or PowerShell Core 7+
 #>
 
 # 1. ADMIN CHECK
@@ -45,7 +46,7 @@ function Log-Output {
 }
 
 # === INITIALIZATION ===
-Write-Host "=== LLM Framework Hardware Probe (v2.0.1) ===" -ForegroundColor Cyan
+Write-Host "=== LLM Framework Hardware Probe (v2.1.0) ===" -ForegroundColor Cyan
 
 Set-Content -Path $OutputFile -Value "# LLM Framework Hardware Profile (Windows)"
 Add-Content -Path $OutputFile -Value "# Generated: $(Get-Date)"
@@ -168,7 +169,47 @@ if ($rkNpu) {
     $npuFound = $true
 }
 
+# MemryX (MX3) - NEU in v2.1.0
+# Vendor ID 1D6B (Linux Foundation? Checken wir besser Name/ID) oder spezifische VID.
+# MX3 meldet sich oft als USB Device. Wir suchen generisch nach "MemryX" im Namen oder bekannten VIDs.
+$memryx = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -like "*MemryX*" -or $_.InstanceId -like "*VID_3526*" } # VID_3526 ist Beispiel, oft generisch
+if ($memryx) {
+    Log-Output "NPU_VENDOR=MemryX"
+    Log-Output "NPU_MODEL=MX3"
+    Log-Output "SUPPORTS_MX3=ON"
+    $npuFound = $true
+}
+
+# Axelera (Metis) - NEU in v2.1.0 (PCIe)
+# Wir suchen nach der Vendor ID für Axelera. (Oft unbekannt ohne Treiber, aber PCI ID hilft).
+# Wir scannen alle PCI Devices nach dem Namen.
+$axelera = Get-PnpDevice -PresentOnly | Where-Object { $_.FriendlyName -like "*Axelera*" -or $_.InstanceId -like "*VEN_1F4B*" } # Hypothetische ID, besser Name match
+if ($axelera) {
+    Log-Output "NPU_VENDOR=Axelera"
+    Log-Output "NPU_MODEL=Metis"
+    Log-Output "SUPPORTS_METIS=ON"
+    $npuFound = $true
+}
+
 if (-not $npuFound) { Log-Output "NPU_STATUS=None detected" }
+
+# --- 4. SOFTWARE STACK ---
+Log-Output "[SOFTWARE]"
+# Check Docker
+if (Get-Command docker -ErrorAction SilentlyContinue) {
+    $DockerVer = (docker --version) -replace "Docker version ", "" -replace ",", ""
+    Log-Output "DOCKER_VERSION=$DockerVer"
+} else {
+    Log-Output "DOCKER_VERSION=Missing"
+}
+
+# Check Python
+if (Get-Command python -ErrorAction SilentlyContinue) {
+    $PyVer = (python --version) -replace "Python ", ""
+    Log-Output "PYTHON_VERSION=$PyVer"
+} else {
+    Log-Output "PYTHON_VERSION=Missing"
+}
 
 Write-Host "`n✅ Probing complete. Config written to $OutputFile" -ForegroundColor Green
 Start-Sleep -Seconds 2

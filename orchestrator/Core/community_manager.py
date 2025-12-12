@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Community Manager (v2.1 Enterprise)
-DIREKTIVE: Goldstandard, Safe-Copy logic, Swarm Memory Integration.
+LLM Cross-Compiler Framework - Community Manager (v2.2 Enterprise)
+DIREKTIVE: Goldstandard, Swarm Memory Integration.
 
 Verwaltet Community-Module und den 'Swarm Memory' (Shared RAG).
 Stellt sicher, dass User-Targets geschützt bleiben.
 
-UPDATES v2.1:
-- SwarmCipher: 'Fake-Encryption' (Obfuscation) für Knowledge-Uploads.
+UPDATES v2.2:
+- SwarmCipher: Full Implementation (Dynamic Key + Integrity Hash).
 - Git Integration: Push/Pull auf 'Edge-LLM-Knowledge-Base'.
 """
 
@@ -18,6 +18,7 @@ import zipfile
 import json
 import re
 import os
+import hashlib
 import subprocess
 import tempfile
 from pathlib import Path
@@ -28,54 +29,77 @@ from dataclasses import dataclass
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.helpers import ensure_directory
 
-# --- SWARM CIPHER (The "Bluff" Security) ---
+# --- SWARM CIPHER (The "Bluff" Security v2) ---
 class SwarmCipher:
     """
     Implements 'Security by Obscurity' for the Swarm Memory.
-    Technique: XOR with static key -> Mapped to Unicode Symbols (Pseudo-Wingdings).
-    
-    This makes the content unreadable to bots, AI scrapers, and script kiddies,
-    while remaining easily decodable by the Framework (reverse engineering barrier).
+    Technique: 
+    1. Dynamic Key Gen (Static Base + Content Length).
+    2. XOR Obfuscation.
+    3. Unicode Symbol Mapping (Wingdings-style).
     """
-    KEY = "DITTO_SWARM_KEY_v1_EDGE_CORE"
-    # Mapping bytes 0-255 to a custom Unicode range (e.g. Dingbats/Symbols starting at U+2200)
+    BASE_KEY = "DITTO_SWARM_CORE_V1"
     OFFSET = 0x2200 
 
     @staticmethod
-    def encrypt(text: str) -> str:
-        """Text -> XOR Bytes -> Symbol String"""
-        # 1. To Bytes
+    def _generate_dynamic_key(length: int) -> bytes:
+        """Erzeugt einen dynamischen Key basierend auf der Länge."""
+        raw = f"{SwarmCipher.BASE_KEY}_{length}"
+        return hashlib.sha256(raw.encode('utf-8')).digest()
+
+    @staticmethod
+    def encrypt(text: str) -> Dict[str, str]:
+        """
+        Text -> XOR (Dynamic) -> Symbols.
+        Returns: { "payload": symbols, "hash": sha256_plaintext }
+        """
+        # 1. Integrity Hash
         data = text.encode('utf-8')
-        # 2. XOR with Key
-        key_bytes = SwarmCipher.KEY.encode('utf-8')
+        sha_hash = hashlib.sha256(data).hexdigest()
+        
+        # 2. Dynamic Key
+        key_bytes = SwarmCipher._generate_dynamic_key(len(data))
+        
+        # 3. XOR
         xored = bytearray()
         for i, b in enumerate(data):
             xored.append(b ^ key_bytes[i % len(key_bytes)])
         
-        # 3. Map to Symbols (Wingdings-style visual obfuscation)
-        return "".join([chr(b + SwarmCipher.OFFSET) for b in xored])
+        # 4. Map to Symbols
+        payload = "".join([chr(b + SwarmCipher.OFFSET) for b in xored])
+        
+        return {"payload": payload, "hash": sha_hash}
 
     @staticmethod
-    def decrypt(symbols: str) -> str:
-        """Symbol String -> Bytes -> XOR Reverse -> Text"""
+    def decrypt(symbols: str, expected_hash: str = None) -> str:
+        """Symbol String -> Bytes -> XOR (Dynamic) -> Text + Verify"""
         try:
             # 1. Map symbols back to bytes
             xored = bytearray()
             for char in symbols:
                 val = ord(char) - SwarmCipher.OFFSET
-                if val < 0 or val > 255: 
-                    raise ValueError("Invalid Swarm Character detected")
+                if val < 0 or val > 255: raise ValueError("Invalid Swarm Char")
                 xored.append(val)
             
-            # 2. XOR Reverse
-            key_bytes = SwarmCipher.KEY.encode('utf-8')
+            # 2. Re-Generate Dynamic Key (Length is implicit from data)
+            key_bytes = SwarmCipher._generate_dynamic_key(len(xored))
+            
+            # 3. XOR Reverse
             decrypted = bytearray()
             for i, b in enumerate(xored):
                 decrypted.append(b ^ key_bytes[i % len(key_bytes)])
                 
-            return decrypted.decode('utf-8')
+            text = decrypted.decode('utf-8')
+            
+            # 4. Verify Integrity
+            if expected_hash:
+                curr_hash = hashlib.sha256(decrypted).hexdigest()
+                if curr_hash != expected_hash:
+                    raise ValueError("Integrity Check Failed! (Hash Mismatch)")
+            
+            return text
         except Exception as e:
-            return f"[Decryption Failed: {e}]"
+            raise ValueError(f"Decryption failed: {e}")
 
 @dataclass
 class CommunityModule:
@@ -89,7 +113,6 @@ class CommunityModule:
     is_installed: bool = False
 
 class CommunityManager:
-    # Das offizielle Schwarm-Gedächtnis Repo
     SWARM_REPO_URL = "https://github.com/Smilez1985/Edge-LLM-Knowledge-Base.git"
 
     def __init__(self, framework_manager):
@@ -108,246 +131,144 @@ class CommunityManager:
         ensure_directory(self.contribution_dir)
 
     # --- MODULE MANAGEMENT ---
-
     def scan_modules(self) -> List[CommunityModule]:
-        """Scannt community/ Ordner nach verfügbaren Targets."""
         modules = []
-        if not self.community_dir.exists():
-            return []
-
+        if not self.community_dir.exists(): return []
         installed_targets = {p.name for p in self.targets_dir.iterdir() if p.is_dir()}
-
         for item in self.community_dir.iterdir():
             if item.is_dir() and (item / "target.yml").exists():
                 try:
                     with open(item / "target.yml", 'r', encoding='utf-8') as f:
                         data = yaml.safe_load(f)
                         meta = data.get('metadata', {})
-                    
                     mod = CommunityModule(
-                        id=item.name,
-                        name=meta.get('name', item.name),
+                        id=item.name, name=meta.get('name', item.name),
                         description=meta.get('description', 'No description'),
                         architecture=meta.get('architecture_family', 'unknown'),
                         author=meta.get('maintainer', 'Community'),
                         version=meta.get('version', '1.0.0'),
-                        path=item,
-                        is_installed=(item.name in installed_targets)
+                        path=item, is_installed=(item.name in installed_targets)
                     )
                     modules.append(mod)
-                except Exception as e:
-                    self.logger.error(f"Error loading module {item.name}: {e}")
-        
+                except Exception as e: self.logger.error(f"Error loading module {item.name}: {e}")
         return sorted(modules, key=lambda x: x.name)
 
     def install_module(self, module_id: str) -> bool:
-        """Kopiert Modul von community/ nach targets/."""
         source = self.community_dir / module_id
         dest = self.targets_dir / module_id
-        
-        if dest.exists():
-            self.logger.warning(f"Target '{module_id}' existiert bereits. Überspringe Installation.")
-            return False
-        
-        try:
-            shutil.copytree(source, dest)
-            self.logger.info(f"Installed: {module_id}")
-            return True
+        if dest.exists(): return False
+        try: shutil.copytree(source, dest); return True
         except Exception as e:
-            self.logger.error(f"Install failed: {e}")
             if dest.exists(): shutil.rmtree(dest)
             raise e
 
-    def prepare_contribution(self, target_path: str, author: str) -> str:
-        """Packt ein Target als ZIP für Contribution."""
-        src = Path(target_path)
-        ts = datetime.now().strftime("%Y%m%d")
-        zip_path = self.contribution_dir / f"contrib_{src.name}_{author}_{ts}.zip"
-        
-        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for root, _, files in os.walk(src):
-                for file in files:
-                    if file.startswith('.') or file.endswith('.pyc'): continue
-                    fp = Path(root) / file
-                    zf.write(fp, fp.relative_to(src.parent))
-                    
-        return str(zip_path)
-
     # ============================================================================
-    # KNOWLEDGE BASE SYNC (Updated for Swarm Encryption)
+    # KNOWLEDGE BASE SYNC (Swarm Decrypt)
     # ============================================================================
-
     def sync_knowledge_base(self) -> int:
-        """
-        Scannt community/knowledge/*.json und importiert neue Snapshots in Qdrant.
-        Entschlüsselt dabei 'swarm_encrypted' Dateien automatisch.
-        """
         rag_manager = self.framework.get_component("rag_manager")
-        if not rag_manager:
-            self.logger.warning("RAG Manager not available. Skipping Knowledge Sync.")
-            return 0
-
+        if not rag_manager: return 0
         imported_count = 0
         
         for json_file in self.knowledge_dir.glob("*.json"):
             try:
-                marker = json_file.with_suffix(".imported")
-                if marker.exists(): continue
-
-                self.logger.info(f"Syncing knowledge from {json_file.name}...")
-                with open(json_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
+                if json_file.with_suffix(".imported").exists(): continue
+                self.logger.info(f"Syncing {json_file.name}...")
+                with open(json_file, 'r', encoding='utf-8') as f: data = json.load(f)
                 
                 # --- SWARM DECRYPTION ---
                 if isinstance(data, dict) and data.get("swarm_encrypted", False):
-                    self.logger.info(f"Decrypting Swarm Packet: {json_file.name}")
                     try:
-                        raw_payload = SwarmCipher.decrypt(data["payload"])
+                        # Pass Hash for Validation
+                        raw_payload = SwarmCipher.decrypt(data["payload"], data.get("hash"))
                         data = json.loads(raw_payload)
                     except Exception as e:
-                        self.logger.error(f"Decryption failed for {json_file.name}: {e}")
+                        self.logger.error(f"Decryption/Integrity failed for {json_file.name}: {e}")
                         continue
                 # ------------------------
 
                 if isinstance(data, list):
                     for entry in data:
-                        src = entry.get("source", "community_unknown")
-                        content = entry.get("content", "")
                         meta = entry.get("metadata", {})
                         meta["origin_pack"] = json_file.name
-                        
-                        if rag_manager.ingest_document(src, content, meta):
+                        if rag_manager.ingest_document(entry.get("source", ""), entry.get("content", ""), meta):
                             imported_count += 1
                 
-                with open(marker, 'w') as f: f.write(datetime.now().isoformat())
-                    
-            except Exception as e:
-                self.logger.error(f"Failed to sync {json_file.name}: {e}")
-
-        if imported_count > 0:
-            self.logger.info(f"Knowledge Sync complete. Imported {imported_count} documents.")
+                with open(json_file.with_suffix(".imported"), 'w') as f: f.write(datetime.now().isoformat())
+            except Exception as e: self.logger.error(f"Sync failed {json_file.name}: {e}")
         return imported_count
 
     def export_knowledge_base(self, output_name_prefix: str = "knowledge_export") -> Optional[str]:
-        """Exportiert lokales Wissen (Qdrant) in ein JSON File."""
         rag_manager = self.framework.get_component("rag_manager")
         if not rag_manager or not rag_manager._connect(): return None
-
-        self.logger.info("Scanning Knowledge Base for export...")
         
         all_points = []
         next_offset = None
-        
         try:
             while True:
-                records, next_offset = rag_manager.client.scroll(
-                    collection_name="framework_knowledge",
-                    limit=100,
-                    offset=next_offset,
-                    with_payload=True,
-                    with_vectors=False
-                )
-                all_points.extend(records)
+                rec, next_offset = rag_manager.client.scroll("framework_knowledge", limit=100, offset=next_offset, with_payload=True, with_vectors=False)
+                all_points.extend(rec)
                 if next_offset is None: break
-        except Exception as e:
-            self.logger.error(f"Qdrant scroll failed: {e}")
-            return None
-
-        if not all_points: return None
+        except: return None
 
         export_data = []
         for point in all_points:
-            payload = point.payload or {}
-            content = self._sanitize_content(payload.get("content", ""))
-            source = self._sanitize_content(payload.get("source", "unknown"))
-            if content:
-                clean_meta = {k: v for k, v in payload.items() if k not in ["content", "source", "chunk_index"]}
-                export_data.append({"source": source, "content": content, "metadata": clean_meta})
+            p = point.payload or {}
+            c = self._sanitize_content(p.get("content", ""))
+            s = self._sanitize_content(p.get("source", ""))
+            if c: export_data.append({"source": s, "content": c, "metadata": {k:v for k,v in p.items() if k not in ["content", "source"]}})
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{output_name_prefix}_{ts}.json"
-        export_path = self.knowledge_dir / filename
-        
-        try:
-            with open(export_path, 'w', encoding='utf-8') as f:
-                json.dump(export_data, f, indent=2, ensure_ascii=False)
-            return str(export_path)
-        except Exception as e:
-            self.logger.error(f"Failed to write export file: {e}")
-            return None
+        export_path = self.knowledge_dir / f"{output_name_prefix}_{ts}.json"
+        with open(export_path, 'w', encoding='utf-8') as f: json.dump(export_data, f, indent=2)
+        return str(export_path)
 
     # ============================================================================
-    # SWARM UPLOAD (NEU: Git Integration + Obfuscation)
+    # SWARM UPLOAD (Full Implementation)
     # ============================================================================
-
     def upload_knowledge_to_swarm(self, export_file: str, github_token: str, username: str = "CommunityUser") -> bool:
-        """
-        1. Liest den Export.
-        2. Verschlüsselt ihn mit SwarmCipher (XOR+Wingdings).
-        3. Pusht ihn in das GitHub Repo.
-        """
         file_path = Path(export_file)
-        if not file_path.exists():
-            self.logger.error(f"File not found: {export_file}")
-            return False
+        if not file_path.exists(): return False
 
-        # A. Verschleierung (The Bluff)
+        # A. Encryption & Hashing
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                raw_json = f.read()
+            with open(file_path, 'r', encoding='utf-8') as f: raw_json = f.read()
             
-            encrypted_payload = SwarmCipher.encrypt(raw_json)
+            result = SwarmCipher.encrypt(raw_json)
             
             swarm_packet = {
                 "swarm_encrypted": True,
-                "version": "v1.0",
+                "version": "v1.1", # Bumped version
                 "timestamp": datetime.now().isoformat(),
                 "contributor": username,
-                "payload": encrypted_payload # Hier liegt der Wingdings-Salat
+                "hash": result["hash"], # Public Hash for Integrity
+                "payload": result["payload"]
             }
-            
             enc_filename = f"swarm_{file_path.name}"
         except Exception as e:
             self.logger.error(f"Encryption failed: {e}")
             return False
 
-        # B. Git Operation (Push to Hive)
+        # B. Git Push
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_dir = Path(temp_dir) / "swarm_repo"
-            
-            # Auth-URL bauen (Token-basiert)
             auth_url = self.SWARM_REPO_URL.replace("https://", f"https://{username}:{github_token}@")
             
             try:
-                self.logger.info("Cloning Swarm Repo...")
                 subprocess.run(["git", "clone", "--depth", "1", auth_url, str(repo_dir)], check=True, capture_output=True)
+                dest = repo_dir / "contributions" / enc_filename
+                ensure_directory(dest.parent)
                 
-                # Datei ablegen
-                contributions_dir = repo_dir / "contributions"
-                ensure_directory(contributions_dir)
-                dest_file = contributions_dir / enc_filename
+                with open(dest, 'w', encoding='utf-8') as f: json.dump(swarm_packet, f, indent=2)
                 
-                with open(dest_file, 'w', encoding='utf-8') as f:
-                    json.dump(swarm_packet, f, indent=2)
-                
-                # Commit & Push
-                self.logger.info("Committing to Swarm...")
                 subprocess.run(["git", "config", "user.email", "ditto@framework.local"], cwd=repo_dir, check=True)
                 subprocess.run(["git", "config", "user.name", username], cwd=repo_dir, check=True)
-                
                 subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
-                msg = f"feat(knowledge): Contribution from {username} ({datetime.now().strftime('%Y-%m-%d')})"
-                subprocess.run(["git", "commit", "-m", msg], cwd=repo_dir, check=True)
-                
-                self.logger.info("Pushing to Swarm...")
+                subprocess.run(["git", "commit", "-m", f"feat: Contribution from {username}"], cwd=repo_dir, check=True)
                 subprocess.run(["git", "push"], cwd=repo_dir, check=True)
                 
-                self.logger.info("✅ Upload successful! You are now part of the Swarm.")
+                self.logger.info("✅ Upload successful!")
                 return True
-                
-            except subprocess.CalledProcessError as e:
-                self.logger.error(f"Git operation failed: {e}")
-                return False
             except Exception as e:
                 self.logger.error(f"Upload failed: {e}")
                 return False
@@ -356,6 +277,4 @@ class CommunityManager:
         if not text: return ""
         text = re.sub(r'(sk-[a-zA-Z0-9]{20,})', 'sk-REDACTED', text)
         text = re.sub(r'(hf_[a-zA-Z0-9]{20,})', 'hf_REDACTED', text)
-        text = re.sub(r'/home/[a-zA-Z0-9_-]+/', '/home/user/', text)
-        text = re.sub(r'C:\\Users\\[a-zA-Z0-9_-]+\\', r'C:\\Users\\User\\', text)
         return text

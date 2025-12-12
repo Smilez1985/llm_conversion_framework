@@ -7,6 +7,7 @@ FEATURES:
   - PBKDF2 Key Derivation (HMAC-SHA256, 100k Iterations)
   - Audit Logging für Access-Events
   - Keine Speicherung des Master-Keys im Dateisystem!
+  - Integrated with FrameworkManager (v2.0 Update)
 """
 
 import os
@@ -39,13 +40,23 @@ class SecretsManager:
     SERVICE_ID = "llm-conversion-framework"
     KEY_ID = "master-encryption-key"
 
-    def __init__(self, config_dir: Path):
+    def __init__(self, framework_manager):
         self.logger = get_logger("SecretsManager")
-        self.config_dir = config_dir
-        self.secrets_file = config_dir / "secrets.store"
-        self.audit_log_file = config_dir / "audit.log"
+        self.framework = framework_manager
+        
+        # Integration: Pfade aus Config holen
+        # Fallback für Standalone-Test: Wenn framework_manager ein Path ist (altes Verhalten)
+        if isinstance(framework_manager, Path):
+            self.config_dir = framework_manager
+            self.audit_log_file = self.config_dir / "audit.log"
+        else:
+            self.config_dir = Path(framework_manager.config.configs_dir)
+            self.audit_log_file = Path(framework_manager.config.logs_dir) / "audit.log"
+            
+        self.secrets_file = self.config_dir / "secrets.store"
         self._cipher = None
         self._cache = {}
+        self._initialized = False # New state tracking
 
         if not SECURITY_AVAILABLE:
             raise SecurityError(
@@ -53,7 +64,18 @@ class SecretsManager:
                 "Install via: pip install cryptography keyring"
             )
 
-        self._initialize_crypto()
+    def initialize(self) -> bool:
+        """
+        Initialisiert die Krypto-Engine.
+        Wrapper für Framework-Boot (v2.0 Requirement).
+        """
+        try:
+            self._initialize_crypto()
+            self._initialized = True
+            return True
+        except Exception as e:
+            self.logger.critical(f"SecretsManager init failed: {e}")
+            return False
 
     def _initialize_crypto(self):
         """
@@ -107,6 +129,8 @@ class SecretsManager:
 
     def set_secret(self, key: str, value: str) -> bool:
         """Verschlüsselt und speichert ein Secret."""
+        if not self._initialized: self.initialize() # Lazy Init
+        
         if not self._cipher:
             return False
         
@@ -123,6 +147,8 @@ class SecretsManager:
 
     def get_secret(self, key: str) -> Optional[str]:
         """Entschlüsselt und liest ein Secret."""
+        if not self._initialized: self.initialize() # Lazy Init
+
         if not self._cipher or key not in self._cache:
             return None
         
@@ -139,6 +165,16 @@ class SecretsManager:
     def list_secrets(self) -> list[str]:
         """Listet verfügbare Keys (nicht Values)."""
         return list(self._cache.keys())
+
+    def delete_secret(self, key: str) -> bool:
+        """Löscht ein Secret."""
+        if not self._initialized: self.initialize()
+        if key in self._cache:
+            del self._cache[key]
+            self._save_store()
+            self._audit_log("DELETE", key, "SUCCESS")
+            return True
+        return False
 
     def _save_store(self):
         """Persistiert den verschlüsselten Store (JSON Blob)."""
@@ -174,7 +210,10 @@ if __name__ == "__main__":
     tmp_dir = Path("temp_secrets_test")
     tmp_dir.mkdir(exist_ok=True)
     
+    # Test with Path (Legacy Mode)
     sm = SecretsManager(tmp_dir)
+    sm.initialize()
+    
     print("Saving Secret...")
     sm.set_secret("api_token", "super-secret-value-123")
     

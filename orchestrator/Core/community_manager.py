@@ -7,7 +7,7 @@ Verwaltet Community-Module und den 'Swarm Memory' (Shared RAG).
 Stellt sicher, dass User-Targets geschützt bleiben.
 
 UPDATES v2.1:
-- SwarmCipher: 'Fake-Encryption' (Obfuscation) für Knowledge-Uploads (Wingdings/XOR-Bluff).
+- SwarmCipher: 'Fake-Encryption' (Obfuscation) für Knowledge-Uploads.
 - Git Integration: Push/Pull auf 'Edge-LLM-Knowledge-Base'.
 """
 
@@ -35,11 +35,10 @@ class SwarmCipher:
     Technique: XOR with static key -> Mapped to Unicode Symbols (Pseudo-Wingdings).
     
     This makes the content unreadable to bots, AI scrapers, and script kiddies,
-    while remaining easily decodable by the Framework.
+    while remaining easily decodable by the Framework (reverse engineering barrier).
     """
     KEY = "DITTO_SWARM_KEY_v1_EDGE_CORE"
-    # Mapping bytes 0-255 to Unicode Mathematical Operators (looks like Alien/Wingdings)
-    # Start at U+2200 (∀)
+    # Mapping bytes 0-255 to a custom Unicode range (e.g. Dingbats/Symbols starting at U+2200)
     OFFSET = 0x2200 
 
     @staticmethod
@@ -65,7 +64,6 @@ class SwarmCipher:
             for char in symbols:
                 val = ord(char) - SwarmCipher.OFFSET
                 if val < 0 or val > 255: 
-                    # Fallback or error if non-swarm char found
                     raise ValueError("Invalid Swarm Character detected")
                 xored.append(val)
             
@@ -109,7 +107,7 @@ class CommunityManager:
         ensure_directory(self.knowledge_dir)
         ensure_directory(self.contribution_dir)
 
-    # --- MODULE MANAGEMENT (Original Logic Preserved) ---
+    # --- MODULE MANAGEMENT ---
 
     def scan_modules(self) -> List[CommunityModule]:
         """Scannt community/ Ordner nach verfügbaren Targets."""
@@ -143,7 +141,7 @@ class CommunityManager:
         return sorted(modules, key=lambda x: x.name)
 
     def install_module(self, module_id: str) -> bool:
-        """Kopiert Modul von community/ nach targets/ (SICHER: Kein Überschreiben)."""
+        """Kopiert Modul von community/ nach targets/."""
         source = self.community_dir / module_id
         dest = self.targets_dir / module_id
         
@@ -285,7 +283,7 @@ class CommunityManager:
     def upload_knowledge_to_swarm(self, export_file: str, github_token: str, username: str = "CommunityUser") -> bool:
         """
         1. Liest den Export.
-        2. Verschlüsselt ihn mit SwarmCipher.
+        2. Verschlüsselt ihn mit SwarmCipher (XOR+Wingdings).
         3. Pusht ihn in das GitHub Repo.
         """
         file_path = Path(export_file)
@@ -322,7 +320,6 @@ class CommunityManager:
             
             try:
                 self.logger.info("Cloning Swarm Repo...")
-                # Depth 1 für Speed
                 subprocess.run(["git", "clone", "--depth", "1", auth_url, str(repo_dir)], check=True, capture_output=True)
                 
                 # Datei ablegen
@@ -335,7 +332,6 @@ class CommunityManager:
                 
                 # Commit & Push
                 self.logger.info("Committing to Swarm...")
-                # Git Config für diesen Run setzen
                 subprocess.run(["git", "config", "user.email", "ditto@framework.local"], cwd=repo_dir, check=True)
                 subprocess.run(["git", "config", "user.name", username], cwd=repo_dir, check=True)
                 
@@ -351,7 +347,6 @@ class CommunityManager:
                 
             except subprocess.CalledProcessError as e:
                 self.logger.error(f"Git operation failed: {e}")
-                if e.stderr: self.logger.error(f"Git Error: {e.stderr.decode()}")
                 return False
             except Exception as e:
                 self.logger.error(f"Upload failed: {e}")

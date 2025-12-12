@@ -114,8 +114,12 @@ class FrameworkContext:
             # Orchestrator initialisieren  
             self.orchestrator = LLMOrchestrator(framework_config)
             
-            # Deployment Manager
-            self.deployment_manager = DeploymentManager(self.framework_manager)
+            # Deployment Manager (NEU: v2.0 Integration)
+            # Wir holen die Instanz, die FrameworkManager bereits initialisiert hat (inkl. Secrets)
+            self.deployment_manager = self.framework_manager.get_component("deployment_manager")
+            if not self.deployment_manager:
+                # Fallback, falls im FrameworkManager disabled
+                self.deployment_manager = DeploymentManager(self.framework_manager)
             
             # Synchrone Initialisierung für CLI
             loop = asyncio.new_event_loop()
@@ -466,43 +470,6 @@ def generate_ai(ctx: FrameworkContext, probe_file):
 
 
 # ============================================================================
-# DEPLOYMENT COMMANDS (NEU v2.0.0)
-# ============================================================================
-
-@cli.command('deploy')
-@click.argument('artifact_path', type=click.Path(exists=True))
-@click.option('--ip', prompt='Target IP', help='IP address of the target device')
-@click.option('--user', prompt='Username', help='SSH Username')
-@click.option('--password', prompt=True, hide_input=True, help='SSH Password (RAM only)')
-@click.option('--path', default='/opt/llm_deploy', help='Remote destination path')
-@pass_context
-def deploy(ctx: FrameworkContext, artifact_path, ip, user, password, path):
-    """
-    🚀 Deploy a built artifact to an edge device via SSH/SCP.
-    Zero-Dependency: Uses Paramiko or System SSH. Credentials valid for session only.
-    """
-    if not ctx.deployment_manager:
-        console.print("[red]Deployment Manager not initialized.[/red]")
-        sys.exit(1)
-        
-    console.print(Panel(f"[bold cyan]Starting Deployment[/bold cyan]\nArtifact: {artifact_path}\nTarget: {user}@{ip}:{path}", title="Deploy"))
-    
-    success = ctx.deployment_manager.deploy_artifact(
-        artifact_path=Path(artifact_path),
-        target_ip=ip,
-        user=user,
-        password=password,
-        target_dir=path
-    )
-    
-    if success:
-        console.print("[bold green]✅ Deployment Successful![/bold green]")
-    else:
-        console.print("[bold red]❌ Deployment Failed. Check logs.[/bold red]")
-        sys.exit(1)
-
-
-# ============================================================================
 # BUILD COMMANDS
 # ============================================================================
 
@@ -681,6 +648,153 @@ def build_status(ctx: FrameworkContext, request_id: Optional[str], all: bool):
         sys.exit(1)
 
 # ============================================================================
+# SECRETS MANAGEMENT COMMANDS (NEU V2.0)
+# ============================================================================
+
+@cli.group()
+def secrets():
+    """Manage secure credentials (Keyring)"""
+    pass
+
+@secrets.command('set')
+@click.argument('key')
+@click.password_option(help="The secret value")
+@pass_context
+def set_secret(ctx: FrameworkContext, key, password):
+    """Set a secret in the secure store."""
+    if not ctx.framework_manager.secrets_manager:
+        console.print("[red]SecretsManager not available![/red]")
+        sys.exit(1)
+        
+    if ctx.framework_manager.secrets_manager.set_secret(key, password):
+        console.print(f"[green]Secret '{key}' stored successfully in Keyring.[/green]")
+    else:
+        console.print(f"[red]Failed to store secret '{key}'.[/red]")
+
+@secrets.command('list')
+@pass_context
+def list_secrets(ctx: FrameworkContext):
+    """List available secret keys (names only)."""
+    if not ctx.framework_manager.secrets_manager:
+        console.print("[red]SecretsManager not available![/red]")
+        sys.exit(1)
+        
+    keys = ctx.framework_manager.secrets_manager.list_secrets()
+    if not keys:
+        console.print("[yellow]No secrets found.[/yellow]")
+        return
+        
+    table = Table(title="Secure Storage Registry")
+    table.add_column("Key Name", style="cyan")
+    table.add_column("Status", style="green")
+    for k in keys:
+        table.add_row(k, "Encrypted")
+    console.print(table)
+
+# ============================================================================
+# DEPLOYMENT COMMANDS (NEU V2.0)
+# ============================================================================
+
+@cli.group()
+def deploy():
+    """Manage deployments and artifacts"""
+    pass
+
+@deploy.command('list-artifacts')
+@pass_context
+def list_artifacts(ctx: FrameworkContext):
+    """List available golden artifacts in output directory."""
+    output_dir = Path(ctx.config["output_dir"])
+    if not output_dir.exists():
+        console.print("[yellow]No artifacts found (output dir missing).[/yellow]")
+        return
+
+    table = Table(title="Golden Artifacts")
+    table.add_column("Artifact Name", style="bold yellow")
+    table.add_column("Type", style="cyan")
+    table.add_column("Size (MB)", justify="right")
+
+    for item in output_dir.glob("*"):
+        if item.name.startswith("deploy_"): continue # Skip packages
+        
+        type_str = "Folder" if item.is_dir() else item.suffix
+        size_mb = 0
+        if item.is_file():
+            size_mb = item.stat().st_size / (1024 * 1024)
+        elif item.is_dir():
+            size_mb = sum(f.stat().st_size for f in item.glob('**/*') if f.is_file()) / (1024 * 1024)
+            
+        table.add_row(item.name, type_str, f"{size_mb:.2f}")
+    
+    console.print(table)
+
+@deploy.command('package')
+@click.argument('artifact_name')
+@click.option('--profile', required=True, help="Target Hardware Profile (from targets/profiles)")
+@click.option('--docker/--no-docker', default=False, help="Include Docker images (Air-Gap)")
+@pass_context
+def create_package(ctx: FrameworkContext, artifact_name, profile, docker):
+    """
+    Create a deployment ZIP package.
+    Includes artifact, generated deploy.sh, checksums, and optional Docker images.
+    """
+    dep_mgr = ctx.deployment_manager
+    if not dep_mgr:
+        console.print("[red]Deployment Manager not loaded.[/red]")
+        sys.exit(1)
+        
+    artifact_path = Path(ctx.config["output_dir"]) / artifact_name
+    output_dir = Path(ctx.config["output_dir"])
+    
+    docker_config = {"use_docker": docker}
+    if docker:
+        # TODO: Get real image name from config/profile logic
+        docker_config["image_name"] = "ghcr.io/llm-framework/inference-node:latest"
+    
+    with console.status(f"Generiere Paket für {artifact_name}...", spinner="dots"):
+        pkg_path = dep_mgr.create_deployment_package(
+            artifact_path=artifact_path,
+            profile_name=profile,
+            docker_config=docker_config,
+            output_dir=output_dir
+        )
+        
+    if pkg_path:
+        console.print(f"[bold green]Package created successfully![/bold green]")
+        console.print(f"Path: {pkg_path}")
+    else:
+        console.print("[bold red]Package generation failed. Check logs.[/bold red]")
+
+@deploy.command('run')
+@click.argument('package_path', type=click.Path(exists=True))
+@click.option('--ip', required=True, help="Target IP")
+@click.option('--user', required=True, help="Target Username")
+@click.password_option('--password', help="Target Password (RAM only)")
+@pass_context
+def run_deploy(ctx: FrameworkContext, package_path, ip, user, password):
+    """
+    Upload and execute a deployment package on the target.
+    """
+    dep_mgr = ctx.deployment_manager
+    if not dep_mgr:
+        console.print("[red]Deployment Manager not loaded.[/red]")
+        sys.exit(1)
+        
+    with console.status(f"Deploying to {user}@{ip}...", spinner="earth"):
+        success = dep_mgr.deploy_artifact(
+            artifact_path=Path(package_path),
+            target_ip=ip,
+            user=user,
+            password=password
+        )
+        
+    if success:
+        console.print("[bold green]✅ Deployment Execution Successful![/bold green]")
+    else:
+        console.print("[bold red]❌ Deployment Failed.[/bold red]")
+        sys.exit(1)
+
+# ============================================================================
 # CONFIG COMMANDS (SOURCES MANAGEMENT)
 # ============================================================================
 
@@ -688,3 +802,12 @@ def build_status(ctx: FrameworkContext, request_id: Optional[str], all: bool):
 def config():
     """Configuration Management"""
     pass
+
+@config.command('show')
+@pass_context
+def show_config(ctx: FrameworkContext):
+    """Show current configuration"""
+    console.print(json.dumps(ctx.config, indent=2, default=str))
+
+if __name__ == "__main__":
+    cli()

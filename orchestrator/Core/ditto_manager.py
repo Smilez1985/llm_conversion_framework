@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Ditto Manager (AI Hardware Agent)
+LLM Cross-Compiler Framework - Ditto Manager (AI Hardware Agent) v2.2
 DIREKTIVE: Goldstandard. RAG-Enabled Expert System.
 
 This manager orchestrates the AI-based analysis of hardware probes.
 It fetches context, manages chat memory, and handles offline inference.
 
-Updates v2.0.0:
-- Implemented 'Rolling Context Memory' (Token counting & summarization).
-- Added 'NativeInferenceEngine' for offline usage (via transformers).
-- LiteLLM abstraction for Cloud/Local switching.
-- Full implementation of Module Generation via new abstraction layer.
+Updates v2.2 (Enterprise):
+- Integrated SecretsManager for secure API Key retrieval (Keyring).
+- Added `analyze_error_log` for Self-Healing integration.
+- Preserved NativeInferenceEngine for offline capability.
 """
 
 import json
@@ -112,7 +111,7 @@ class NativeInferenceEngine:
 
 class DittoCoder:
     """
-    AI Agent for Hardware Analysis & Chat.
+    AI Agent for Hardware Analysis, Chat, and System Diagnosis.
     """
     
     def __init__(self, provider: str = "OpenAI", model: str = "gpt-4o", 
@@ -144,8 +143,31 @@ class DittoCoder:
     def _setup_cloud_provider(self, provider, model, api_key, base_url):
         self.litellm_model = self._format_model_name(provider, model)
         self.base_url = base_url
-        if api_key and api_key != "sk-dummy":
-            os.environ["OPENAI_API_KEY"] = api_key # LiteLLM standard
+        
+        # NEU: SecretsManager Integration
+        # Wenn kein API Key übergeben wurde (oder dummy), versuche ihn aus dem Keyring zu laden.
+        final_key = api_key
+        if self.framework and self.framework.secrets_manager:
+            # Mapping Provider -> Key Name
+            key_map = {
+                "OpenAI": "openai_api_key",
+                "Anthropic": "anthropic_api_key",
+                "Google": "gemini_api_key",
+                "HuggingFace": "hf_token"
+            }
+            # Simple heuristic: first word of provider usually matches key
+            provider_key = provider.split()[0]
+            if provider_key in key_map:
+                stored_key = self.framework.secrets_manager.get_secret(key_map[provider_key])
+                if stored_key:
+                    final_key = stored_key
+                    self.logger.info(f"Loaded API Key for {provider} from secure Keyring.")
+
+        if final_key and final_key != "sk-dummy":
+            # LiteLLM erwartet oft spezifische Env Vars, wir setzen sie sicherheitshalber
+            if "OpenAI" in provider: os.environ["OPENAI_API_KEY"] = final_key
+            elif "Anthropic" in provider: os.environ["ANTHROPIC_API_KEY"] = final_key
+            elif "Google" in provider: os.environ["GEMINI_API_KEY"] = final_key
 
     def _format_model_name(self, provider: str, model: str) -> str:
         if "Ollama" in provider: return f"ollama/{model}"
@@ -177,7 +199,7 @@ class DittoCoder:
 
         return ""
 
-    # --- CONTEXT MEMORY MANAGEMENT (v2.0) ---
+    # --- CONTEXT MEMORY MANAGEMENT ---
 
     def _count_tokens(self, text: str) -> int:
         """Approximates token count using tiktoken."""
@@ -191,7 +213,6 @@ class DittoCoder:
     def _compress_history(self, history: List[Dict[str, str]]) -> List[Dict[str, str]]:
         """
         Compresses chat history if it exceeds context limits.
-        Summarizes oldest messages into a system instruction.
         """
         total_tokens = sum(self._count_tokens(m["content"]) for m in history)
         
@@ -200,24 +221,20 @@ class DittoCoder:
 
         self.logger.info(f"Context limit reached ({total_tokens} tokens). Compressing history...")
         
-        # Keep System Prompt (Index 0) and last 4 messages
-        if len(history) <= 5: return history # Cannot compress further
+        if len(history) <= 5: return history 
         
         system_msg = history[0] if history[0]["role"] == "system" else None
         to_summarize = history[1:-4] if system_msg else history[:-4]
         recent_msgs = history[-4:]
         
-        # Create Summary text
         text_blob = "\n".join([f"{m['role']}: {m['content']}" for m in to_summarize])
         summary_prompt = f"Summarize the following technical conversation history in 3 concise sentences, preserving key errors and hardware details:\n{text_blob}"
         
-        # Ask LLM to summarize (Recursive call, but single shot)
         try:
             summary = self._query_llm([{"role": "user", "content": summary_prompt}])
             
             new_history = []
             if system_msg:
-                # Append summary to system prompt
                 new_sys_content = f"{system_msg['content']}\n\n[PREVIOUS CONTEXT SUMMARY]: {summary}"
                 new_history.append({"role": "system", "content": new_sys_content})
             else:
@@ -229,7 +246,7 @@ class DittoCoder:
             
         except Exception as e:
             self.logger.error(f"Compression failed: {e}")
-            return history[-(len(history)//2):] # Crude fallback: cut in half
+            return history[-(len(history)//2):] 
 
     def _query_llm(self, messages: List[Dict[str, str]]) -> str:
         """Unified Interface for Cloud/Offline Generation."""
@@ -237,12 +254,8 @@ class DittoCoder:
         # A. Offline Mode
         if self.offline_mode:
             if not self.native_engine:
-                # Try to find a downloaded model in models/tiny_models
-                # We check if config points to a dir or use default
                 model_base = Path(self.framework.config.models_dir) / "tiny_models"
-                # Pick first available or configured
                 if model_base.exists() and any(model_base.iterdir()):
-                    # Naive pick: first folder
                     target = next(x for x in model_base.iterdir() if x.is_dir())
                     self.native_engine = NativeInferenceEngine(str(target))
                 else:
@@ -283,7 +296,6 @@ class DittoCoder:
         if rag_context:
             base_system += f"\n\nRELEVANT KNOWLEDGE BASE:\n{rag_context}"
         
-        # Prepare messages list for LLM
         messages_for_llm = [{"role": "system", "content": base_system}]
         
         if history:
@@ -297,10 +309,62 @@ class DittoCoder:
         # 4. Generate
         return self._query_llm(optimized_messages)
 
+    def analyze_error_log(self, log_content: str, context_info: str) -> Dict[str, Any]:
+        """
+        NEU: Dedicated Method for Self-Healing Manager.
+        Analyzes a build log and returns a structured JSON fix proposal.
+        """
+        # 1. RAG Check for similar errors
+        rag_context = ""
+        rag = self._get_rag_manager()
+        if rag:
+            # Extract last few lines as query
+            query = "\n".join(log_content.strip().split('\n')[-3:])
+            results = rag.search(query)
+            if results:
+                rag_context = "\n".join([f"- {r.content}" for r in results])
+
+        system_prompt = """
+        You are the Self-Healing System of an Embedded AI Framework.
+        Analyze the provided ERROR LOG.
+        
+        OUTPUT JSON ONLY:
+        {
+            "summary": "Brief error description",
+            "root_cause": "Technical explanation",
+            "fix_command": "Single bash command to fix it",
+            "confidence": 0.0 to 1.0,
+            "target": "HOST" or "DEVICE"
+        }
+        NO MARKDOWN. NO EXPLANATIONS.
+        """
+        
+        if rag_context:
+            system_prompt += f"\n\nKNOWN ISSUES:\n{rag_context}"
+
+        user_prompt = f"CONTEXT: {context_info}\n\nLOG:\n{log_content[-3000:]}"
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        try:
+            response = self._query_llm(messages)
+            # Clean JSON
+            if "```" in response:
+                import re
+                match = re.search(r"```(?:json)?(.*?)```", response, re.DOTALL)
+                if match: response = match.group(1).strip()
+            
+            return json.loads(response)
+        except Exception as e:
+            self.logger.error(f"Analysis failed: {e}")
+            return {}
+
     def generate_module_content(self, probe_file: Path) -> Dict[str, Any]:
         """
         Analysiert die Probe-Datei und generiert die Modul-Konfiguration.
-        Nutzt _query_llm für Cloud/Offline Abstraktion.
         """
         if not probe_file.exists():
             raise FileNotFoundError(f"Probe file not found: {probe_file}")
@@ -308,7 +372,7 @@ class DittoCoder:
         # 1. Hardware Daten lesen
         probe_data = probe_file.read_text(encoding="utf-8", errors="ignore")
         
-        # 2. Determine SDK Hint for Doc Fetching
+        # 2. Determine SDK Hint
         sdk_hint = "generic"
         lower_probe = probe_data.lower()
         if "nvidia" in lower_probe or "tegra" in lower_probe: sdk_hint = "nvidia"
@@ -316,6 +380,8 @@ class DittoCoder:
         elif "hailo" in lower_probe: sdk_hint = "hailo"
         elif "intel" in lower_probe: sdk_hint = "intel"
         elif "riscv" in lower_probe: sdk_hint = "riscv"
+        elif "memryx" in lower_probe: sdk_hint = "memryx" # NEU
+        elif "axelera" in lower_probe: sdk_hint = "axelera" # NEU
         
         # 3. Fetch Context (RAG or Web)
         doc_context = self._fetch_documentation(sdk_hint)
@@ -342,16 +408,6 @@ class DittoCoder:
             "quantization_logic": "Bash CASE block content for build.sh"
         }
         
-        CRITICAL RULES for 'quantization_logic':
-        - Generate ONLY the case content lines (cases and commands).
-        - Do not wrap in 'case ... esac', just the body.
-        - Example for RKNN:
-        "INT8"|"i8")
-            echo "Converting to INT8..."
-            /app/modules/rknn_module.sh ;;
-        "FP16")
-            echo "Keeping FP16..." ;;
-            
         Documentation Context:
         {doc_context}
         """
@@ -368,11 +424,10 @@ class DittoCoder:
             {"role": "user", "content": user_prompt}
         ]
 
-        # 5. Call LLM via Unified Interface
+        # 5. Call LLM
         try:
             content = self._query_llm(messages)
             
-            # Clean Markdown blocks if present
             if "```" in content:
                 import re
                 match = re.search(r"```(?:json)?(.*?)```", content, re.DOTALL)
@@ -400,7 +455,7 @@ class DittoCoder:
             "packages": packages,
             "cpu_flags": config.get("cpu_flags", ""),
             "cmake_flags": config.get("cmake_flags", ""),
-            "quantization_logic": config.get("quantization_logic", ""), # Hier übergeben wir die Logik
+            "quantization_logic": config.get("quantization_logic", ""), 
             "setup_commands": config.get("setup_commands", "# Auto-generated setup by Ditto"),
             "detection_commands": "lscpu",
             "supported_boards": [module_name]

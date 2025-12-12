@@ -81,6 +81,18 @@ hailo_ai:
   hailo_rpi5_examples: "https://github.com/hailo-ai/hailo-rpi5-examples"
   docs_workflow: "https://github.com/hailo-ai/hailo_model_zoo/blob/master/docs/public_models/HAILO8/HAILO8_inference_guide.rst"
 
+# --- MEMRYX (MX3 Accelerator) ---
+memryx:
+  sdk_portal: "https://developer.memryx.com/"
+  docs_workflow: "https://developer.memryx.com/documentation/latest/index.html"
+  drivers_linux: "https://developer.memryx.com/downloads/drivers.html"
+
+# --- AXELERA AI (Metis M.2) ---
+axelera_ai:
+  metis_sdk: "https://docs.axelera.ai/"
+  model_zoo: "https://github.com/axelera-ai/axelera-models"
+  docs_workflow: "https://docs.axelera.ai/metis/latest/general/intro.html"
+
 # --- INTEL NPU & GPU (v1.7.0) ---
 intel_ecosystem:
   ipex_llm:

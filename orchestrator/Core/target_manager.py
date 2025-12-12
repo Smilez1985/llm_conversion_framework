@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Target Manager
-DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
+LLM Cross-Compiler Framework - Target Manager (v2.1 Hybrid)
+DIREKTIVE: Goldstandard.
+MERGE: Kombiniert ursprüngliche Target-Discovery-Logik mit neuem Hardware-Profiling.
 """
 
 import os
@@ -18,10 +19,11 @@ from datetime import datetime
 from enum import Enum
 
 import yaml
-# FIX: TargetArch entfernt, da wir jetzt Strings nutzen
 from orchestrator.Core.builder import ModelFormat
 from orchestrator.utils.logging import get_logger
 from orchestrator.utils.helpers import ensure_directory, check_command_exists
+
+# --- DATA MODELS (Original) ---
 
 class TargetStatus(Enum):
     AVAILABLE = "available"
@@ -74,17 +76,27 @@ class TargetRegistry:
     def list_available_targets(self) -> List[TargetConfiguration]:
         return list(self.targets.values())
 
+# --- MANAGER CLASS (Merged) ---
+
 class TargetManager:
     def __init__(self, framework_manager):
         self.framework_manager = framework_manager
         self.logger = get_logger(__name__)
         self.config = framework_manager.config
-        self.targets_dir = Path(framework_manager.info.installation_path) / self.config.targets_dir
+        
+        # Pfade
+        # Wir nutzen framework_manager.info.installation_path nicht zwingend, 
+        # da config.targets_dir jetzt oft absolut ist (durch Installer v2.16).
+        self.targets_dir = Path(self.config.targets_dir)
+        self.profiles_dir = self.targets_dir / "profiles"
+        
         self.registry = TargetRegistry()
         self._initialized = False
+        
         self._ensure_directories()
 
     def initialize(self) -> bool:
+        """Initialisiert den Manager und entdeckt Targets."""
         try:
             self.logger.info("Initializing Target Manager...")
             self._discover_targets()
@@ -97,6 +109,10 @@ class TargetManager:
     def _ensure_directories(self):
         if not self.targets_dir.exists():
             self.targets_dir.mkdir(parents=True, exist_ok=True)
+        if not self.profiles_dir.exists():
+            self.profiles_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- TARGET DISCOVERY (Original Logic) ---
 
     def _discover_targets(self):
         if not self.targets_dir.exists(): return
@@ -104,8 +120,9 @@ class TargetManager:
         self.registry.targets.clear()
         
         for td in self.targets_dir.iterdir():
-            # Ignoriere _template und hidden files
-            if not td.is_dir() or td.name.startswith('_') or td.name.startswith('.'): continue
+            # Ignoriere _template, profiles Ordner und hidden files
+            if not td.is_dir() or td.name.startswith('_') or td.name.startswith('.') or td.name == "profiles": 
+                continue
             
             try:
                 cfg = self._load_target_configuration(td)
@@ -162,3 +179,92 @@ class TargetManager:
         except Exception as e:
             self.logger.error(f"Refresh failed: {e}")
             return False
+
+    # --- HARDWARE PROFILE MANAGEMENT (New Feature v2.0) ---
+
+    def import_hardware_profile(self, probe_file_path: Path, profile_name: str) -> bool:
+        """
+        Importiert eine target_hardware_config.txt (vom Probe-Skript),
+        parst sie und speichert sie als benanntes JSON-Profil.
+        """
+        probe_file = Path(probe_file_path)
+        if not probe_file.exists():
+            self.logger.error(f"Probe file not found: {probe_file}")
+            return False
+
+        profile_data = {
+            "name": profile_name,
+            "imported_at": str(datetime.now().isoformat()),
+            "raw_data": {}
+        }
+
+        try:
+            # Parsing der Shell-Variablen (KEY=VALUE)
+            with open(probe_file, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"): continue
+                    if "=" in line:
+                        key, val = line.split("=", 1)
+                        profile_data["raw_data"][key.strip()] = val.strip()
+            
+            # Speichern als JSON
+            dest_file = self.profiles_dir / f"{profile_name}.json"
+            with open(dest_file, "w") as f:
+                json.dump(profile_data, f, indent=2)
+            
+            self.logger.info(f"Hardware profile '{profile_name}' imported successfully.")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Failed to import hardware profile: {e}")
+            return False
+
+    def list_hardware_profiles(self) -> List[str]:
+        """Listet alle gespeicherten Hardware-Profile auf."""
+        profiles = []
+        if self.profiles_dir.exists():
+            for item in self.profiles_dir.glob("*.json"):
+                profiles.append(item.stem) # Dateiname ohne .json
+        return sorted(profiles)
+
+    def get_hardware_profile(self, profile_name: str) -> Optional[Dict]:
+        """Lädt ein spezifisches Hardware-Profil."""
+        profile_file = self.profiles_dir / f"{profile_name}.json"
+        if profile_file.exists():
+            try:
+                with open(profile_file, "r") as f:
+                    return json.load(f)
+            except Exception as e:
+                self.logger.error(f"Failed to load profile {profile_name}: {e}")
+        return None
+
+    def get_docker_flags_for_profile(self, profile_name: str) -> List[str]:
+        """
+        Generiert Docker --device Flags basierend auf einem Profil.
+        Dies ist die Single Source of Truth für Deployment-Argumente.
+        """
+        profile = self.get_hardware_profile(profile_name)
+        if not profile: return []
+        
+        data = profile.get("raw_data", {})
+        flags = []
+
+        # Rockchip NPU
+        if data.get("NPU_VENDOR") == "Rockchip":
+            flags.append("--device /dev/rknpu")
+            flags.append("--device /dev/rga")
+        
+        # Hailo NPU
+        if data.get("NPU_VENDOR") == "Hailo":
+            flags.append("--device /dev/hailo0")
+            
+        # NVIDIA GPU
+        if data.get("SUPPORTS_CUDA") == "ON":
+            flags.append("--gpus all")
+            
+        # Intel NPU/GPU
+        if data.get("SUPPORTS_INTEL_XPU") == "ON":
+            flags.append("--device /dev/dri")
+
+        return flags

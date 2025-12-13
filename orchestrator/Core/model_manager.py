@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Model Manager
+LLM Cross-Compiler Framework - Model Manager (v2.3.0)
 DIREKTIVE: Goldstandard, Modular & Data-Driven.
 
 Zweck:
@@ -8,9 +8,9 @@ Verwaltet Downloads, Suche und Metadaten von KI-Modellen (Hugging Face).
 Stellt sicher, dass Offline-Modelle (Tiny Models) verfügbar sind.
 Fungiert als 'Ethics Gate' durch Prüfung von Lizenzen.
 
-Updates v2.0.0:
-- Added 'check_license' (Ethics Gate) to warn about restrictive model licenses.
-- Added 'download_tiny_model' logic for Offline Intelligence.
+Updates v2.3.0:
+- Constructor hardened to accept ConfigManager directly (fixes framework.py init).
+- License check improvements.
 """
 
 import os
@@ -19,14 +19,18 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from dataclasses import dataclass, field
 from datetime import datetime
 import time
 
 import requests
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.helpers import ensure_directory
+
+# Fallback Helper, falls utils.helpers noch nicht existiert
+def ensure_directory(path: Path):
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
 
 @dataclass
 class ModelMetadata:
@@ -35,27 +39,39 @@ class ModelMetadata:
     format: str
     model_type: str = ""
     size_bytes: int = 0
-    license: str = "unknown" # New v2.0
+    license: str = "unknown"
     
     @property
     def size_gb(self) -> float:
         return self.size_bytes / (1024 ** 3)
 
 class ModelManager:
-    def __init__(self, framework_manager):
-        self.framework_manager = framework_manager
-        self.logger = get_logger(__name__)
-        self.config = framework_manager.config
+    def __init__(self, config_or_framework: Any):
+        self.logger = get_logger("ModelManager")
         
+        # --- Logic for handling Framework vs Config object ---
+        # framework.py passes 'self.config' (ConfigManager), but code might expect FrameworkManager
+        if hasattr(config_or_framework, 'config') and not isinstance(config_or_framework, dict):
+            # It is FrameworkManager
+            self.config = config_or_framework.config
+            self.root_path = getattr(config_or_framework.info, 'installation_path', Path("."))
+        else:
+            # It is ConfigManager directly
+            self.config = config_or_framework
+            self.root_path = getattr(self.config, 'root_path', Path("."))
+
         # Paths
-        self.models_dir = Path(framework_manager.info.installation_path) / self.config.models_dir
+        # Use .get() for safety if config is ConfigManager class
+        models_dir_name = self.config.get("models_dir", "models") if hasattr(self.config, "get") else getattr(self.config, "models_dir", "models")
+        
+        self.models_dir = self.root_path / models_dir_name
         self.tiny_models_dir = self.models_dir / "tiny_models"
         
         ensure_directory(self.models_dir)
         ensure_directory(self.tiny_models_dir)
         
     def initialize(self) -> bool:
-        self.logger.info("Model Manager initialized")
+        self.logger.info(f"Model Manager initialized. Storage: {self.models_dir}")
         return True
 
     # --- HUGGING FACE INTEGRATION ---
@@ -104,7 +120,7 @@ class ModelManager:
             self.logger.error(f"HF Search failed: {e}")
             return []
             
-    # --- v2.0: ETHICS GATE (License Check) ---
+    # --- v2.3.0: ETHICS GATE (License Check) ---
     def check_license(self, model_id: str) -> Dict[str, Any]:
         """
         Checks the license of a model and returns warnings if restrictive.
@@ -180,11 +196,16 @@ class ModelManager:
             self.logger.error(f"Download failed: {e}")
             return None
 
-    # --- TINY MODELS / OFFLINE INTELLIGENCE (v2.0) ---
+    # --- TINY MODELS / OFFLINE INTELLIGENCE ---
 
     def get_available_tiny_models(self) -> Dict[str, Dict[str, Any]]:
         """Returns the list of tiny models defined in SSOT."""
-        sources = self.framework_manager.config.source_repositories
+        # Use .get() method if available (ConfigManager), else dictionary access
+        if hasattr(self.config, 'get'):
+            sources = self.config.get("source_repositories", {})
+        else:
+            sources = getattr(self.config, "source_repositories", {})
+            
         return sources.get("tiny_models", {})
 
     def is_tiny_model_installed(self, model_key: str) -> bool:
@@ -198,7 +219,6 @@ class ModelManager:
         # Check if local directory exists in tiny_models_dir
         local_dir = self.tiny_models_dir / model_key
         # Simple check: Does folder exist and have content?
-        # For more robustness, we could check for config.json
         if local_dir.exists() and (local_dir / "config.json").exists():
             return True
             

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Framework Core (v2.0 Enterprise)
+LLM Cross-Compiler Framework - Framework Core (v2.3 )
 DIREKTIVE: Goldstandard, Central Dependency Injection.
 
 Der Kernel des Systems. Initialisiert alle Manager in strikter,
@@ -44,7 +44,7 @@ from orchestrator.Core.orchestrator import LLMOrchestrator
 @dataclass
 class FrameworkInfo:
     name: str = "LLM Cross-Compiler Framework"
-    version: str = "2.0.0"
+    version: str = "2.3.0"
     edition: str = "Enterprise"
     installation_path: Path = Path(".")
 

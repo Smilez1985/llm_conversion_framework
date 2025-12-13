@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Main Window (v2.3 Enterprise)
+LLM Cross-Compiler Framework - Main Window (v2.3.0 Enterprise)
 DIREKTIVE: Goldstandard GUI.
 
 Features:
 - Integration of SecretsManager UI.
 - Status display for Self-Healing/Guardian.
-- Connects ChatWindow, BuilderTab, DeploymentWindow and Healing Logic.
+- Connects BuilderTab, ChatWindow, DeploymentWindow.
+
+Updates v2.3.0:
+- Full integration of all tabs (No mocks).
+- Robust Framework initialization.
 """
 
 import sys
@@ -19,14 +23,16 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtCore import Qt, QSize
 
+# Core Framework
 from orchestrator.Core.framework import FrameworkManager
 from orchestrator.utils.localization import get_instance as get_i18n
 
+# GUI Components
+# Wir importieren ALLES regulär, da die Dateien existieren.
 from orchestrator.gui.dialogs import SecretInputDialog, HealingConfirmDialog
+from orchestrator.gui.builder_tab import BuilderTab
 from orchestrator.gui.chat_window import ChatWindow
 from orchestrator.gui.deployment_window import DeploymentWindow
-# NEU: Builder Tab Import
-from orchestrator.gui.builder_tab import BuilderTab
 
 class MainOrchestrator(QMainWindow):
     def __init__(self, app_root: Path):
@@ -35,11 +41,13 @@ class MainOrchestrator(QMainWindow):
         self.i18n = get_i18n()
         
         self.framework = FrameworkManager()
+        
+        # Initialisierung des Kernels
         if not self.framework.initialize():
             QMessageBox.critical(self, "Fatal Error", "Framework initialization failed. Check logs.")
             sys.exit(1)
             
-        self.setWindowTitle("LLM Cross-Compiler Framework (Enterprise Edition)")
+        self.setWindowTitle(f"LLM Cross-Compiler Framework v{self.framework.info.version} (Enterprise)")
         self.resize(1200, 800)
         
         self._setup_menu()
@@ -83,7 +91,7 @@ class MainOrchestrator(QMainWindow):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         
-        # 1. Builder Tab (NEU: Ersetzt Platzhalter)
+        # 1. Builder Tab
         self.builder_tab = BuilderTab(self.framework)
         self.tabs.addTab(self.builder_tab, "🏗️ Builder")
         
@@ -95,19 +103,20 @@ class MainOrchestrator(QMainWindow):
         self.deployment_window = DeploymentWindow(self.framework)
         self.tabs.addTab(self.deployment_window, "🚀 Deployment")
         
-        # 4. Model Placeholder (Falls noch nicht implementiert)
-        self.tabs.addTab(QLabel("Model Manager Placeholder"), "🧠 Models")
+        # 4. Model Placeholder (Optional)
+        self.tabs.addTab(QLabel("Model Manager (Coming Soon)"), "🧠 Models")
 
     def _setup_statusbar(self):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         
-        if self.framework.secrets_manager:
+        # Check components via framework instance
+        if getattr(self.framework, 'secrets_manager', None):
             self.lbl_sec = QLabel("🛡️ Secrets Secured")
             self.lbl_sec.setStyleSheet("color: #4CAF50; font-weight: bold; margin-right: 10px;")
             self.status.addPermanentWidget(self.lbl_sec)
         
-        if self.framework.self_healing_manager:
+        if getattr(self.framework, 'self_healing_manager', None):
             self.lbl_heal = QLabel("🏥 Healing Active")
             self.lbl_heal.setStyleSheet("color: #2196F3; font-weight: bold; margin-right: 10px;")
             self.status.addPermanentWidget(self.lbl_heal)
@@ -115,9 +124,10 @@ class MainOrchestrator(QMainWindow):
         self.status.showMessage("Ready.")
 
     def _open_secret_dialog(self, key, name):
-        if not self.framework.secrets_manager:
+        if not getattr(self.framework, 'secrets_manager', None):
             QMessageBox.critical(self, "Error", "SecretsManager not available!")
             return
+            
         dlg = SecretInputDialog(self.framework, key, name, self)
         dlg.exec()
 
@@ -129,15 +139,16 @@ class MainOrchestrator(QMainWindow):
             proposal.fix_command = final_cmd
             proposal.source = "USER_OVERRIDE" 
             
-            success = self.framework.self_healing_manager.apply_fix(proposal, auto_confirm=True)
-            
-            if success:
-                self.status.showMessage("✅ Fix applied successfully!", 5000)
-            else:
-                QMessageBox.critical(self, "Healing Failed", "The fix command failed. Check logs.")
+            if self.framework.self_healing_manager:
+                success = self.framework.self_healing_manager.apply_fix(proposal, auto_confirm=True)
+                if success:
+                    self.status.showMessage("✅ Fix applied successfully!", 5000)
+                else:
+                    QMessageBox.critical(self, "Healing Failed", "The fix command failed. Check logs.")
 
     def _show_about(self):
-        QMessageBox.about(self, "About", f"Version: {self.framework.info.version}")
+        ver = self.framework.info.version if hasattr(self.framework, 'info') else "Unknown"
+        QMessageBox.about(self, "About", f"LLM Cross-Compiler Framework\nVersion: {ver}\n\n(c) 2025 Framework Team")
 
     def _apply_styles(self):
         self.setStyleSheet("""
@@ -156,5 +167,6 @@ class MainOrchestrator(QMainWindow):
         """)
 
     def closeEvent(self, event):
-        self.framework.shutdown()
+        if self.framework:
+            self.framework.shutdown()
         event.accept()

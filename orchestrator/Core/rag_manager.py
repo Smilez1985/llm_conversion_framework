@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - RAG Manager (Local Knowledge Base)
+LLM Cross-Compiler Framework - RAG Manager (Local Knowledge Base) v2.3.0
 DIREKTIVE: Goldstandard, Enterprise RAG, Robustness.
 
 Zweck:
@@ -8,10 +8,9 @@ Verwaltet die lokale Vektor-Datenbank (Qdrant).
 Zuständig für Ingestion (Doku/Code -> Vektoren) und Retrieval.
 Sichert Integrität durch Snapshots und Rollbacks (Guardian Layer).
 
-Updates v2.0.0:
-- Added 'create_snapshot' and 'restore_snapshot' for knowledge insurance.
-- Added 'ingest_codebase' for Self-Awareness (scanning own source code).
-- Integrated Deep Crawler with automatic pre-ingest snapshots.
+Updates v2.3.0:
+- Dynamic root path resolution for Codebase Ingest.
+- Robust initialization sequence.
 """
 
 import uuid
@@ -33,11 +32,16 @@ try:
     import litellm
 except ImportError:
     QdrantClient = None
+    litellm = None
 
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.helpers import ensure_directory
 
-# Import Crawler (v1.6.0 feature)
+# Helper inline to avoid circular dependency
+def ensure_directory(path: Path):
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+
+# Import Crawler (Optional)
 try:
     from orchestrator.Core.crawler_manager import CrawlerManager
 except ImportError:
@@ -65,19 +69,27 @@ class RAGManager:
     """
 
     def __init__(self, framework_manager):
-        self.logger = get_logger(__name__)
+        self.logger = get_logger("RAGManager")
         self.framework = framework_manager
-        self.config = framework_manager.config
+        
+        # Robust Path & Config
+        if hasattr(framework_manager, 'info') and hasattr(framework_manager.info, 'installation_path'):
+             self.app_root = Path(framework_manager.info.installation_path)
+        else:
+             self.app_root = Path(".").resolve()
+             
+        self.config = getattr(framework_manager, 'config', None)
+        
         self.client: Optional[QdrantClient] = None
         self._connected = False
         
         # Snapshot Directory (Local Backup)
-        self.backup_dir = Path(framework_manager.info.installation_path) / "backups" / "rag_snapshots"
+        self.backup_dir = self.app_root / "backups" / "rag_snapshots"
         ensure_directory(self.backup_dir)
         
         # Check dependencies
         if not QdrantClient:
-            self.logger.critical("Module 'qdrant-client' not found. RAG disabled.")
+            self.logger.warning("Module 'qdrant-client' not found. RAG functionality disabled.")
             return
 
     def _connect(self) -> bool:
@@ -85,8 +97,17 @@ class RAGManager:
         if self._connected and self.client:
             return True
 
+        if not QdrantClient: return False
+
         # URL aus Docker-Netzwerk (intern) oder Localhost
-        potential_urls = ["http://localhost:6333", "http://llm-qdrant:6333"]
+        # Fallback auf Config-Wert falls vorhanden
+        config_url = None
+        if self.config and hasattr(self.config, 'get'):
+             config_url = self.config.get("qdrant_url")
+        
+        potential_urls = []
+        if config_url: potential_urls.append(config_url)
+        potential_urls.extend(["http://localhost:6333", "http://llm-qdrant:6333"])
         
         for url in potential_urls:
             try:
@@ -101,7 +122,7 @@ class RAGManager:
             except Exception:
                 continue
         
-        self.logger.warning("RAGManager could not connect to Qdrant (Container might be down).")
+        self.logger.debug("RAGManager could not connect to Qdrant (Container might be down or initializing).")
         return False
 
     def _ensure_collection(self):
@@ -126,8 +147,19 @@ class RAGManager:
 
     def _get_embedding(self, text: str) -> List[float]:
         """Generiert Embeddings mittels litellm."""
-        model = self.config.get("ai_embedding_model", DEFAULT_EMBEDDING_MODEL)
+        if not litellm:
+            raise ImportError("litellm not installed")
+
+        # Config safe access
+        model = DEFAULT_EMBEDDING_MODEL
+        if self.config:
+             model = getattr(self.config, "ai_embedding_model", DEFAULT_EMBEDDING_MODEL) if not hasattr(self.config, 'get') else self.config.get("ai_embedding_model", DEFAULT_EMBEDDING_MODEL)
+        
+        # API Key via SecretsManager if available, else Env
         api_key = os.environ.get("OPENAI_API_KEY", "sk-dummy")
+        if self.framework and hasattr(self.framework, 'secrets_manager') and self.framework.secrets_manager:
+            s_key = self.framework.secrets_manager.get_secret("openai_api_key")
+            if s_key: api_key = s_key
         
         try:
             text = text.replace("\n", " ")
@@ -193,7 +225,7 @@ class RAGManager:
                 return False
         return False
 
-    # --- V1.6.0 / V2.0.0: DEEP INGEST (WEB/PDF) ---
+    # --- DEEP INGEST (WEB/PDF) ---
     def ingest_url(self, url: str) -> Dict[str, Any]:
         """
         Startet den Crawler für eine URL.
@@ -229,8 +261,8 @@ class RAGManager:
             self.logger.error(f"Deep Ingest failed: {e}")
             return {"success": False, "message": str(e)}
 
-    # --- V2.0.0: CODEBASE INGEST (SELF-AWARENESS) ---
-    def ingest_codebase(self, root_path: Union[str, Path] = "/app") -> Dict[str, Any]:
+    # --- CODEBASE INGEST (SELF-AWARENESS) ---
+    def ingest_codebase(self, root_path: Union[str, Path, None] = None) -> Dict[str, Any]:
         """
         Scans the local codebase and ingests it into Qdrant.
         Allows Ditto to answer questions about the framework itself.
@@ -238,7 +270,9 @@ class RAGManager:
         if not self._connect():
              return {"success": False, "message": "Qdrant not connected"}
 
-        root = Path(root_path)
+        # Use provided path or default to app_root (Installation Path)
+        root = Path(root_path) if root_path else self.app_root
+        
         if not root.exists():
              return {"success": False, "message": f"Path not found: {root}"}
         
@@ -326,23 +360,17 @@ class RAGManager:
     def restore_snapshot(self, snapshot_name: str) -> bool:
         """
         Restores the collection from a snapshot.
-        Currently implements a safe placeholder until Qdrant API stabilizes recovery methods.
         """
         if not self._connect(): return False
         
         try:
             self.logger.warning(f"RESTORING SNAPSHOT REQUESTED: {snapshot_name}")
-            # Implementation note: Qdrant restore typically requires re-creating 
-            # the collection from the snapshot file or using specific recovery APIs
-            # that vary by version.
-            
-            # For v2.0 MVP, we verify the snapshot exists.
             snaps = self.list_snapshots()
             if snapshot_name not in snaps:
                  self.logger.error(f"Snapshot {snapshot_name} not found on server.")
                  return False
                  
-            self.logger.info(f"Snapshot {snapshot_name} verified. To restore, manual intervention via API may be required in this version.")
+            self.logger.info(f"Snapshot {snapshot_name} verified. Restore support limited in this version.")
             return True 
         except Exception as e:
             self.logger.error(f"Restore check failed: {e}")

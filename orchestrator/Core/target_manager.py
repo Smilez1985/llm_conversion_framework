@@ -1,270 +1,163 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Target Manager (v2.1 Hybrid)
-DIREKTIVE: Goldstandard.
-MERGE: Kombiniert ursprüngliche Target-Discovery-Logik mit neuem Hardware-Profiling.
+LLM Cross-Compiler Framework - Target Manager (v2.0 Enterprise)
+DIREKTIVE: Goldstandard Hardware Management.
+
+Verwaltet Hardware-Zielprofile (Targets).
+Liest YAML-Definitionen und importiert Hardware-Probes.
 """
 
 import os
-import sys
-import json
-import logging
-import subprocess
-import platform
-import shutil
-from pathlib import Path
-from typing import Dict, List, Optional, Any, Union
-from dataclasses import dataclass, field, asdict
-from datetime import datetime
-from enum import Enum
-
 import yaml
-from orchestrator.Core.builder import ModelFormat
+import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.helpers import ensure_directory, check_command_exists
-
-# --- DATA MODELS (Original) ---
-
-class TargetStatus(Enum):
-    AVAILABLE = "available"
-    UNAVAILABLE = "unavailable"
-    PARTIAL = "partial"
-    UNCONFIGURED = "unconfigured"
-    ERROR = "error"
-
-class ToolchainType(Enum):
-    GCC_CROSS = "gcc_cross"
-    CLANG_CROSS = "clang_cross"
-    CUSTOM = "custom"
-    NATIVE = "native"
-
-@dataclass
-class ToolchainInfo:
-    name: str
-    type: ToolchainType
-    version: str
-    prefix: str = ""
-    path: str = ""
-    cc: str = ""
-    cxx: str = ""
-    cmake_toolchain_file: str = ""
-    env_vars: Dict[str, str] = field(default_factory=dict)
-    available: bool = False
-
-@dataclass
-class TargetConfiguration:
-    name: str
-    target_arch: str
-    status: TargetStatus
-    version: str = "1.0.0"
-    maintainer: str = "Community"
-    description: str = ""
-    target_dir: str = ""
-    modules_dir: str = ""
-    configs_dir: str = ""
-    available_modules: List[str] = field(default_factory=list)
-    docker_image: str = ""
-    supported_formats: List[str] = field(default_factory=list)
-    
-@dataclass
-class TargetRegistry:
-    targets: Dict[str, TargetConfiguration] = field(default_factory=dict)
-    
-    def get_target(self, name: str) -> Optional[TargetConfiguration]:
-        return self.targets.get(name)
-    
-    def list_available_targets(self) -> List[TargetConfiguration]:
-        return list(self.targets.values())
-
-# --- MANAGER CLASS (Merged) ---
 
 class TargetManager:
     def __init__(self, framework_manager):
-        self.framework_manager = framework_manager
         self.logger = get_logger(__name__)
-        self.config = framework_manager.config
+        self.framework = framework_manager
         
-        # Pfade
-        # Wir nutzen framework_manager.info.installation_path nicht zwingend, 
-        # da config.targets_dir jetzt oft absolut ist (durch Installer v2.16).
-        self.targets_dir = Path(self.config.targets_dir)
-        self.profiles_dir = self.targets_dir / "profiles"
-        
-        self.registry = TargetRegistry()
+        # Pfade aus Config
+        # Fallback für Tests: Wenn framework_manager nur ein Path ist (Legacy)
+        if hasattr(framework_manager, 'config'):
+            self.targets_dir = Path(framework_manager.config.targets_dir)
+        else:
+            self.targets_dir = Path("targets") # Default/Fallback
+            
+        self._targets: Dict[str, Any] = {}
         self._initialized = False
+
+    def initialize(self):
+        """Lädt alle verfügbaren Targets aus dem targets/ Verzeichnis."""
+        self.logger.info(f"Loading targets from {self.targets_dir}...")
+        self._targets = {}
         
-        self._ensure_directories()
-
-    def initialize(self) -> bool:
-        """Initialisiert den Manager und entdeckt Targets."""
-        try:
-            self.logger.info("Initializing Target Manager...")
-            self._discover_targets()
-            self._initialized = True
-            return True
-        except Exception as e:
-            self.logger.error(f"Target Manager initialization failed: {e}")
-            return False
-
-    def _ensure_directories(self):
         if not self.targets_dir.exists():
-            self.targets_dir.mkdir(parents=True, exist_ok=True)
-        if not self.profiles_dir.exists():
-            self.profiles_dir.mkdir(parents=True, exist_ok=True)
-
-    # --- TARGET DISCOVERY (Original Logic) ---
-
-    def _discover_targets(self):
-        if not self.targets_dir.exists(): return
-        
-        self.registry.targets.clear()
-        
-        for td in self.targets_dir.iterdir():
-            # Ignoriere _template, profiles Ordner und hidden files
-            if not td.is_dir() or td.name.startswith('_') or td.name.startswith('.') or td.name == "profiles": 
-                continue
-            
+            self.logger.warning(f"Targets directory {self.targets_dir} does not exist.")
             try:
-                cfg = self._load_target_configuration(td)
-                if cfg: 
-                    self.registry.targets[cfg.name] = cfg
-                    self.logger.debug(f"Loaded target: {cfg.name}")
+                self.targets_dir.mkdir(parents=True, exist_ok=True)
             except Exception as e:
-                self.logger.error(f"Failed to load {td.name}: {e}")
+                self.logger.error(f"Could not create targets dir: {e}")
+                return
 
-    def _load_target_configuration(self, target_dir: Path) -> Optional[TargetConfiguration]:
-        yml = target_dir / "target.yml"
-        if not yml.exists(): return None
+        # Scan subdirectories
+        for item in self.targets_dir.iterdir():
+            if item.is_dir():
+                config_file = item / "target.yml"
+                if config_file.exists():
+                    try:
+                        with open(config_file, 'r', encoding='utf-8') as f:
+                            data = yaml.safe_load(f)
+                            # Basic Validation
+                            if 'metadata' in data and 'id' in data['metadata']:
+                                tid = data['metadata']['id']
+                                self._targets[tid] = data
+                                self.logger.debug(f"Loaded target: {tid}")
+                            else:
+                                self.logger.warning(f"Invalid target config in {item.name}")
+                    except Exception as e:
+                        self.logger.error(f"Failed to load target {item.name}: {e}")
         
-        try:
-            with open(yml, 'r') as f: data = yaml.safe_load(f)
-            meta = data.get('metadata', {})
-            
-            config = TargetConfiguration(
-                name=target_dir.name, # Folder name as ID
-                target_arch=meta.get('architecture_family', 'unknown'),
-                status=TargetStatus.AVAILABLE,
-                version=meta.get('version', '1.0.0'),
-                maintainer=meta.get('maintainer', 'Community'),
-                description=meta.get('description', ''),
-                target_dir=str(target_dir),
-                modules_dir=str(target_dir / "modules"),
-                configs_dir=str(target_dir / "configs")
-            )
-            
-            if Path(config.modules_dir).exists():
-                config.available_modules = [f.name for f in Path(config.modules_dir).glob("*.sh")]
-            
-            d_cfg = data.get('docker', {})
-            config.docker_image = d_cfg.get('image_name', '')
-            
-            return config
-        except Exception as e:
-            self.logger.error(f"Load error {target_dir.name}: {e}")
-            return None
+        self.logger.info(f"Loaded {len(self._targets)} targets.")
+        self._initialized = True
 
-    def list_available_targets(self) -> List[str]:
+    def get_target(self, target_id: str) -> Optional[Dict[str, Any]]:
         if not self._initialized: self.initialize()
-        return list(self.registry.targets.keys())
+        return self._targets.get(target_id)
 
-    def get_target_info(self, target_name: str) -> Dict[str, Any]:
-        t = self.registry.get_target(target_name)
-        if t: return asdict(t)
-        return {"error": "Target not found"}
+    def list_targets(self) -> List[Dict[str, Any]]:
+        if not self._initialized: self.initialize()
+        # Return list of metadata for UI/CLI
+        return [t['metadata'] for t in self._targets.values()]
 
-    def refresh_targets(self) -> bool:
-        try:
-            self._discover_targets()
-            return True
-        except Exception as e:
-            self.logger.error(f"Refresh failed: {e}")
-            return False
-
-    # --- HARDWARE PROFILE MANAGEMENT (New Feature v2.0) ---
-
-    def import_hardware_profile(self, probe_file_path: Path, profile_name: str) -> bool:
+    def get_docker_flags_for_profile(self, target_id: str) -> List[str]:
         """
-        Importiert eine target_hardware_config.txt (vom Probe-Skript),
-        parst sie und speichert sie als benanntes JSON-Profil.
+        Gibt die Docker 'run' Flags zurück, die für dieses Target nötig sind.
+        (z.B. Device Mapping für NPUs/GPUs).
         """
-        probe_file = Path(probe_file_path)
-        if not probe_file.exists():
-            self.logger.error(f"Probe file not found: {probe_file}")
-            return False
-
-        profile_data = {
-            "name": profile_name,
-            "imported_at": str(datetime.now().isoformat()),
-            "raw_data": {}
-        }
-
-        try:
-            # Parsing der Shell-Variablen (KEY=VALUE)
-            with open(probe_file, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"): continue
-                    if "=" in line:
-                        key, val = line.split("=", 1)
-                        profile_data["raw_data"][key.strip()] = val.strip()
-            
-            # Speichern als JSON
-            dest_file = self.profiles_dir / f"{profile_name}.json"
-            with open(dest_file, "w") as f:
-                json.dump(profile_data, f, indent=2)
-            
-            self.logger.info(f"Hardware profile '{profile_name}' imported successfully.")
-            return True
-
-        except Exception as e:
-            self.logger.error(f"Failed to import hardware profile: {e}")
-            return False
-
-    def list_hardware_profiles(self) -> List[str]:
-        """Listet alle gespeicherten Hardware-Profile auf."""
-        profiles = []
-        if self.profiles_dir.exists():
-            for item in self.profiles_dir.glob("*.json"):
-                profiles.append(item.stem) # Dateiname ohne .json
-        return sorted(profiles)
-
-    def get_hardware_profile(self, profile_name: str) -> Optional[Dict]:
-        """Lädt ein spezifisches Hardware-Profil."""
-        profile_file = self.profiles_dir / f"{profile_name}.json"
-        if profile_file.exists():
-            try:
-                with open(profile_file, "r") as f:
-                    return json.load(f)
-            except Exception as e:
-                self.logger.error(f"Failed to load profile {profile_name}: {e}")
-        return None
-
-    def get_docker_flags_for_profile(self, profile_name: str) -> List[str]:
-        """
-        Generiert Docker --device Flags basierend auf einem Profil.
-        Dies ist die Single Source of Truth für Deployment-Argumente.
-        """
-        profile = self.get_hardware_profile(profile_name)
-        if not profile: return []
+        target = self.get_target(target_id)
+        if not target: return []
         
-        data = profile.get("raw_data", {})
         flags = []
-
-        # Rockchip NPU
-        if data.get("NPU_VENDOR") == "Rockchip":
+        hw = target.get('hardware', {})
+        
+        # 1. GPU Support
+        gpu = hw.get('gpu', {}).get('vendor', '').lower()
+        if gpu == 'nvidia':
+            flags.append("--gpus all")
+        elif gpu == 'intel':
+            flags.append("--device /dev/dri") # iGPU / Arc
+            
+        # 2. NPU Support (Manual mappings based on vendor)
+        npu = hw.get('npu', {}).get('vendor', '').lower()
+        if 'rockchip' in npu:
             flags.append("--device /dev/rknpu")
             flags.append("--device /dev/rga")
-        
-        # Hailo NPU
-        if data.get("NPU_VENDOR") == "Hailo":
+        elif 'hailo' in npu:
             flags.append("--device /dev/hailo0")
-            
-        # NVIDIA GPU
-        if data.get("SUPPORTS_CUDA") == "ON":
-            flags.append("--gpus all")
-            
-        # Intel NPU/GPU
-        if data.get("SUPPORTS_INTEL_XPU") == "ON":
-            flags.append("--device /dev/dri")
-
+        elif 'axelera' in npu:
+             # Axelera benötigt oft Zugriff auf PCIe/Mem
+             flags.append("--privileged") 
+        
         return flags
+
+    # --- NEW V2.0 FEATURE: PROBE IMPORT ---
+
+    def import_hardware_profile(self, probe_file: Path) -> Dict[str, Any]:
+        """
+        Liest eine target_hardware_config.txt (Key=Value) ein und gibt
+        ein Dictionary zurück, das vom ModuleGenerator genutzt werden kann.
+        """
+        if not probe_file.exists():
+            raise FileNotFoundError(f"Probe file not found: {probe_file}")
+            
+        raw_data = {}
+        try:
+            with open(probe_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'): continue
+                    if '=' in line:
+                        k, v = line.split('=', 1)
+                        raw_data[k.strip()] = v.strip()
+        except Exception as e:
+            self.logger.error(f"Failed to parse probe file: {e}")
+            return {}
+
+        self.logger.info("Probe data parsed successfully.")
+        return raw_data
+
+    def find_matching_target(self, probe_data: Dict[str, str]) -> Optional[str]:
+        """
+        Versucht, basierend auf Probe-Daten ein existierendes Target zu finden.
+        Matching-Logik: Vendor IDs & Device IDs.
+        """
+        if not self._initialized: self.initialize()
+
+        # Extrahiere IDs aus der Probe
+        p_gpu_vid = probe_data.get("GPU_VENDOR_ID", "").lower()
+        p_npu_vid = probe_data.get("NPU_VENDOR_ID", "").lower()
+        p_cpu_arch = probe_data.get("ARCH", "").lower()
+
+        for tid, tdata in self._targets.items():
+            hw = tdata.get('hardware', {})
+            
+            # Check Arch
+            t_arch = hw.get('cpu', {}).get('architecture', '').lower()
+            if t_arch and t_arch != p_cpu_arch:
+                continue # Architektur passt nicht
+
+            # Check NPU Match (Strong Signal)
+            t_npu_vid = hw.get('npu', {}).get('vendor_id', '').lower()
+            if t_npu_vid and p_npu_vid and t_npu_vid in p_npu_vid:
+                return tid
+            
+            # Check GPU Match
+            t_gpu_vid = hw.get('gpu', {}).get('vendor_id', '').lower()
+            if t_gpu_vid and p_gpu_vid and t_gpu_vid in p_gpu_vid:
+                return tid
+
+        return None

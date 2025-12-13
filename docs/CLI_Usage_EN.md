@@ -95,6 +95,18 @@ python3 orchestrator/cli.py deploy package \
   --profile rk3588_box \
   --docker
 ```
+--docker: Includes Docker images and docker-compose.yml for air-gapped deployment.
+
+Remote Execution
+Copies the package via SSH to the target and executes it.
+```bash
+python3 orchestrator/cli.py deploy run \
+  output/deploy_pkg_2025.zip \
+  --ip 192.168.1.50 \
+  --user root \
+  --password "secret"
+```
+
 6. Module Development (module)
 Helper tools for developers.
 

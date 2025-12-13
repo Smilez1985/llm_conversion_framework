@@ -11,6 +11,8 @@ Updates v1.7.0:
 - Auto-Documentation: Generates Model_Card.md with hard facts.
 - Intel GPU (XPU/Arc) Passthrough support via /dev/dri.
 - FIX: Deterministic artifact detection instead of heuristics.
+Updates v2.3.0:
+- Integration with ConfigManager for centralized Docker images.
 """
 
 import os
@@ -170,7 +172,10 @@ class BuildEngine:
             try:
                 self.docker_client = docker.from_env()
             except Exception as e:
-                raise RuntimeError(f"Docker client not available: {e}")
+                # If docker is strictly required we might raise here, 
+                # but for now we log error to allow other components to load.
+                self.logger.error(f"Docker client not available: {e}")
+                # raise RuntimeError(f"Docker client not available: {e}")
                 
         self._lock = threading.Lock()
         self._builds: Dict[str, BuildProgress] = {}
@@ -185,7 +190,8 @@ class BuildEngine:
         self.cache_dir = self.base_dir / framework_manager.config.cache_dir
         
         self._ensure_directories()
-        self._validate_docker_environment()
+        if self.docker_client:
+            self._validate_docker_environment()
         self.logger.info(f"Build Engine initialized (max_workers: {max_concurrent_builds})")
     
     def _ensure_directories(self):
@@ -446,9 +452,14 @@ class BuildEngine:
         try:
             scan_cmd = ["image", "--exit-code", "1", "--severity", "HIGH,CRITICAL", image_tag]
             
+            # --- FIX V2.3: Use Central Config Image ---
+            trivy_image = "aquasec/trivy:latest" # Fallback
+            if hasattr(self.framework_manager.config, 'image_trivy'):
+                trivy_image = self.framework_manager.config.image_trivy
+            
             # Secure way: Run trivy container
             log_stream = self.docker_client.containers.run(
-                "aquasec/trivy:latest", 
+                trivy_image, 
                 command=scan_cmd,
                 volumes={
                     '/var/run/docker.sock': {'bind': '/var/run/docker.sock', 'mode': 'ro'}, 
@@ -608,33 +619,29 @@ class BuildEngine:
         except Exception as e:
             model_hash = f"Hash calculation failed: {e}"
 
-        content = f"""# Model Card: {os.path.basename(config.model_source)}
-
-## 🏗️ Build Information
-- **Framework:** LLM Cross-Compiler Framework
-- **Build ID:** {config.build_id}
-- **Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- **Target Architecture:** {config.target_arch}
-- **Target Format:** {config.target_format.value.upper()}
-- **Quantization:** {config.quantization or 'FP16'}
-
-## 🛡️ Security & Integrity
-- **Primary Artifact Hash (SHA256):** `{model_hash}`
-- **Base Image:** {config.base_image}
-
-## 🚀 Usage
-To deploy this model on your edge device:
-
-1. Transfer the archive to the target.
-2. Run the deployment script:
-```bash
-   chmod +x deploy.sh
-   ./deploy.sh
-```
-
----
-Generated automatically by LLM-Builder.
-"""
+        # Markdown inside f-string workaround for avoiding parser issues
+        usage_code = "```bash\n   chmod +x deploy.sh\n   ./deploy.sh\n```"
+        
+        content = (
+            f"# Model Card: {os.path.basename(config.model_source)}\n\n"
+            f"## 🏗️ Build Information\n"
+            f"- **Framework:** LLM Cross-Compiler Framework\n"
+            f"- **Build ID:** {config.build_id}\n"
+            f"- **Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"- **Target Architecture:** {config.target_arch}\n"
+            f"- **Target Format:** {config.target_format.value.upper()}\n"
+            f"- **Quantization:** {config.quantization or 'FP16'}\n\n"
+            f"## 🛡️ Security & Integrity\n"
+            f"- **Primary Artifact Hash (SHA256):** `{model_hash}`\n"
+            f"- **Base Image:** {config.base_image}\n\n"
+            f"## 🚀 Usage\n"
+            f"To deploy this model on your edge device:\n\n"
+            f"1. Transfer the archive to the target.\n"
+            f"2. Run the deployment script:\n"
+            f"{usage_code}\n\n"
+            f"---\n"
+            f"Generated automatically by LLM-Builder.\n"
+        )
         
         try:
             with open(readme_path, "w", encoding="utf-8") as f:

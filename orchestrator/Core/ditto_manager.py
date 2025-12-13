@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Ditto Manager (AI Hardware Agent) v2.2
+LLM Cross-Compiler Framework - Ditto Manager (AI Hardware Agent) v2.3.0
 DIREKTIVE: Goldstandard. RAG-Enabled Expert System.
 
 This manager orchestrates the AI-based analysis of hardware probes.
 It fetches context, manages chat memory, and handles offline inference.
 
-Updates v2.2 (Enterprise):
+Updates v2.3.0:
 - Integrated SecretsManager for secure API Key retrieval (Keyring).
 - Added `analyze_error_log` for Self-Healing integration.
 - Preserved NativeInferenceEngine for offline capability.
+- Robust ConfigManager handling in constructor.
 """
 
 import json
@@ -37,7 +38,9 @@ except ImportError:
     TRANSFORMERS_AVAILABLE = False
 
 from orchestrator.utils.logging import get_logger
-from orchestrator.Core.module_generator import ModuleGenerator
+# Lazy import ModuleGenerator only when needed to avoid circular imports? 
+# Better: Import at top if structure allows, or inside method.
+# We will import inside method save_module to be safe against circular dependency with framework init.
 
 # RAG Integration
 try:
@@ -117,19 +120,29 @@ class DittoCoder:
     def __init__(self, provider: str = "OpenAI", model: str = "gpt-4o", 
                  api_key: Optional[str] = None, base_url: Optional[str] = None,
                  config_manager = None, framework_manager = None):
-        self.logger = get_logger(__name__)
+        self.logger = get_logger("DittoManager")
         self.config = config_manager
         self.framework = framework_manager
         
+        # Handle Constructor Overload (Framework passing itself as config_manager sometimes or specific kwargs)
+        # If framework_manager is None but config_manager has 'config' attr, it might be FrameworkManager
+        if framework_manager is None and hasattr(config_manager, 'config'):
+            self.framework = config_manager
+            self.config = config_manager.config
+        elif framework_manager is not None:
+             self.config = framework_manager.config
+
         # Configuration
         self.provider = provider
         self.model_name = model
         self.offline_mode = False
         
         # Settings from ConfigManager
-        if config_manager:
-            self.offline_mode = config_manager.get("offline_mode", False)
-            self.context_limit = config_manager.get("chat_context_limit", 4096)
+        if self.config:
+            # Use .get() if available (ConfigManager), else getattr
+            get_fn = getattr(self.config, 'get', lambda k, d=None: getattr(self.config, k, d))
+            self.offline_mode = get_fn("offline_mode", False)
+            self.context_limit = get_fn("chat_context_limit", 4096)
         else:
             self.context_limit = 4096
 
@@ -144,10 +157,10 @@ class DittoCoder:
         self.litellm_model = self._format_model_name(provider, model)
         self.base_url = base_url
         
-        # NEU: SecretsManager Integration
+        # SecretsManager Integration
         # Wenn kein API Key übergeben wurde (oder dummy), versuche ihn aus dem Keyring zu laden.
         final_key = api_key
-        if self.framework and self.framework.secrets_manager:
+        if self.framework and hasattr(self.framework, 'secrets_manager') and self.framework.secrets_manager:
             # Mapping Provider -> Key Name
             key_map = {
                 "OpenAI": "openai_api_key",
@@ -176,7 +189,10 @@ class DittoCoder:
 
     def _get_rag_manager(self) -> Optional[RAGManager]:
         if not self.framework: return None
-        if not self.framework.config.enable_rag_knowledge: return None
+        # Robust config check
+        get_fn = getattr(self.config, 'get', lambda k, d=None: getattr(self.config, k, d))
+        if not get_fn("enable_rag_knowledge", False): return None
+        
         return self.framework.get_component("rag_manager")
 
     # --- RAG / DOCS ---
@@ -254,7 +270,10 @@ class DittoCoder:
         # A. Offline Mode
         if self.offline_mode:
             if not self.native_engine:
-                model_base = Path(self.framework.config.models_dir) / "tiny_models"
+                # Use robust config access
+                models_dir = getattr(self.config, 'models_dir', 'models')
+                model_base = Path(self.framework.info.installation_path) / models_dir / "tiny_models" if self.framework else Path(models_dir) / "tiny_models"
+                
                 if model_base.exists() and any(model_base.iterdir()):
                     target = next(x for x in model_base.iterdir() if x.is_dir())
                     self.native_engine = NativeInferenceEngine(str(target))
@@ -380,8 +399,8 @@ class DittoCoder:
         elif "hailo" in lower_probe: sdk_hint = "hailo"
         elif "intel" in lower_probe: sdk_hint = "intel"
         elif "riscv" in lower_probe: sdk_hint = "riscv"
-        elif "memryx" in lower_probe: sdk_hint = "memryx" # NEU
-        elif "axelera" in lower_probe: sdk_hint = "axelera" # NEU
+        elif "memryx" in lower_probe: sdk_hint = "memryx" 
+        elif "axelera" in lower_probe: sdk_hint = "axelera" 
         
         # 3. Fetch Context (RAG or Web)
         doc_context = self._fetch_documentation(sdk_hint)
@@ -441,6 +460,9 @@ class DittoCoder:
 
     def save_module(self, module_name: str, config: Dict[str, Any], targets_dir: Path):
         """Wrapper um den ModuleGenerator aufzurufen."""
+        
+        # Import here to avoid circular dependency
+        from orchestrator.Core.module_generator import ModuleGenerator
         
         packages = config.get("packages", "")
         if isinstance(packages, str):

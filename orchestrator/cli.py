@@ -14,6 +14,7 @@ import logging
 import subprocess
 import asyncio
 import os
+import platform
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 from datetime import datetime
@@ -112,28 +113,23 @@ class FrameworkContext:
                 raise RuntimeError("Framework Manager initialization failed")
             
             # Orchestrator initialisieren  
-            self.orchestrator = LLMOrchestrator(framework_config)
+            self.orchestrator = self.framework_manager.orchestrator # Hole vom Kernel
             
             # Deployment Manager (NEU: v2.0 Integration)
-            # Wir holen die Instanz, die FrameworkManager bereits initialisiert hat (inkl. Secrets)
             self.deployment_manager = self.framework_manager.get_component("deployment_manager")
-            if not self.deployment_manager:
-                # Fallback, falls im FrameworkManager disabled
-                self.deployment_manager = DeploymentManager(self.framework_manager)
             
             # Synchrone Initialisierung für CLI
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            try:
-                success = loop.run_until_complete(self.orchestrator.initialize())
-                if not success:
-                    raise RuntimeError("Orchestrator initialization failed")
-            finally:
-                loop.close()
+            # Hinweis: Wenn Orchestrator bereits im FrameworkManager initiiert wurde, ist dies optional,
+            # aber für CLI-spezifische Checks behalten wir es bei.
+            if self.orchestrator and not self.orchestrator.build_engine:
+                 loop = asyncio.new_event_loop()
+                 asyncio.set_event_loop(loop)
+                 loop.run_until_complete(self.orchestrator.initialize())
+                 loop.close()
             
             # Build Engine ist über Orchestrator verfügbar
-            self.build_engine = self.orchestrator.build_engine
+            if self.orchestrator:
+                self.build_engine = self.orchestrator.build_engine
             
             self._initialized = True
             
@@ -416,29 +412,26 @@ def generate_ai(ctx: FrameworkContext, probe_file):
     # 2. Model Override
     model = Prompt.ask(f"Model Name", default=default_model)
     
-    # 3. Credentials
+    # 3. Credentials (via SecretsManager if available)
     api_key = None
     base_url = None
+    
+    # Try fetching from SecretsManager first
+    if ctx.framework_manager.secrets_manager:
+        key_map = {
+            "OpenAI": "openai_api_key",
+            "Anthropic": "anthropic_api_key",
+            "Google": "gemini_api_key"
+        }
+        if provider.split()[0] in key_map:
+            api_key = ctx.framework_manager.secrets_manager.get_secret(key_map[provider.split()[0]])
     
     if "Local" in provider or "Compatible" in provider:
         base_url = Prompt.ask("Base URL", default="http://localhost:11434")
         api_key = "sk-dummy"
-    else:
-        env_var_map = {
-            "OpenAI": "OPENAI_API_KEY",
-            "Anthropic": "ANTHROPIC_API_KEY",
-            "Google": "GEMINI_API_KEY"
-        }
-        env_var = env_var_map.get(provider.split()[0], "API_KEY") 
-        existing_key = os.environ.get(env_var)
-        
-        if existing_key:
-            use_existing = Confirm.ask(f"Found {env_var} in environment. Use it?")
-            if use_existing:
-                api_key = existing_key
-        
-        if not api_key:
-            api_key = Prompt.ask(f"Enter {env_var}", password=True)
+    
+    if not api_key:
+        api_key = Prompt.ask(f"Enter API Key", password=True)
 
     try:
         # 4. Execution
@@ -446,7 +439,9 @@ def generate_ai(ctx: FrameworkContext, probe_file):
             provider=provider,
             model=model,
             api_key=api_key,
-            base_url=base_url
+            base_url=base_url,
+            config_manager=ctx.framework_manager.config,
+            framework_manager=ctx.framework_manager
         )
         
         with console.status(f"🤖 Asking {provider} to analyze hardware...", spinner="dots"):
@@ -566,25 +561,20 @@ def start_build(ctx: FrameworkContext, model: str, target: str, format: str,
                         if workflow_status:
                             # v2.0: Enhanced Status Reporting
                             status_color = "yellow"
-                            if workflow_status.status == OrchestrationStatus.READY: status_color = "green"
+                            if workflow_status.status == OrchestrationStatus.COMPLETED: status_color = "green"
                             if workflow_status.status == OrchestrationStatus.ERROR: status_color = "red"
-                            if workflow_status.status.value == "healing": status_color = "magenta"
+                            if workflow_status.status == OrchestrationStatus.HEALING: status_color = "magenta"
                             
                             console.print(f"[{status_color}]Status: {workflow_status.status.value} - {workflow_status.current_stage}[/{status_color}]")
                             console.print(f"[cyan]Progress: {workflow_status.progress_percent}% ({workflow_status.completed_builds}/{workflow_status.total_builds} builds)[/cyan]")
                             
-                            # Show Consistency Warnings
-                            if workflow_status.warnings:
-                                for w in workflow_status.warnings[-1:]: # Show latest
-                                    console.print(f"[orange3]{w}[/orange3]")
-                            
                             # Show Healing Info
                             if workflow_status.healing_proposal:
                                 hp = workflow_status.healing_proposal
-                                console.print(f"[bold magenta]🚑 Self-Healing Active: {hp.error_summary}[/bold magenta]")
+                                console.print(f"[bold magenta]🚑 Self-Healing Active: {hp.summary}[/bold magenta]")
                                 console.print(f"Proposed Fix: [italic]{hp.fix_command}[/italic]")
                             
-                            if workflow_status.status.value in ["ready", "error"]:
+                            if workflow_status.status in [OrchestrationStatus.COMPLETED, OrchestrationStatus.ERROR, OrchestrationStatus.CANCELLED]:
                                 break
                         
                         import time
@@ -793,6 +783,87 @@ def run_deploy(ctx: FrameworkContext, package_path, ip, user, password):
     else:
         console.print("[bold red]❌ Deployment Failed.[/bold red]")
         sys.exit(1)
+
+# ============================================================================
+# SWARM COMMAND (NEU V2.0)
+# ============================================================================
+
+@cli.group()
+def swarm():
+    """Interact with Swarm Memory (Knowledge Base)"""
+    pass
+
+@swarm.command('upload')
+@click.argument('file_path', type=click.Path(exists=True))
+@click.option('--user', default="CLI_User", help="Contributor Username")
+@pass_context
+def swarm_upload(ctx: FrameworkContext, file_path, user):
+    """
+    Encrypt and upload a Knowledge Base export to the Swarm.
+    Uses 'Fake-Encryption' (XOR+Wingdings) for obfuscation.
+    """
+    cm = ctx.framework_manager.community_manager
+    if not cm:
+        console.print("[red]Community Manager not loaded.[/red]")
+        sys.exit(1)
+        
+    # Get Token from Secrets
+    sm = ctx.framework_manager.secrets_manager
+    token = sm.get_secret("github_token") if sm else None
+    
+    if not token:
+        console.print("[red]No GitHub Token found in secrets![/red]")
+        console.print("Use 'llm-cli secrets set github_token <TOKEN>' first.")
+        sys.exit(1)
+
+    with console.status(f"Encrypting & Uploading {file_path}...", spinner="dots"):
+        success = cm.upload_knowledge_to_swarm(file_path, token, user)
+        
+    if success:
+        console.print("[bold green]✅ Upload successful! You are now part of the Swarm.[/bold green]")
+    else:
+        console.print("[bold red]❌ Upload failed. Check logs.[/bold red]")
+        sys.exit(1)
+
+# ============================================================================
+# SCAN COMMAND (NEU V2.0)
+# ============================================================================
+
+@cli.command('scan')
+@click.option('--output', default="target_hardware_config.txt", help="Output filename")
+@pass_context
+def run_scan(ctx: FrameworkContext, output):
+    """Run hardware probe script."""
+    script_dir = Path(ctx.framework_manager.info.installation_path) / "scripts"
+    output_file = Path(output).resolve()
+    
+    is_windows = platform.system() == "Windows"
+    script = script_dir / ("hardware_probe.ps1" if is_windows else "hardware_probe.sh")
+    
+    if not script.exists():
+        console.print(f"[red]Probe script not found at {script}[/red]")
+        sys.exit(1)
+        
+    try:
+        cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(script)] if is_windows else ["bash", str(script)]
+        
+        with console.status("Running Hardware Probe...", spinner="dots"):
+            subprocess.run(cmd, check=True, cwd=os.getcwd())
+            
+        if output_file.exists():
+            console.print(f"[bold green]✅ Probe successful. Config generated: {output_file}[/bold green]")
+            
+            # Optional: Import into TargetManager
+            # tm = ctx.framework_manager.target_manager
+            # if tm:
+            #     tm.import_hardware_profile(output_file)
+        else:
+            console.print("[red]Probe script ran, but output file was not created.[/red]")
+            
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]Probe execution failed: {e}[/red]")
+        sys.exit(1)
+
 
 # ============================================================================
 # CONFIG COMMANDS (SOURCES MANAGEMENT)

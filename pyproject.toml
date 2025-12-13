@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "llm-conversion-framework"
-version = "2.0.0"
+version = "2.3.0"
 description = "Orchestrator GUI und CLI für LLM Cross-Compilierung"
 authors = ["Smilez1985"]
 readme = "README.md"
@@ -10,35 +10,28 @@ packages = [{include = "orchestrator"}]
 python = ">=3.10,<3.13"
 
 # --- 1. Core & Installer Dependencies ---
-# Werden von scripts/setup_windows.py und utils/helpers.py benötigt
 requests = "^2.31.0"
 psutil = "^5.9.0"
 pyyaml = "^6.0.1"
 packaging = "^23.2"
+python-dotenv = "^1.0.0"  # Hinzugefügt wie besprochen
 
 # --- 2. Docker Orchestrierung ---
-# Wird von orchestrator/Core/docker_manager.py und framework.py benötigt
-# Damit steuert der Host den Docker-Daemon
 docker = "^7.0.0"
 
 # --- 3. GUI & CLI ---
-# Wird von orchestrator/gui/*.py und orchestrator/cli.py benötigt
 pyside6 = "^6.6.0"
 click = "^8.1.7"
-rich = "^13.7.0"  # Für schöne CLI Ausgaben
+rich = "^13.7.0"
 
 # --- 4. Security & Utilities ---
-# Wird von orchestrator/utils/secrets_manager.py benötigt
 cryptography = "^41.0.0"
 
 # --- 5. AI Agent & RAG (Host-Seite) ---
-# Der "Ditto"-Agent läuft im Orchestrator (Host) und nutzt diese Libs, 
-# um die API-Calls zu machen oder lokale Vektor-DB zu steuern.
-litellm = "^1.0.0"       # Für orchestrator/Core/ditto_manager.py
-qdrant-client = "^1.7.0" # Für orchestrator/Core/rag_manager.py
+litellm = "^1.0.0"
+qdrant-client = "^1.7.0"
 
 # --- 6. Crawler & Ingestion (Host-Seite) ---
-# Wird von orchestrator/Core/crawler_manager.py benötigt (Deep Ingest)
 beautifulsoup4 = "^4.12.0"
 langchain = "^0.1.0"
 langchain-community = "^0.0.20"
@@ -47,12 +40,10 @@ tiktoken = "^0.7.0"
 langdetect = "^1.0.9"
 
 # --- 7. Windows Specifics ---
-# Werden nur installiert, wenn das OS Windows ist (für setup_windows.py Shortcuts)
 pywin32 = {version = "^306", markers = "sys_platform == 'win32'"}
 winshell = {version = "^0.6", markers = "sys_platform == 'win32'"}
 
 # --- 8. Optional Deployment (SSH) ---
-# Für orchestrator/Core/deployment_manager.py (Paramiko ist optional aber empfohlen)
 paramiko = "^3.4.0"
 
 [tool.poetry.group.dev.dependencies]
@@ -66,7 +57,6 @@ safety = "^3.0.0"
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
 
-# Entry Points für die Konsole, damit man 'llm-gui' tippen kann
 [tool.poetry.scripts]
 llm-gui = "orchestrator.main:main"
 llm-cli = "orchestrator.cli:cli"

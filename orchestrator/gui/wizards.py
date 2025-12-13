@@ -347,9 +347,46 @@ class ModuleCreationWizard(QWizard):
         self.sdk_edit.setPlaceholderText("e.g. CUDA, RKNN, OpenVINO")
         layout.addRow(tr("wiz.lbl.sdk"), self.sdk_edit)
         
+        # Auto-Detect Button (Manually added here, logic integrated)
+        self.detect_cb = QCheckBox("Auto-fill from Probe Result")
+        self.detect_cb.stateChanged.connect(self.load_probe_data)
+        layout.addRow("", self.detect_cb)
+        self.status_lbl = QLabel("")
+        layout.addRow("", self.status_lbl)
+
         page.setLayout(layout)
         page.registerField("name*", self.name_edit)
         return page
+
+    def load_probe_data(self):
+        if not self.detect_cb.isChecked(): return
+        
+        # --- FIX: Dateiname angepasst ---
+        probe_file = Path("target_hardware_config.txt") 
+        # --------------------------------
+        
+        if probe_file.exists():
+            try:
+                # Simple parsing of KEY=VALUE
+                data = {}
+                with open(probe_file, 'r') as f:
+                    for line in f:
+                        if "=" in line:
+                            k, v = line.strip().split("=", 1)
+                            data[k] = v
+                
+                # Auto-fill
+                if "CPU_MODEL" in data:
+                    self.name_edit.setText(data["CPU_MODEL"].replace(" ", "_"))
+                if "ARCH" in data:
+                    idx = self.arch_combo.findText(data["ARCH"])
+                    if idx >= 0: self.arch_combo.setCurrentIndex(idx)
+                    
+                self.status_lbl.setText("✅ Data loaded from probe.")
+            except Exception as e:
+                self.status_lbl.setText(f"❌ Error parsing probe: {e}")
+        else:
+            self.status_lbl.setText("⚠️ No probe file found. Run 'Hardware Probe' script first.")
 
     def create_docker_page(self):
         page = QWizardPage()

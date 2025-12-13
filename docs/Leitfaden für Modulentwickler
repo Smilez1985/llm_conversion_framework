@@ -1,0 +1,91 @@
+# Leitfaden für Modulentwickler (V2.3 Enterprise)
+
+## Architektur des LLM Deployment Frameworks
+
+Willkommen in der Community! Dieses Framework wurde entwickelt, um die Komplexität der Cross-Kompilierung und Quantisierung von Large Language Models (LLMs) für fragmentierte Edge-Hardware (CPUs, GPUs, NPUs) zu eliminieren.
+
+Das gesamte System basiert auf einem **Modul-Template-System**. Jede unterstützte Hardware-Familie (z.B. Radxa Rockchip, NVIDIA Jetson, Hailo-8) lebt in einem eigenen, isolierten Ordner und definiert ihre eigene Build-Umgebung.
+
+**Ziel:** Ihre Aufgabe als Drittentwickler ist es, einen neuen Ordner (`targets/[IHRE_ARCHITEKTUR]`) zu erstellen, der die vier kritischen Template-Dateien enthält.
+
+---
+
+## I. Die Vier Module: Der Goldstandard-Satz
+
+Jeder Architektur-Ordner muss diese vier Dateien enthalten. Die Logik des Systems wird von diesen Shell-Skripten im Docker-Container gesteuert.
+
+| Datei-Name | Zweck | Zuständigkeit | Anzupassen? |
+| :--- | :--- | :--- | :--- |
+| `Dockerfile` | Definiert die Build-Umgebung (Basis-OS, Cross-Compiler, SDKs). | Baut das Docker-Image für die Architekturgruppe (z.B. alle AArch64-CPUs). | **Ja** (Nur bei neuen Compilern/SDKs). |
+| `source_module.sh` | Download & FP16 GGUF Konvertierung. | Lädt das Modell und konvertiert es in das Basisformat (FP16 GGUF). | **Nein** (Bleibt generell statisch). |
+| `config_module.sh` | HARDWARE-AGENT (Das Herzstück). | Liest die `target_hardware_config.txt` und generiert die spezifischen Optimierungs-Flags (z.B. `mcpu=`, CUDA-Pfade, HailoRT-Config). | **Ja** (Kernanpassung). |
+| `target_module.sh` | Quantisierung & Kompilierung. | Orchestriert den gesamten Prozess, ruft Quantize auf und führt die Cross-Kompilierung mit den von `config_module.sh` gesetzten Flags durch. | **Nein** (Bleibt generell statisch). |
+
+---
+
+## II. Schritt-für-Schritt: Neues Modul hinzufügen
+
+Als Entwickler konzentrieren Sie sich hauptsächlich auf `config_module.sh` und das `Dockerfile`.
+
+### Schritt 1: Das Dockerfile erstellen (Dockerfile)
+Erstellen Sie ein Dockerfile, das alle notwendigen Compiler, Toolchains und proprietären SDKs für Ihre Hardware-Familie bereitstellt.
+
+**Beispiele für kritische Schritte:**
+1. **Radxa Rockchip/AArch64:** Installation von `crossbuild-essential-arm64`.
+2. **NVIDIA Jetson:** Installation des CUDA Toolkits und der entsprechenden Header-Dateien (oft in einem Multi-Stage Build).
+3. **Hailo-8:** Installation des HailoRT SDK und der spezifischen Python-Wheels.
+
+### Schritt 2: Den Konfigurations-Agenten schreiben (config_module.sh)
+Dieses Skript ist der wichtigste Teil. Es muss die hardware-spezifischen Optimierungen in eine von `target_module.sh` lesbare Form bringen.
+
+1. **Lese Input:** Lesen Sie die Datei `target_hardware_config.txt` aus dem Verzeichnis `/build-cache`. Diese Datei enthält Key-Value Paare wie `CPU_CORES=8`, `NPU_VENDOR=Rockchip`.
+2. **Setze Flags:**
+    * **Für CPUs:** Generieren Sie ein `[IHRE_ARCH].cmake` Toolchain-File. Darin setzen Sie `CMAKE_C_FLAGS` und `CMAKE_CXX_FLAGS` mit den `-mcpu=` und `-mfpu=` Optimierungen.
+    * **Für GPUs/NPUs:** Setzen Sie CMake-Variablen wie `-DGGML_CUDA=ON` oder `-DGGML_RKLLM=ON`.
+
+### Schritt 2.A: Data Acquisition (Die Hardware-Probe)
+
+Das Framework nutzt in V2.3 standardisierte **Hardware Probes**, um das Zielsystem zu analysieren.
+
+* **Standard:** Nutzen Sie das mitgelieferte Skript `scripts/hardware_probe.sh` (Linux) oder `hardware_probe.ps1` (Windows) auf dem Zielgerät.
+* **Output:** Diese Skripte generieren die `target_hardware_config.txt`.
+* **Integration:** Ihr `config_module.sh` muss robust genug sein, um diese Datei zu parsen. Verlassen Sie sich nicht auf feste Pfade, sondern auf die generierten Keys.
+
+### Schritt 3: Den target_module.sh anpassen (Falls nötig)
+Das Standard-`target_module.sh` funktioniert für die meisten CPU-Kompilierungen. Anpassung ist nur erforderlich bei speziellen Backends (z.B. proprietäre NPU-Converter wie `rknn-toolkit`).
+
+### Schritt 4: Testen und Dokumentieren
+Nutzen Sie den neuen **Builder Tab** in der GUI, um Ihr Modul lokal zu testen. Wählen Sie "Auto-Detect (Probe)", um sicherzustellen, dass Ihre Hardware korrekt erkannt und Ihrem neuen Modul zugeordnet wird.
+
+---
+
+## III. KI-gestützte Entwicklung (Ditto Prompt)
+
+Nutzen Sie "Ditto" (den integrierten AI Agenten), um die Skripte zu generieren.
+
+**Muster-Prompt für Ditto:**
+
+> Ich entwickle ein Modul für das LLM Conversion Framework.
+> 
+> **Hardware:** [HARDWARE NAME] (z.B. Orange Pi 5)
+> **Architektur:** [ARCHITEKTUR] (z.B. aarch64)
+> **SDK:** [SDK-NAME] (z.B. RKNN Toolkit 2)
+> 
+> **Aufgaben:**
+> 1. Erstelle ein **Dockerfile**, das die Cross-Toolchain und das SDK installiert.
+> 2. Erstelle das **config_module.sh**, das die Datei `/build-cache/target_hardware_config.txt` parst und ein CMake-Toolchain-File generiert.
+> 3. Wichtige Flags sind: `[LISTE FLAGS, z.B. -mcpu=cortex-a76]`.
+
+---
+
+## IV. Der Modul-Erstellungs-Wizard (GUI)
+
+Das Framework verfügt nun über einen voll integrierten **Module Creation Wizard** (`orchestrator/gui/wizards.py`).
+
+**Workflow für Entwickler:**
+1. **Start:** Öffnen Sie die GUI und wählen Sie im Menü "Tools" -> "Create New Target Module".
+2. **Daten:** Geben Sie Namen und Architektur ein.
+3. **AI-Mode:** Klicken Sie auf "Import from AI". Laden Sie Ihre `target_hardware_config.txt` hoch. Ditto analysiert die Hardware-Features und generiert automatisch das Dockerfile und die Shell-Skripte.
+4. **Review:** Der Wizard zeigt Ihnen den generierten Code. Bestätigen Sie, um die Ordnerstruktur automatisch in `targets/` anzulegen.
+
+Dies ist der schnellste Weg, um neue Hardware-Support hinzuzufügen.

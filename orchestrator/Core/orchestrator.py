@@ -21,7 +21,8 @@ from datetime import datetime
 from enum import Enum
 
 from orchestrator.utils.logging import get_logger
-from orchestrator.Core.builder import BuildEngine, BuildJob, BuildStatus, OptimizationLevel, ModelFormat
+# FIX: BuildJob entfernt (da lokal definiert), BuildConfiguration hinzugefügt
+from orchestrator.Core.builder import BuildEngine, BuildStatus, OptimizationLevel, ModelFormat, BuildConfiguration
 from orchestrator.Core.module_generator import ModuleGenerator
 
 # NEU: Self-Healing Integration (Optional Import)
@@ -99,6 +100,19 @@ class WorkflowState:
         if self.total_builds == 0: return 0
         return int((self.completed_builds / self.total_builds) * 100)
 
+# FIX: BuildJob lokal definiert, da er im Builder nicht existiert
+@dataclass
+class BuildJob:
+    job_id: str
+    source_model: str
+    target_architecture: str
+    target_format: ModelFormat
+    optimization: OptimizationLevel
+    quantization: str
+    output_path: str
+    status: BuildStatus
+    error_log: str = ""
+
 # ============================================================================
 # ORCHESTRATOR KLASSE
 # ============================================================================
@@ -125,9 +139,11 @@ class LLMOrchestrator:
         """Asynchrone Initialisierung"""
         self.logger.info("Initializing Orchestrator...")
         # Check Docker connectivity via BuildEngine
-        if not self.build_engine.check_docker():
-            self.logger.error("Docker not ready. Orchestrator functionality limited.")
-            return False
+        # NOTE: Updated check logic as check_docker might be internal
+        if hasattr(self.build_engine, 'check_docker'):
+             if not self.build_engine.check_docker():
+                self.logger.error("Docker not ready. Orchestrator functionality limited.")
+                return False
         return True
 
     # --- PUBLIC API ---
@@ -207,6 +223,28 @@ class LLMOrchestrator:
             # Nächsten Job holen (Rekursion / Loop)
             self._ensure_worker_running()
 
+    # FIX: Mapper Methode hinzugefügt
+    def _map_job_to_config(self, job: BuildJob, req: BuildRequest) -> BuildConfiguration:
+        """Konvertiert internen Job zu Builder Config"""
+        base_img = "debian:bookworm-slim"
+        # Optional: Config override prüfen
+        if hasattr(self.config, 'image_base_debian'):
+            base_img = self.config.image_base_debian
+
+        return BuildConfiguration(
+            build_id=job.job_id,
+            timestamp=datetime.now().strftime("%Y%m%d_%H%M%S"),
+            model_source=job.source_model,
+            target_arch=job.target_architecture,
+            target_format=job.target_format,
+            output_dir=job.output_path,
+            optimization_level=job.optimization,
+            quantization=job.quantization,
+            use_gpu=req.use_gpu,
+            base_image=base_img,
+            source_format=ModelFormat.HUGGINGFACE
+        )
+
     async def _run_build_pipeline(self, req: BuildRequest):
         """Die eigentliche Pipeline-Logik"""
         state = self._workflows[req.request_id]
@@ -257,12 +295,45 @@ class LLMOrchestrator:
         self.logger.info(f"Generated {len(build_jobs)} build jobs.")
         
         # 2. Execution Loop
+        loop = asyncio.get_running_loop() # FIX: Für run_in_executor
         
         for job in build_jobs:
             state.current_stage = f"Building {job.source_model} for {job.target_architecture}"
             
-            # --- START BUILD ---
-            success = await self.build_engine.run_job(job)
+            # --- START BUILD (FIXED & PATCHED) ---
+            try:
+                # 1. Map Job to Config
+                build_config = self._map_job_to_config(job, req)
+                
+                # 2. Execute Async (Non-Blocking)
+                # Wir rufen build_model im ThreadPool auf, damit der Async Loop nicht blockiert
+                returned_id = await loop.run_in_executor(
+                    None, 
+                    self.build_engine.build_model, 
+                    build_config
+                )
+                
+                # 3. Poll for Completion (Da build_model async zurückkehrt aber im Hintergrund läuft)
+                success = False
+                while True:
+                    status = self.build_engine.get_build_status(returned_id)
+                    if not status: 
+                        job.error_log = "Build vanished"
+                        break
+                    
+                    if status.status == BuildStatus.COMPLETED:
+                        success = True
+                        break
+                    if status.status in [BuildStatus.FAILED, BuildStatus.CANCELLED]:
+                        job.error_log = "\n".join(status.errors)
+                        break
+                        
+                    await asyncio.sleep(1) # Nicht blockierendes Warten
+                    
+            except Exception as e:
+                self.logger.error(f"Execution Error: {e}")
+                job.error_log = str(e)
+                success = False
             
             # --- SELF-HEALING LOOP (NEU v2.0) ---
             if not success and self.self_healing:

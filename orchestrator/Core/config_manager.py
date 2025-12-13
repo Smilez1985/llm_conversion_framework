@@ -8,6 +8,8 @@ und persistiert Benutzereinstellungen.
 
 Updates v2.0.0:
 - Added Settings for Chat Context, Telemetry, and Offline Mode.
+Updates v2.3.0:
+- Added Centralized Docker Image Definitions.
 """
 
 import os
@@ -243,6 +245,13 @@ class ConfigManager:
             ConfigSchema("docker_registry", str, False, "ghcr.io", "Docker registry URL"),
             ConfigSchema("docker_namespace", str, False, "llm-framework", "Docker namespace"),
             
+            # --- NEW V2.3: Centralized Image Definitions (Fixed Hardcoding) ---
+            ConfigSchema("image_trivy", str, False, "aquasec/trivy:latest", "Security Scanner Image"),
+            ConfigSchema("image_qdrant", str, False, "qdrant/qdrant:v1.16.0", "Vector DB Image"),
+            ConfigSchema("image_base_debian", str, False, "debian:bookworm-slim", "Base Build Image"),
+            ConfigSchema("image_inference_runtime", str, False, "ghcr.io/smilez1985/llm-runtime:latest", "Inference Image"),
+            # ------------------------------------------------------------------
+
             # GUI & API
             ConfigSchema("gui_theme", str, False, "dark", "GUI theme"),
             ConfigSchema("gui_auto_refresh", bool, False, True, "GUI auto-refresh"),
@@ -394,6 +403,14 @@ class ConfigManager:
             val = self.config_values.get(key)
             return val.value if val else default
 
+    # PROXY METHOD FOR ATTRIBUTE ACCESS (orchestrator.py expects config.log_level)
+    def __getattr__(self, name):
+        with self._lock:
+            val = self.config_values.get(name)
+            if val:
+                return val.value
+        raise AttributeError(f"Configuration has no attribute '{name}'")
+
     def set(self, key: str, value: Any, source_type: str = "override") -> bool:
         schema = self.config_schemas.get(key)
         if schema and schema.enterprise_only and not self.advanced_mode.enabled:
@@ -437,12 +454,14 @@ class ConfigManager:
                 "crawler_respect_robots", "crawler_max_depth", "crawler_max_pages",
                 "input_history",
                 # v2.0
-                "chat_context_limit", "enable_telemetry", "offline_mode", "preferred_tiny_model"
+                "chat_context_limit", "enable_telemetry", "offline_mode", "preferred_tiny_model",
+                # v2.3
+                "image_trivy", "image_qdrant", "image_base_debian", "image_inference_runtime"
             ]
             
             for key, val in self.config_values.items():
                 if key in persist_keys:
-                     data[key] = val.value
+                      data[key] = val.value
         
         try:
             with open(config_file, 'w') as f:
@@ -484,4 +503,4 @@ class ConfigManager:
         return result
 
 if __name__ == "__main__":
-    print("ConfigManager module loaded")
+    print("ConfigManager module loaded.")

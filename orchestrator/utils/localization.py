@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Localization Manager
+LLM Cross-Compiler Framework - Localization Manager (v2.3.0)
 DIREKTIVE: Goldstandard, Internationalisierung (I18n).
 
 Zweck:
 Zentrale Verwaltung aller UI-Texte. Ermöglicht Umschaltung zur Laufzeit.
 Hält Dictionaries für Deutsch und Englisch vor.
+
+Updates v2.3.0:
+- Updated version header.
+- Robust lazy-loading singleton.
+- Enhanced fallback mechanism.
 """
 
 from PySide6.QtCore import QObject, Signal
@@ -113,6 +118,9 @@ class LocalizationManager(QObject):
             "dlg.token.btn_auth": "Authorize & Download",
             "dlg.token.err_empty": "Token cannot be empty!",
             
+            # Secrets Dialog (NEW)
+            "secrets.dialog_info": "This value will be encrypted and stored in your OS Keyring.",
+            
             # Messages
             "msg.success": "Success",
             "msg.failed": "Failed",
@@ -216,6 +224,9 @@ class LocalizationManager(QObject):
             "dlg.token.btn_auth": "Autorisieren & Laden",
             "dlg.token.err_empty": "Token darf nicht leer sein!",
             
+            # Secrets Dialog (NEW)
+            "secrets.dialog_info": "Dieser Wert wird verschlüsselt im OS Keyring gespeichert.",
+            
             # Messages
             "msg.success": "Erfolg",
             "msg.failed": "Fehlgeschlagen",
@@ -238,12 +249,21 @@ class LocalizationManager(QObject):
             self.current_lang = lang_code
             self.language_changed.emit(lang_code)
 
-    def get_text(self, key: str) -> str:
+    def t(self, key: str, default: str = None) -> str:
+        """Alias für get_text (kürzer in GUI Code)."""
+        return self.get_text(key, default)
+
+    def get_text(self, key: str, default: str = None) -> str:
         """Gibt den übersetzten Text für einen Key zurück."""
         # Fallback auf Englisch, falls Key im Deutschen fehlt
         text = self.TRANSLATIONS.get(self.current_lang, {}).get(key)
         if text is None:
-            text = self.TRANSLATIONS.get("en", {}).get(key, f"[{key}]")
+            text = self.TRANSLATIONS.get("en", {}).get(key)
+        
+        # Absolute Fallback: Default-Argument oder Key-Name
+        if text is None:
+            return default if default else f"[{key}]"
+            
         return text
 
 # Globale Instanz (wird in main.py initialisiert)
@@ -256,7 +276,7 @@ def get_instance(initial_lang="en") -> LocalizationManager:
     return _instance
 
 # Helper für einfachen Zugriff (wie Qt's tr())
-def tr(key: str) -> str:
+def tr(key: str, default: str = None) -> str:
     if _instance:
-        return _instance.get_text(key)
-    return key
+        return _instance.get_text(key, default)
+    return default if default else key

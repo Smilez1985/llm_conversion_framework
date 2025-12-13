@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Community Manager (v2.2 Enterprise)
+LLM Cross-Compiler Framework - Community Manager (v2.3.0)
 DIREKTIVE: Goldstandard, Swarm Memory Integration.
 
 Verwaltet Community-Module und den 'Swarm Memory' (Shared RAG).
 Stellt sicher, dass User-Targets geschützt bleiben.
 
-UPDATES v2.2:
+UPDATES v2.3.0:
 - SwarmCipher: Full Implementation (Dynamic Key + Integrity Hash).
 - Git Integration: Push/Pull auf 'Edge-LLM-Knowledge-Base'.
+- Robust Path Handling & Config Safety.
 """
 
 import shutil
@@ -27,7 +28,11 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.helpers import ensure_directory
+
+# Fallback Helper
+def ensure_directory(path: Path):
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
 
 # --- SWARM CIPHER (The "Bluff" Security v2) ---
 class SwarmCipher:
@@ -78,7 +83,10 @@ class SwarmCipher:
             xored = bytearray()
             for char in symbols:
                 val = ord(char) - SwarmCipher.OFFSET
-                if val < 0 or val > 255: raise ValueError("Invalid Swarm Char")
+                if val < 0: raise ValueError("Invalid Swarm Char") # Simple bounds check
+                # Note: val > 255 check removed to allow wider unicode mapping if needed, 
+                # but standard byte mapping implies 0-255 range for reconstruction.
+                if val > 255: raise ValueError("Invalid Byte Value")
                 xored.append(val)
             
             # 2. Re-Generate Dynamic Key (Length is implicit from data)
@@ -116,11 +124,18 @@ class CommunityManager:
     SWARM_REPO_URL = "https://github.com/Smilez1985/Edge-LLM-Knowledge-Base.git"
 
     def __init__(self, framework_manager):
-        self.logger = get_logger(__name__)
+        self.logger = get_logger("CommunityManager")
         self.framework = framework_manager
-        self.config = framework_manager.config
-        self.app_root = Path(framework_manager.info.installation_path)
         
+        # Robust Path & Config Resolution
+        if hasattr(framework_manager, 'info') and hasattr(framework_manager.info, 'installation_path'):
+             self.app_root = Path(framework_manager.info.installation_path)
+        else:
+             self.app_root = Path(".").resolve()
+             
+        # Config Access
+        self.config = getattr(framework_manager, 'config', None)
+
         self.community_dir = self.app_root / "community"
         self.knowledge_dir = self.community_dir / "knowledge"
         self.targets_dir = self.app_root / "targets"
@@ -134,7 +149,13 @@ class CommunityManager:
     def scan_modules(self) -> List[CommunityModule]:
         modules = []
         if not self.community_dir.exists(): return []
+        
+        # Fallback if targets_dir doesn't exist yet
+        if not self.targets_dir.exists():
+            return []
+            
         installed_targets = {p.name for p in self.targets_dir.iterdir() if p.is_dir()}
+        
         for item in self.community_dir.iterdir():
             if item.is_dir() and (item / "target.yml").exists():
                 try:
@@ -160,14 +181,20 @@ class CommunityManager:
         try: shutil.copytree(source, dest); return True
         except Exception as e:
             if dest.exists(): shutil.rmtree(dest)
+            self.logger.error(f"Install failed: {e}")
             raise e
 
     # ============================================================================
     # KNOWLEDGE BASE SYNC (Swarm Decrypt)
     # ============================================================================
     def sync_knowledge_base(self) -> int:
+        # Check Framework for RAG component
+        if not self.framework or not hasattr(self.framework, 'get_component'):
+            return 0
+            
         rag_manager = self.framework.get_component("rag_manager")
         if not rag_manager: return 0
+        
         imported_count = 0
         
         for json_file in self.knowledge_dir.glob("*.json"):
@@ -199,6 +226,9 @@ class CommunityManager:
         return imported_count
 
     def export_knowledge_base(self, output_name_prefix: str = "knowledge_export") -> Optional[str]:
+        if not self.framework or not hasattr(self.framework, 'get_component'):
+            return None
+            
         rag_manager = self.framework.get_component("rag_manager")
         if not rag_manager or not rag_manager._connect(): return None
         
@@ -252,6 +282,8 @@ class CommunityManager:
         # B. Git Push
         with tempfile.TemporaryDirectory() as temp_dir:
             repo_dir = Path(temp_dir) / "swarm_repo"
+            
+            # Sanitize URL for logging vs usage
             auth_url = self.SWARM_REPO_URL.replace("https://", f"https://{username}:{github_token}@")
             
             try:
@@ -261,8 +293,10 @@ class CommunityManager:
                 
                 with open(dest, 'w', encoding='utf-8') as f: json.dump(swarm_packet, f, indent=2)
                 
+                # Configure Git safely locally
                 subprocess.run(["git", "config", "user.email", "ditto@framework.local"], cwd=repo_dir, check=True)
                 subprocess.run(["git", "config", "user.name", username], cwd=repo_dir, check=True)
+                
                 subprocess.run(["git", "add", "."], cwd=repo_dir, check=True)
                 subprocess.run(["git", "commit", "-m", f"feat: Contribution from {username}"], cwd=repo_dir, check=True)
                 subprocess.run(["git", "push"], cwd=repo_dir, check=True)

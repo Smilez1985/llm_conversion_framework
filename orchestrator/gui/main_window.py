@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Main Window (v2.2 Enterprise)
+LLM Cross-Compiler Framework - Main Window (v2.3 Enterprise)
 DIREKTIVE: Goldstandard GUI.
 
 Features:
 - Integration of SecretsManager UI.
 - Status display for Self-Healing/Guardian.
-- Connects ChatWindow, DeploymentWindow and Healing Logic.
+- Connects ChatWindow, BuilderTab, DeploymentWindow and Healing Logic.
 """
 
 import sys
@@ -24,7 +24,9 @@ from orchestrator.utils.localization import get_instance as get_i18n
 
 from orchestrator.gui.dialogs import SecretInputDialog, HealingConfirmDialog
 from orchestrator.gui.chat_window import ChatWindow
-from orchestrator.gui.deployment_window import DeploymentWindow # NEU
+from orchestrator.gui.deployment_window import DeploymentWindow
+# NEU: Builder Tab Import
+from orchestrator.gui.builder_tab import BuilderTab
 
 class MainOrchestrator(QMainWindow):
     def __init__(self, app_root: Path):
@@ -81,16 +83,19 @@ class MainOrchestrator(QMainWindow):
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
         
-        # Chat Window Integration
+        # 1. Builder Tab (NEU: Ersetzt Platzhalter)
+        self.builder_tab = BuilderTab(self.framework)
+        self.tabs.addTab(self.builder_tab, "🏗️ Builder")
+        
+        # 2. Chat Window
         self.chat_window = ChatWindow(self.framework)
         self.tabs.addTab(self.chat_window, "💬 AI Chat")
         
-        # Deployment Window Integration (NEU)
+        # 3. Deployment Window
         self.deployment_window = DeploymentWindow(self.framework)
         self.tabs.addTab(self.deployment_window, "🚀 Deployment")
         
-        # Placeholders for future modules
-        self.tabs.addTab(QLabel("Build Manager Placeholder"), "🏗️ Builds")
+        # 4. Model Placeholder (Falls noch nicht implementiert)
         self.tabs.addTab(QLabel("Model Manager Placeholder"), "🧠 Models")
 
     def _setup_statusbar(self):

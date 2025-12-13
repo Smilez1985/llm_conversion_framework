@@ -9,6 +9,8 @@ It handles thread management, signal emission, and configuration mapping.
 Updates v2.0.0:
 - Integrated Self-Healing Hook: Triggers diagnosis on build failure.
 - Emits 'healing_requested' signal with AI-generated fix proposals.
+Updates v2.3.0:
+- Use centralized ConfigManager for Docker images (No Hardcoding).
 """
 
 import os
@@ -51,13 +53,14 @@ class DockerManager(QObject):
     # NEW v2.0: Signal when AI finds a fix for an error
     healing_requested = Signal(object) # Payload: HealingProposal
     
-    def __init__(self):
+    def __init__(self, config_manager=None): # Update: Accept config in init
         super().__init__()
         self.logger = logging.getLogger(__name__)
         self.framework = None
         self.builder = None
         self.healing_manager = None # v2.0
         self._monitor_active = False
+        self.config_manager = config_manager # Store ref
 
     def initialize(self, framework_manager):
         """
@@ -92,7 +95,11 @@ class DockerManager(QObject):
         self.sidecar_status.emit("Qdrant", "Starting...")
         client = self.builder.docker_client
         container_name = "llm-qdrant"
-        image_tag = "qdrant/qdrant:v1.16.0"
+        
+        # FIX V2.3: Load Image from Config
+        image_tag = "qdrant/qdrant:v1.16.0" # Fallback
+        if hasattr(self.framework.config, 'image_qdrant'):
+            image_tag = self.framework.config.image_qdrant
 
         try:
             container = client.containers.get(container_name)
@@ -140,6 +147,11 @@ class DockerManager(QObject):
             raw_fmt = gui_config.get("format", "GGUF")
             try: target_format = ModelFormat[raw_fmt.upper()]
             except: target_format = ModelFormat.GGUF
+            
+            # FIX V2.3: Load Base Image from Config
+            base_img = "debian:bookworm-slim"
+            if hasattr(self.framework.config, 'image_base_debian'):
+                base_img = self.framework.config.image_base_debian
 
             config = BuildConfiguration(
                 build_id=build_id,
@@ -153,7 +165,7 @@ class DockerManager(QObject):
                 model_task=gui_config.get("task", "LLM"),
                 use_gpu=gui_config.get("use_gpu", False),
                 dataset_path=dataset_path,
-                base_image="debian:bookworm-slim",
+                base_image=base_img, # Use Config
                 build_timeout=self.framework.config.build_timeout,
                 parallel_jobs=self.framework.config.max_concurrent_builds
             )

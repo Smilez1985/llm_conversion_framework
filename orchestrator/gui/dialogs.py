@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - GUI Dialogs (v2.1 Enterprise)
+LLM Cross-Compiler Framework - GUI Dialogs (v2.3.0 Enterprise)
 DIREKTIVE: Goldstandard UI Components.
 
 Updates:
-- SecretInputDialog supports Keyring.
+- SecretInputDialog supports Keyring integration.
 - HealingDialog allows editing of AI proposals.
+- LanguageSelectionDialog for first-run setup.
 """
 
 from PySide6.QtWidgets import (
@@ -19,6 +20,7 @@ from orchestrator.utils.localization import get_instance as get_i18n
 class LanguageSelectionDialog(QDialog):
     """
     Initial Dialog to select the interface language.
+    Does not rely on I18n system as it sets it up.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -55,14 +57,19 @@ class SecretInputDialog(QDialog):
         super().__init__(parent)
         self.framework = framework
         self.secret_key = secret_key
-        self.i18n = get_i18n()
+        # Safe I18n access
+        self.i18n = get_i18n() if get_i18n else None
         
         self.setWindowTitle(f"Security: {display_name}")
         self.setMinimumWidth(400)
         
         layout = QVBoxLayout(self)
         
-        info_lbl = QLabel(self.i18n.t("secrets.dialog_info", "This value will be encrypted and stored in your OS Keyring."))
+        info_text = "This value will be encrypted and stored in your OS Keyring."
+        if self.i18n:
+             info_text = self.i18n.t("secrets.dialog_info", info_text)
+             
+        info_lbl = QLabel(info_text)
         info_lbl.setWordWrap(True)
         layout.addWidget(info_lbl)
         
@@ -71,8 +78,10 @@ class SecretInputDialog(QDialog):
         self.input_field.setEchoMode(QLineEdit.Password)
         self.input_field.setPlaceholderText("sk-...")
         
-        if self.framework.secrets_manager:
-            exists = self.framework.secrets_manager.get_secret(secret_key)
+        # Check if secret exists (via framework -> secrets_manager)
+        sm = getattr(self.framework, 'secrets_manager', None)
+        if sm:
+            exists = sm.get_secret(secret_key)
             if exists:
                 self.input_field.setPlaceholderText("******** (Stored)")
         
@@ -90,8 +99,9 @@ class SecretInputDialog(QDialog):
             QMessageBox.warning(self, "Error", "Secret cannot be empty.")
             return
             
-        if self.framework.secrets_manager:
-            success = self.framework.secrets_manager.set_secret(self.secret_key, val)
+        sm = getattr(self.framework, 'secrets_manager', None)
+        if sm:
+            success = sm.set_secret(self.secret_key, val)
             if success:
                 QMessageBox.information(self, "Success", "Secret stored securely in Keyring.")
                 self.accept()
@@ -124,7 +134,7 @@ class HealingConfirmDialog(QDialog):
         layout.addWidget(QLabel("<b>Proposed Fix (You can edit this):</b>"))
         self.txt_command = QTextEdit()
         self.txt_command.setPlainText(proposal.fix_command)
-        self.txt_command.setReadOnly(False) # FIX: User can edit!
+        self.txt_command.setReadOnly(False) 
         self.txt_command.setStyleSheet("background-color: #222; color: #0f0; font-family: Consolas;")
         layout.addWidget(self.txt_command)
         

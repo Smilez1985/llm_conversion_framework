@@ -1,18 +1,15 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Build Engine
+LLM Cross-Compiler Framework - Build Engine (v2.3.0)
 DIREKTIVE: Goldstandard, vollständig, professionell geschrieben.
 
 Core logic for orchestrating Docker builds, container execution, and artifact management.
 Handles security scans, GPU passthrough, and dynamic volume mounting.
 
-Updates v1.7.0:
-- "Golden Artifact" creation (Auto-Zip).
-- Auto-Documentation: Generates Model_Card.md with hard facts.
-- Intel GPU (XPU/Arc) Passthrough support via /dev/dri.
-- FIX: Deterministic artifact detection instead of heuristics.
 Updates v2.3.0:
 - Integration with ConfigManager for centralized Docker images.
+- Robust initialization (Standalone Config vs Framework).
+- Enhanced Docker Buildx detection.
 """
 
 import os
@@ -40,8 +37,13 @@ from docker.models.images import Image
 from docker.types import DeviceRequest 
 
 from orchestrator.utils.logging import get_logger
-from orchestrator.utils.validation import ValidationError, validate_path, validate_config
-from orchestrator.utils.helpers import ensure_directory
+
+# Fallback Helper if utils module not fully ready during bootstrap
+def ensure_directory(path: Path):
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+
+class ValidationError(Exception): pass
 
 # ============================================================================
 # ENUMS AND CONSTANTS
@@ -66,12 +68,12 @@ class ModelFormat(Enum):
     TENSORFLOW_LITE = "tflite"
     PYTORCH_MOBILE = "pytorch_mobile"
     # Hardware-Specific Formats
-    RKNN = "rknn"          # Rockchip NPU
-    TENSORRT = "tensorrt"  # NVIDIA GPU
-    OPENVINO = "openvino"  # Intel NPU/CPU
-    COREML = "coreml"      # Apple Silicon
-    NCNN = "ncnn"          # Mobile High-Performance
-    MNN = "mnn"            # Alibaba Mobile
+    RKNN = "rknn"           # Rockchip NPU
+    TENSORRT = "tensorrt"   # NVIDIA GPU
+    OPENVINO = "openvino"   # Intel NPU/CPU
+    COREML = "coreml"       # Apple Silicon
+    NCNN = "ncnn"           # Mobile High-Performance
+    MNN = "mnn"             # Alibaba Mobile
 
 class OptimizationLevel(Enum):
     FAST = "fast"
@@ -90,7 +92,7 @@ class BuildConfiguration:
     build_id: str
     timestamp: str
     model_source: str
-    target_arch: str  # String-based (folder name) for modularity
+    target_arch: str 
     target_format: ModelFormat
     output_dir: str
     
@@ -159,39 +161,56 @@ class BuildEngine:
     5. Artifact Extraction
     """
     
-    def __init__(self, framework_manager, max_concurrent_builds: int = 2, default_timeout: int = 3600):
-        self.framework_manager = framework_manager
-        self.logger = get_logger(__name__)
+    def __init__(self, config_or_framework, max_concurrent_builds: int = 2, default_timeout: int = 3600):
+        self.logger = get_logger("BuildEngine")
         self.max_concurrent_builds = max_concurrent_builds
         self.default_timeout = default_timeout
         
-        # Docker Client Setup
-        self.docker_client = framework_manager.get_component("docker_client")
+        # --- Robust Initialization (v2.3.0) ---
+        self.framework = None
+        self.config = None
+        
+        # Check if we got the full FrameworkManager or just ConfigManager
+        if hasattr(config_or_framework, 'info') and hasattr(config_or_framework, 'config'):
+            # FrameworkManager
+            self.framework = config_or_framework
+            self.config = config_or_framework.config
+            self.base_dir = Path(config_or_framework.info.installation_path)
+            # Try to reuse existing client
+            self.docker_client = config_or_framework.get_component("docker_client")
+        else:
+            # ConfigManager (Standalone)
+            self.config = config_or_framework
+            self.base_dir = Path(".").resolve()
+            self.docker_client = None
+
+        # Docker Client Fallback
         if not self.docker_client:
-            # Try to re-init if missing
             try:
                 self.docker_client = docker.from_env()
             except Exception as e:
-                # If docker is strictly required we might raise here, 
-                # but for now we log error to allow other components to load.
                 self.logger.error(f"Docker client not available: {e}")
-                # raise RuntimeError(f"Docker client not available: {e}")
-                
+                # We don't raise here to allow the engine to exist, but builds will fail later
+        
         self._lock = threading.Lock()
         self._builds: Dict[str, BuildProgress] = {}
         self._active_containers: Dict[str, Container] = {}
         self._executor = ThreadPoolExecutor(max_workers=max_concurrent_builds)
         
+        # Safe Attribute Access for Config
+        def get_cfg(key, default):
+            return getattr(self.config, key, default) if not hasattr(self.config, 'get') else self.config.get(key, default)
+
         # Paths
-        self.base_dir = Path(framework_manager.info.installation_path)
-        self.targets_dir = self.base_dir / framework_manager.config.targets_dir
-        self.models_dir = self.base_dir / framework_manager.config.models_dir
-        self.output_dir = self.base_dir / framework_manager.config.output_dir
-        self.cache_dir = self.base_dir / framework_manager.config.cache_dir
+        self.targets_dir = self.base_dir / get_cfg("targets_dir", "targets")
+        self.models_dir = self.base_dir / get_cfg("models_dir", "models")
+        self.output_dir = self.base_dir / get_cfg("output_dir", "output")
+        self.cache_dir = self.base_dir / get_cfg("cache_dir", "cache")
         
         self._ensure_directories()
         if self.docker_client:
             self._validate_docker_environment()
+        
         self.logger.info(f"Build Engine initialized (max_workers: {max_concurrent_builds})")
     
     def _ensure_directories(self):
@@ -208,7 +227,8 @@ class BuildEngine:
             except Exception:
                 self.logger.warning("Docker BuildX not available, standard build will be used.")
         except Exception as e:
-            raise RuntimeError(f"Docker environment failed: {e}")
+            # Only warn here, don't crash app on boot if docker is down
+            self.logger.warning(f"Docker environment check failed: {e}")
 
     def list_available_targets(self) -> List[Dict[str, Any]]:
         """Scans targets directory for valid target.yml files."""
@@ -381,16 +401,13 @@ class BuildEngine:
         df_path = build_temp / "Dockerfile"
         
         # Determine which Dockerfile to use
-        # Priority: Dockerfile.gpu (if gpu requested), else Dockerfile
         src_df_name = "Dockerfile.gpu" if config.use_gpu else "Dockerfile"
         src_df = target_path / src_df_name
         
         if not src_df.exists():
-            # Fallback to standard Dockerfile if gpu specific missing
             src_df = target_path / "Dockerfile"
             
         if not src_df.exists():
-            # Legacy fallback
             src_df = target_path / "dockerfile"
             
         if not src_df.exists(): 
@@ -406,7 +423,6 @@ class BuildEngine:
 
     def _validate_dockerfile_hadolint(self, path: Path, prog: BuildProgress):
         try: 
-            # nosec: We control the path, and hadolint is safe
             subprocess.run(["hadolint", str(path)], check=True, capture_output=True) 
         except Exception: 
             prog.add_warning("Hadolint check skipped (tool not found or failed)")
@@ -417,30 +433,44 @@ class BuildEngine:
         
         tag = f"llm-framework/{config.target_arch.lower()}:{config.build_id.lower()}"
         context = self.base_dir
-        rel_df = path.relative_to(context)
+        
+        # Resolve relative path for context
+        try:
+            rel_df = path.relative_to(context)
+        except ValueError:
+            # If path is not subpath of base_dir (e.g. symlink or temp), copy context?
+            # For robustness, we assume temp dir is accessible.
+            # Docker build context is usually self.base_dir
+            rel_df = path.absolute()
         
         progress.add_log(f"Building Docker Image: {tag}")
         
         try:
-            cmd = ["docker", "build", "-f", str(rel_df), "-t", tag, str(context)]
-            
-            for k, v in config.build_args.items(): 
-                cmd.extend(["--build-arg", f"{k}={v}"])
-            
+            # Construct args
+            buildargs = config.build_args.copy()
             if sys.platform != "win32":
-                cmd.extend(["--build-arg", f"USER_ID={os.getuid()}"])
-                cmd.extend(["--build-arg", f"GROUP_ID={os.getgid()}"])
+                buildargs["USER_ID"] = str(os.getuid())
+                buildargs["GROUP_ID"] = str(os.getgid())
+
+            # Use python docker client for build
+            # Note: low-level API or high-level. High level is simpler but less verbose logs.
+            # We use low-level to stream logs.
             
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=str(context))
+            resp = self.docker_client.api.build(
+                path=str(context),
+                dockerfile=str(rel_df),
+                tag=tag,
+                buildargs=buildargs,
+                decode=True
+            )
             
-            for line in proc.stdout: 
-                progress.add_log(f"BUILD: {line.rstrip()}")
+            for chunk in resp:
+                if 'stream' in chunk:
+                    line = chunk['stream'].strip()
+                    if line: progress.add_log(f"BUILD: {line}")
+                if 'error' in chunk:
+                    raise RuntimeError(chunk['error'])
             
-            proc.wait()
-            
-            if proc.returncode != 0: 
-                raise RuntimeError("Docker build process returned error code")
-                
             return self.docker_client.images.get(tag)
             
         except Exception as e:
@@ -453,9 +483,8 @@ class BuildEngine:
             scan_cmd = ["image", "--exit-code", "1", "--severity", "HIGH,CRITICAL", image_tag]
             
             # --- FIX V2.3: Use Central Config Image ---
-            trivy_image = "aquasec/trivy:latest" # Fallback
-            if hasattr(self.framework_manager.config, 'image_trivy'):
-                trivy_image = self.framework_manager.config.image_trivy
+            get_cfg = getattr(self.config, 'get', lambda k, d=None: getattr(self.config, k, d))
+            trivy_image = get_cfg('image_trivy', "aquasec/trivy:latest")
             
             # Secure way: Run trivy container
             log_stream = self.docker_client.containers.run(
@@ -476,7 +505,6 @@ class BuildEngine:
             
         except docker.errors.ContainerError:
             progress.add_warning(f"Security vulnerabilities found! Review logs above.")
-            # We don't fail the build here, just warn
         except Exception as e:
             progress.add_warning(f"Security scan failed to run: {e}")
 
@@ -506,12 +534,13 @@ class BuildEngine:
             "TARGET_FORMAT": config.target_format.value
         }
         
-        # Inject SSOT Vars
-        if hasattr(self.framework_manager.config, 'source_repositories'):
-            for k, v in self.framework_manager.config.source_repositories.items():
-                # Flatten dict keys for env vars
+        # Inject SSOT Vars from Config
+        get_cfg = getattr(self.config, 'get', lambda k, d=None: getattr(self.config, k, d))
+        source_repos = get_cfg("source_repositories", {})
+        
+        if source_repos:
+            for k, v in source_repos.items():
                 if isinstance(v, dict) and 'url' in v:
-                    # e.g. rockchip_npu.rknn_toolkit2 -> RKNN_TOOLKIT2_REPO_OVERRIDE
                     key_parts = k.split('.')
                     name = key_parts[-1].upper()
                     env[f"{name}_REPO_OVERRIDE"] = v['url']
@@ -537,7 +566,7 @@ class BuildEngine:
                 progress.add_log("Enabling GPU Passthrough (Intel/VAAPI)...")
                 devices = ["/dev/dri:/dev/dri"]
             else:
-                progress.add_warning("GPU usage requested but no supported GPU (NVIDIA/Intel) detected on host.")
+                progress.add_warning("GPU usage requested but no supported GPU detected.")
 
         # 5. Run Container
         container = self.docker_client.containers.create(
@@ -546,7 +575,7 @@ class BuildEngine:
             volumes=vols, 
             environment=env, 
             name=f"llm-build-{config.build_id}", 
-            user="llmbuilder",
+            user="0:0", # Use root inside for build operations usually
             device_requests=device_requests,
             devices=devices
         )
@@ -560,7 +589,6 @@ class BuildEngine:
         for line in container.logs(stream=True, follow=True):
             progress.add_log(f"CONT: {line.decode().strip()}")
             
-        # Wait for completion
         res = container.wait(timeout=config.build_timeout)
         exit_code = res.get('StatusCode', 1)
         
@@ -577,7 +605,6 @@ class BuildEngine:
         progress.add_log(f"Copying artifacts to {dst}...")
         ensure_directory(dst)
         
-        # Simple copy of the output folder content
         if src.exists():
             count = 0
             for f in src.rglob("*"):
@@ -591,35 +618,25 @@ class BuildEngine:
             progress.add_log(f"Extracted {count} artifacts.")
 
     def _generate_model_card(self, config: BuildConfiguration, output_dir: Path):
-        """Generates a standardized Model Card (README.md) for the artifact."""
         readme_path = output_dir / "Model_Card.md"
-        
-        # Security: Calculate hash of the primary artifact if possible
         model_hash = "Calculating..."
         try:
-            # Find likely model file (largest file usually)
-            # Or search by target_format extension if possible
             target_ext = f".{config.target_format.value}"
             candidates = list(output_dir.glob(f"*{target_ext}"))
-            
             if not candidates:
-                # Fallback: Find largest file
                 files = list(output_dir.glob("*"))
                 if files:
                     candidates = [max(files, key=lambda p: p.stat().st_size if p.is_file() else 0)]
             
-            if candidates:
+            if candidates and candidates[0].is_file():
                 primary_file = candidates[0]
-                if primary_file.is_file():
-                    sha256 = hashlib.sha256()
-                    with open(primary_file, "rb") as f:
-                        for chunk in iter(lambda: f.read(4096), b""):
-                            sha256.update(chunk)
-                    model_hash = sha256.hexdigest()
+                sha256 = hashlib.sha256()
+                with open(primary_file, "rb") as f:
+                    for chunk in iter(lambda: f.read(4096), b""): sha256.update(chunk)
+                model_hash = sha256.hexdigest()
         except Exception as e:
             model_hash = f"Hash calculation failed: {e}"
 
-        # Markdown inside f-string workaround for avoiding parser issues
         usage_code = "```bash\n   chmod +x deploy.sh\n   ./deploy.sh\n```"
         
         content = (
@@ -644,23 +661,19 @@ class BuildEngine:
         )
         
         try:
-            with open(readme_path, "w", encoding="utf-8") as f:
-                f.write(content)
+            with open(readme_path, "w", encoding="utf-8") as f: f.write(content)
         except Exception as e:
             self.logger.error(f"Failed to write Model Card: {e}")
 
     def _create_golden_artifact(self, config: BuildConfiguration, progress: BuildProgress):
-        """Creates a compressed archive of the build artifacts (The Golden Package)."""
         progress.current_stage = "Archiving"
         progress.progress_percent = 95
         
         output_dir = Path(config.output_dir)
         
-        # Step 1: Generate Documentation (Auto-Docs)
         progress.add_log("Generating Model Card...")
         self._generate_model_card(config, output_dir)
         
-        # Step 2: Zip
         archive_name = output_dir.name 
         root_dir = output_dir.parent
         base_dir = output_dir.name

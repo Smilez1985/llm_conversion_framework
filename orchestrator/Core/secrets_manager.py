@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Enterprise Secrets Manager (v2.0)
+LLM Cross-Compiler Framework - Enterprise Secrets Manager (v2.3.0)
 DIREKTIVE: Goldstandard Security.
 FEATURES:
   - OS-Keyring Integration (Windows Credential Locker / Linux Keyring)
   - PBKDF2 Key Derivation (HMAC-SHA256, 100k Iterations)
   - Audit Logging für Access-Events
   - Keine Speicherung des Master-Keys im Dateisystem!
-  - Integrated with FrameworkManager (v2.0 Update)
+  - Integrated with FrameworkManager (v2.3 Update)
 """
 
 import os
@@ -50,13 +50,13 @@ class SecretsManager:
             self.config_dir = framework_manager
             self.audit_log_file = self.config_dir / "audit.log"
         else:
-            self.config_dir = Path(framework_manager.config.configs_dir)
-            self.audit_log_file = Path(framework_manager.config.logs_dir) / "audit.log"
+            self.config_dir = Path(framework_manager.config.configs_dir) if hasattr(framework_manager.config, 'configs_dir') else Path("config")
+            self.audit_log_file = (Path(framework_manager.config.logs_dir) if hasattr(framework_manager.config, 'logs_dir') else Path("logs")) / "audit.log"
             
         self.secrets_file = self.config_dir / "secrets.store"
         self._cipher = None
         self._cache = {}
-        self._initialized = False # New state tracking
+        self._initialized = False 
 
         if not SECURITY_AVAILABLE:
             raise SecurityError(
@@ -67,7 +67,7 @@ class SecretsManager:
     def initialize(self) -> bool:
         """
         Initialisiert die Krypto-Engine.
-        Wrapper für Framework-Boot (v2.0 Requirement).
+        Wrapper für Framework-Boot.
         """
         try:
             self._initialize_crypto()
@@ -94,7 +94,7 @@ class SecretsManager:
                 # 2. Generiere neuen Key (Fernet kompatibel)
                 # Wir nutzen hier PBKDF2 um aus zufälligen Bytes einen robusten Key zu machen
                 salt = os.urandom(16)
-                password = os.urandom(32) # In einer GUI Version könnte hier User-Input stehen
+                password = os.urandom(32) 
                 
                 kdf = PBKDF2HMAC(
                     algorithm=hashes.SHA256(),
@@ -122,14 +122,16 @@ class SecretsManager:
         entry = f"[{timestamp}] USER={user} ACTION={action} KEY={key_name} STATUS={status}\n"
         
         try:
+            # Stelle sicher, dass das Verzeichnis existiert
+            self.audit_log_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.audit_log_file, "a") as f:
                 f.write(entry)
         except Exception:
-            pass # Audit Logging sollte App nicht crashen lassen, aber Warnung wert sein
+            pass 
 
     def set_secret(self, key: str, value: str) -> bool:
         """Verschlüsselt und speichert ein Secret."""
-        if not self._initialized: self.initialize() # Lazy Init
+        if not self._initialized: self.initialize() 
         
         if not self._cipher:
             return False
@@ -147,7 +149,7 @@ class SecretsManager:
 
     def get_secret(self, key: str) -> Optional[str]:
         """Entschlüsselt und liest ein Secret."""
-        if not self._initialized: self.initialize() # Lazy Init
+        if not self._initialized: self.initialize() 
 
         if not self._cipher or key not in self._cache:
             return None
@@ -178,9 +180,10 @@ class SecretsManager:
 
     def _save_store(self):
         """Persistiert den verschlüsselten Store (JSON Blob)."""
-        # Wir speichern nur die verschlüsselten Values auf Disk.
-        # Ohne Keyring-Zugriff ist diese Datei wertlos.
         try:
+            # Sicherstellen, dass Config-Dir existiert
+            self.secrets_file.parent.mkdir(parents=True, exist_ok=True)
+            
             with open(self.secrets_file, "w") as f:
                 json.dump(self._cache, f, indent=2)
             
@@ -201,8 +204,6 @@ class SecretsManager:
                 self._cache = json.load(f)
         except Exception as e:
             self.logger.error(f"Failed to load secrets store: {e}")
-            # Bei korruptem Store Backup erstellen? 
-            # Hier vereinfacht: Cache bleibt leer.
 
 if __name__ == "__main__":
     # Smoke Test

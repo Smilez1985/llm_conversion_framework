@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM Cross-Compiler Framework - Target Manager (v2.0 Enterprise)
+LLM Cross-Compiler Framework - Target Manager (v2.3.0)
 DIREKTIVE: Goldstandard Hardware Management.
 
 Verwaltet Hardware-Zielprofile (Targets).
@@ -17,13 +17,13 @@ from orchestrator.utils.logging import get_logger
 
 class TargetManager:
     def __init__(self, framework_manager):
-        self.logger = get_logger(__name__)
+        self.logger = get_logger("TargetManager")
         self.framework = framework_manager
         
         # Pfade aus Config
         # Fallback für Tests: Wenn framework_manager nur ein Path ist (Legacy)
         if hasattr(framework_manager, 'config'):
-            self.targets_dir = Path(framework_manager.config.targets_dir)
+            self.targets_dir = Path(framework_manager.config.targets_dir) if hasattr(framework_manager.config, 'targets_dir') else Path("targets")
         else:
             self.targets_dir = Path("targets") # Default/Fallback
             
@@ -112,7 +112,8 @@ class TargetManager:
         ein Dictionary zurück, das vom ModuleGenerator genutzt werden kann.
         """
         if not probe_file.exists():
-            raise FileNotFoundError(f"Probe file not found: {probe_file}")
+            self.logger.error(f"Probe file not found: {probe_file}")
+            return {}
             
         raw_data = {}
         try:
